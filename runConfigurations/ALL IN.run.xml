@@ -1,0 +1,8 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="ALL IN" type="CompoundRunConfigurationType">
+    <toRun name="Frontend (Vue)" type="js.build_tools.npm" />
+    <toRun name="AI Service (FastAPI)" type="PythonConfigurationType" />
+    <toRun name="Backend (Daphne)" type="PythonConfigurationType" />
+    <method v="2" />
+  </configuration>
+</component>
