@@ -31,6 +31,8 @@ ALLOWED_HOSTS = []
 # Application definition
 
 INSTALLED_APPS = [
+    'daphne',
+    'corsheaders',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -53,6 +55,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -205,3 +208,6 @@ CELERY_TASK_SERIALIZER = 'json'                   # 任务序列化器为 JSON
 CELERY_RESULT_SERIALIZER = 'json'                 # 结果序列化器为 JSON
 CELERY_TIMEZONE = 'Asia/Shanghai'                 # 设置时区
 CELERY_ENABLE_UTC = False                         # 是否启用 UTC 时间
+# --- CORS跨域配置 ---
+# 允许所有来源访问（开发时使用，比较方便）
+CORS_ALLOW_ALL_ORIGINS = True
