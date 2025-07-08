@@ -55,5 +55,16 @@ service.interceptors.response.use(
     return Promise.reject(error);
   }
 );
-
+/**
+ * 从后端获取告警列表
+ * @param {object} params - 查询参数，例如 { page: 1, limit: 10 }
+ * @returns Promise
+ */
+export function getAlerts(params) {
+  return service({
+    url: '/alerts/list/',
+    method: 'get',
+    params
+  });
+}
 export default service;
