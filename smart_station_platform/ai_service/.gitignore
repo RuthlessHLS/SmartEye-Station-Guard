@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python/
+env/
+venv/
+*.egg-info/
+.env
+
+# AI Models
+models/ # 存放AI模型文件，不应上传到Git
+
+# IDEs
+.idea/
+.vscode/
+*.iml
