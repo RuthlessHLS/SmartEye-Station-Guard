@@ -4,6 +4,8 @@ from django.urls import path
 from . import views
 from rest_framework_simplejwt.views import TokenRefreshView
 
+
+
 urlpatterns = [
     # 生成验证码的路由
     path('captcha/generate/', views.GenerateCaptchaView.as_view(), name='captcha_generate'),

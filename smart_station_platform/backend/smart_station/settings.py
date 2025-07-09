@@ -62,6 +62,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     # 第三方应用
+    'django_filters',
     'rest_framework',
     'rest_framework_simplejwt',
     'channels',
@@ -117,8 +118,8 @@ DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': 'smart_station_db', # 你的数据库名
-        'USER': 'Qiuyy',  # 你的MySQL用户名
-        'PASSWORD': 'Qiuyy2005.', # 你的MySQL密码
+        'USER': 'xhy',  # 你的MySQL用户名
+        'PASSWORD': 'qiyuan2539', # 你的MySQL密码
         'HOST': '127.0.0.1', # 数据库主机
         'PORT': '3306',      # 数据库端口
         'OPTIONS': {
@@ -217,23 +218,38 @@ ASGI_APPLICATION = 'smart_station.asgi.application'
 
 CHANNEL_LAYERS = {
     'default': {
-        'BACKEND': 'channels_redis.core.RedisChannelLayer',
-        'CONFIG': {
-            "hosts": [('127.0.0.1', 6379)], # 确保Redis服务器运行在6379端口
-        },
+        'BACKEND': 'channels.layers.InMemoryChannelLayer',  # 使用内存Channel Layer，不依赖Redis
     },
 }
 
-# Django Caching
+# 如果需要Redis Channel Layer，取消注释下面的配置
+# CHANNEL_LAYERS = {
+#     'default': {
+#         'BACKEND': 'channels_redis.core.RedisChannelLayer',
+#         'CONFIG': {
+#             "hosts": [('127.0.0.1', 6379)], # 确保Redis服务器运行在6379端口
+#         },
+#     },
+# }
+
+# Django Caching - 使用内存缓存，不依赖Redis
 CACHES = {
     "default": {
-        "BACKEND": "django_redis.cache.RedisCache",
-        "LOCATION": "redis://127.0.0.1:6379/1",  # 使用不同的数据库 (e.g., DB 1) 以便与 Celery 分开
-        "OPTIONS": {
-            "CLIENT_CLASS": "django_redis.client.DefaultClient",
-        }
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "unique-snowflake",
     }
 }
+
+# 如果需要Redis缓存，取消注释下面的配置并安装 django_redis
+# CACHES = {
+#     "default": {
+#         "BACKEND": "django_redis.cache.RedisCache",
+#         "LOCATION": "redis://127.0.0.1:6379/1",  # 使用不同的数据库 (e.g., DB 1) 以便与 Celery 分开
+#         "OPTIONS": {
+#             "CLIENT_CLASS": "django_redis.client.DefaultClient",
+#         }
+#     }
+# }
 
 # 指定自定义的用户模型
 AUTH_USER_MODEL = 'users.UserProfile'

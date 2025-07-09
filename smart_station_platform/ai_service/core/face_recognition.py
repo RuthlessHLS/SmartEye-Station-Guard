@@ -1,125 +1,106 @@
-# ai_service/core/face_recognition.py
-import torch
-from facenet_pytorch import MTCNN, InceptionResnetV1
-from PIL import Image
-from torchvision import transforms
+# 文件: ai_service/core/face_recognition.py
+# 描述: 人脸识别器，用于检测、编码和识别人脸。
+
+import face_recognition
+import numpy as np
 import os
+from typing import List, Dict
 
 
 class FaceRecognizer:
-    def __init__(self, face_db_path, device=None):
+    def __init__(self, known_faces_dir: str):
         """
         初始化人脸识别器。
+
         Args:
-            face_db_path (str): 人脸数据库的路径。
+            known_faces_dir (str): 存放已知人员照片的目录路径。
+                                   目录下每个子目录代表一个人，子目录名即为人员姓名，
+                                   子目录内可以放一张或多张该人员的照片。
         """
-        if device is None:
-            self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        else:
-            self.device = device
-
-        print(f"Face Recognizer using device: {self.device}")
-
-        # 1. 加载预训练的人脸检测和识别模型
-        # MTCNN用于检测图片中的人脸位置
-        self.mtcnn = MTCNN(keep_all=True, device=self.device)
-        # InceptionResnetV1用于为每个人脸生成一个512维的特征向量（embedding）
-        self.resnet = InceptionResnetV1(pretrained='vggface2').eval().to(self.device)
-
-        # 2. 加载并处理人脸数据库
-        self.known_face_embeddings = []
+        print("正在初始化人脸识别器...")
+        self.known_faces_dir = known_faces_dir
+        self.known_face_encodings = []
         self.known_face_names = []
-        self.load_face_db(face_db_path)
 
-    def load_face_db(self, db_path):
+        # 在初始化时，从指定目录加载所有已知人脸
+        self.load_known_faces()
+
+    def load_known_faces(self):
         """
-        加载人脸数据库，为每个已知人员生成并存储人脸特征向量。
+        从目录加载所有已知人脸并进行编码。
         """
-        if not os.path.isdir(db_path):
-            print(f"警告: 人脸数据库路径不存在: {db_path}")
+        print(f"正在从 '{self.known_faces_dir}' 目录加载已知人脸...")
+        if not os.path.exists(self.known_faces_dir):
+            print(f"警告: 已知人脸目录不存在，将创建一个空目录: {self.known_faces_dir}")
+            os.makedirs(self.known_faces_dir)
             return
 
-        print("正在加载人脸数据库...")
-        for person_name in os.listdir(db_path):
-            person_dir = os.path.join(db_path, person_name)
-            if not os.path.isdir(person_dir):
-                continue
+        for person_name in os.listdir(self.known_faces_dir):
+            person_dir = os.path.join(self.known_faces_dir, person_name)
+            if os.path.isdir(person_dir):
+                for filename in os.listdir(person_dir):
+                    if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+                        image_path = os.path.join(person_dir, filename)
+                        try:
+                            # 加载图片并获取人脸编码
+                            face_image = face_recognition.load_image_file(image_path)
+                            # 假设每张照片里只有一张脸，我们取第一个找到的编码
+                            face_encodings = face_recognition.face_encodings(face_image)
+                            if face_encodings:
+                                self.known_face_encodings.append(face_encodings[0])
+                                self.known_face_names.append(person_name)
+                                print(f"  - 成功加载人脸: {person_name}")
+                        except Exception as e:
+                            print(f"处理图片 {image_path} 时出错: {e}")
 
-            for img_name in os.listdir(person_dir):
-                img_path = os.path.join(person_dir, img_name)
-                try:
-                    img = Image.open(img_path).convert('RGB')
-                    # 使用MTCNN找到图片中的人脸
-                    face_tensor = self.mtcnn(img)
-                    if face_tensor is not None:
-                        # 为检测到的人脸生成特征向量，并关闭梯度计算
-                        with torch.no_grad():
-                            embedding = self.resnet(face_tensor.to(self.device))
-                        self.known_face_embeddings.append(embedding)
-                        self.known_face_names.append(person_name)
-                        print(f"  - 已加载 '{person_name}' 的人脸特征来自 {img_name}")
-                except Exception as e:
-                    print(f"处理图片 {img_path} 时出错: {e}")
-
-        if not self.known_face_embeddings:
-            print("警告: 人脸数据库为空或加载失败。")
-        else:
-            self.known_face_embeddings = torch.cat(self.known_face_embeddings, dim=0)
-            print("人脸数据库加载完毕。")
-
-    def recognize_faces(self, image_path, distance_threshold=0.9):
+    def detect_and_recognize(self, frame: np.ndarray, tolerance=0.5) -> List[Dict]:
         """
-        识别给定图片中的所有人脸。
+        在单帧图像中检测并识别人脸。
+
         Args:
-            image_path (str): 待识别图片的路径。
-            distance_threshold (float): 人脸匹配的距离阈值，越小越严格。
+            frame (np.ndarray): BGR格式的视频帧。
+            tolerance (float): 人脸比对的容忍度，值越小比对越严格。
+
         Returns:
-            list: 包含每个检测到的人脸信息（坐标、姓名、置信度）的列表。
+            List[Dict]: 一个包含检测到的所有人脸信息的字典列表。
         """
-        results = []
-        try:
-            img = Image.open(image_path).convert('RGB')
-        except Exception as e:
-            print(f"无法打开图片 {image_path}: {e}")
-            return []
+        # 为了提高性能，可以将图像缩小
+        small_frame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
+        # 将图像从BGR转换为RGB（face_recognition库需要）
+        rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
 
-        # 1. 检测图片中的所有人脸及其坐标
-        boxes, _ = self.mtcnn.detect(img)
-        if boxes is None:
-            return []  # 没有检测到人脸
+        # 1. 在当前帧中找到所有人脸的位置和编码
+        face_locations = face_recognition.face_locations(rgb_small_frame)
+        face_encodings = face_recognition.face_encodings(rgb_small_frame, face_locations)
 
-        # 2. 为每个检测到的人脸生成特征向量
-        # mtcnn()直接返回裁剪和对齐后的人脸张量
-        face_tensors = self.mtcnn(img)
-        if face_tensors is None:
-            return []
+        recognized_faces = []
+        for face_encoding, face_location in zip(face_encodings, face_locations):
+            # 2. 将当前找到的人脸与所有已知人脸进行比对
+            matches = face_recognition.compare_faces(self.known_face_encodings, face_encoding, tolerance=tolerance)
 
-        with torch.no_grad():
-            unknown_embeddings = self.resnet(face_tensors.to(self.device))
-
-        # 3. 与数据库中的已知人脸进行比对
-        for i, unknown_emb in enumerate(unknown_embeddings):
-            if not self.known_face_embeddings.nelement():  # 检查数据库是否为空
-                distances = torch.tensor([])
-            else:
-                # 计算未知人脸与数据库中所有人脸的余弦距离
-                distances = (unknown_emb - self.known_face_embeddings).norm(dim=1)
-
-            # 找到最小距离及其索引
-            min_dist, min_idx = torch.min(distances, dim=0) if len(distances) > 0 else (None, None)
-
-            name = "stranger"
+            name = "Unknown"  # 默认为未知人员
             confidence = 0.0
 
-            if min_dist is not None and min_dist.item() < distance_threshold:
-                name = self.known_face_names[min_idx.item()]
-                # 将距离转换为一个0-1的置信度（非严格）
-                confidence = 1.0 - (min_dist.item() / distance_threshold)
+            # 3. 如果有匹配项，找到最佳匹配
+            if True in matches:
+                face_distances = face_recognition.face_distance(self.known_face_encodings, face_encoding)
+                best_match_index = np.argmin(face_distances)
+                if matches[best_match_index]:
+                    name = self.known_face_names[best_match_index]
+                    # 将距离转换为一个模拟的置信度 (1 - 距离)
+                    confidence = 1 - face_distances[best_match_index]
 
-            results.append({
-                "name": name,
-                "confidence": round(confidence, 2),
-                "coordinates": [round(c, 2) for c in boxes[i].tolist()]
+            # 将坐标恢复到原始图像尺寸
+            top, right, bottom, left = face_location
+            top *= 4
+            right *= 4
+            bottom *= 4
+            left *= 4
+
+            recognized_faces.append({
+                "identity": name,
+                "confidence": confidence,
+                "box": [left, top, right, bottom]
             })
 
-        return results
+        return recognized_faces
