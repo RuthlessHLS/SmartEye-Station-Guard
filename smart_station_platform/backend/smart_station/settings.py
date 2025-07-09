@@ -92,8 +92,8 @@ DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': 'smart_station_db', # 你的数据库名
-        'USER': 'Qiuyy',  # 你的MySQL用户名
-        'PASSWORD': 'Qiuyy2005.', # 你的MySQL密码
+        'USER': 'root',  # 你的MySQL用户名
+        'PASSWORD': 'Gkm104021', # 你的MySQL密码
         'HOST': '127.0.0.1', # 数据库主机
         'PORT': '3306',      # 数据库端口
         'OPTIONS': {
@@ -217,3 +217,15 @@ STATICFILES_DIRS = [
     BASE_DIR / "static",
 ]
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+
+SWAGGER_SETTINGS = {
+    'SECURITY_DEFINITIONS': {
+        'Bearer': {
+            'type': 'apiKey',
+            'in': 'header',
+            'name': 'Authorization',
+            'description': '在此输入 JWT Token，格式为：Bearer <token>',
+        }
+    },
+    'USE_SESSION_AUTH': False,  # 关键！关闭 session 认证
+}
