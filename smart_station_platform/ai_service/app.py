@@ -33,8 +33,8 @@ def send_result_to_backend(result: AIAnalysisResult):
     django_backend_url = os.getenv("DJANGO_BACKEND_URL", "http://127.0.0.1:8000/api/alerts/ai-results/")
     print(f"准备将告警上报给后端: {django_backend_url}")
     try:
-        # 使用 .dict() 方法将Pydantic模型转换为字典
-        response = requests.post(django_backend_url, json=result.dict(), timeout=10) # 设置10秒超时
+        # 使用 .model_dump() 方法将Pydantic模型转换为字典
+        response = requests.post(django_backend_url, json=result.model_dump(), timeout=10) # 设置10秒超时
         response.raise_for_status() # 如果请求失败(状态码4xx或5xx), 则会抛出异常
         print(f"成功上报告警，后端返回: {response.json()}")
     except requests.exceptions.RequestException as e:

@@ -9,7 +9,7 @@ https://docs.djangoproject.com/en/5.2/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
-
+import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -91,9 +91,9 @@ WSGI_APPLICATION = "smart_station.wsgi.application"
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
-        'NAME': 'smartstationdb', # 你的数据库名
-        'USER': 'root',  # 你的MySQL用户名
-        'PASSWORD': '032526', # 你的MySQL密码
+        'NAME': 'smart_station_db', # 你的数据库名
+        'USER': 'Qiuyy',  # 你的MySQL用户名
+        'PASSWORD': 'Qiuyy2005.', # 你的MySQL密码
         'HOST': '127.0.0.1', # 数据库主机
         'PORT': '3306',      # 数据库端口
         'OPTIONS': {
@@ -186,11 +186,7 @@ SIMPLE_JWT = {
     'SLIDING_TOKEN_REFRESH_LIFETIME': timedelta(days=1),
 }
 
-# 指定自定义的用户模型
-AUTH_USER_MODEL = 'users.UserProfile'
 
-# 邮件配置 (开发环境)
-EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
 
 ASGI_APPLICATION = 'smart_station.asgi.application'
 
@@ -215,4 +211,9 @@ CELERY_ENABLE_UTC = False                         # 是否启用 UTC 时间
 # --- CORS跨域配置 ---
 # 允许所有来源访问（开发时使用，比较方便）
 CORS_ALLOW_ALL_ORIGINS = True
-CORS_ALLOW_CREDENTIALS = True
+
+STATIC_URL = '/static/'
+STATICFILES_DIRS = [
+    BASE_DIR / "static",
+]
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
