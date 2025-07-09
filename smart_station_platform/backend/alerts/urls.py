@@ -1,13 +1,25 @@
 # smart_station_platform/backend/alerts/urls.py
 
 from django.urls import path
-from .views import AlertListView, AIResultReceiveView, AlertUpdateView, AlertTestView
+from .views import (
+    AlertListView, 
+    AlertDetailView,
+    AlertHandleView,
+    AlertUpdateView,
+    AIResultReceiveView, 
+    AlertStatsView,
+    AlertTestView
+)
 
 urlpatterns = [
-    path('', AlertListView.as_view(), name='alert-list'),  # 根路径指向列表视图
-    path('list/', AlertListView.as_view(), name='alert-list-alt'),  # 保留备用路径
-    path('ai-results/', AIResultReceiveView.as_view(), name='ai-results'),
-    path('<int:pk>/update/', AlertUpdateView.as_view(), name='alert-update'),  # 修正路径
-    path('<int:pk>/handle/', AlertUpdateView.as_view(), name='alert-handle'),  # 添加处理路径
-    path('test/', AlertTestView.as_view(), name='alert-test'),  # 测试路由
+    # 图片中显示的API接口
+    path('ai-results/', AIResultReceiveView.as_view(), name='alerts_ai_results_create'),  # POST
+    path('list/', AlertListView.as_view(), name='alerts_list_list'),  # GET
+    path('<int:pk>/handle/', AlertHandleView.as_view(), name='alerts_handle_update'),  # PUT/PATCH
+    path('<int:pk>/update/', AlertUpdateView.as_view(), name='alerts_update_update'),  # PUT/PATCH
+    
+    # 额外的实用接口
+    path('<int:pk>/', AlertDetailView.as_view(), name='alert-detail'),  # GET 获取详情
+    path('stats/', AlertStatsView.as_view(), name='alert-stats'),  # GET 获取统计信息
+    path('test/', AlertTestView.as_view(), name='alert-test'),  # GET 测试接口
 ]
