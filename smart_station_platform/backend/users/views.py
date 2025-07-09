@@ -1,4 +1,5 @@
 import uuid
+import time
 from django.core.cache import cache
 from django.shortcuts import render
 from .models import UserProfile
@@ -22,6 +23,31 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from .serializers import MyTokenObtainPairSerializer
 from .captcha_generator import create_captcha_images
 
+# Create your views here.
+import uuid
+import time
+from django.core.cache import cache
+from django.shortcuts import render
+from .models import UserProfile
+from .serializers import (
+    UserRegisterSerializer,
+    UserProfileSerializer,
+    AvatarUpdateSerializer,
+    PasswordResetRequestSerializer,
+    PasswordResetConfirmSerializer
+)
+from rest_framework import generics, permissions, status
+from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from django.core.mail import send_mail
+from django.contrib.auth.tokens import PasswordResetTokenGenerator
+from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
+from django.utils.encoding import force_bytes, force_str
+from django.conf import settings
+from rest_framework_simplejwt.views import TokenObtainPairView
+from .serializers import MyTokenObtainPairSerializer
+from .captcha_generator import create_captcha_images
 
 # ==========================================================
 # 视图 1: UserRegisterView
@@ -149,10 +175,26 @@ class GenerateCaptchaView(APIView):
 
         # 2. 生成唯一的 key 并将正确答案存入缓存
         captcha_key = str(uuid.uuid4())
+
+        # 我们将一个字典存入缓存，而不是单个值
+
+        # 3. [修复] 将包含位置和时间戳的字典存入缓存
+
+        cache_data = {
+            'position': image_data['position_x'],
+            'timestamp': time.time()  # 记录当前时间的 Unix 时间戳
+        }
+
         # 将 x 坐标作为答案存入缓存，有效期 5 分钟 (300秒)
         cache.set(f"captcha:{captcha_key}", image_data['position_x'], timeout=300)
 
         # 3. 准备返回给前端的数据
+
+        # 使用 cache_data 变量进行设置，有效期 5 分钟 (300秒)
+        cache.set(f"captcha:{captcha_key}", cache_data, timeout=300)
+
+        # 4. 准备返回给前端的数据
+
         response_data = {
             "captcha_key": captcha_key,
             "background_image": f"data:image/png;base64,{image_data['background_base64']}",
@@ -171,3 +213,4 @@ class MyTokenObtainPairView(TokenObtainPairView):
     自定义的Token获取视图，使用我们自己的序列化器
     """
     serializer_class = MyTokenObtainPairSerializer
+

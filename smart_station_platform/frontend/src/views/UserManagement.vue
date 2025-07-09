@@ -142,8 +142,8 @@ onMounted(() => {
 const fetchUsers = async () => {
   loading.value = true;
   try {
-    // 假设后端获取用户列表接口为 /api/users/list/
-    const response = await api.get('/users/list/', {
+    // 修正API路径，添加/api前缀
+    const response = await api.get('/api/users/', {
       params: {
         page: pagination.currentPage,
         page_size: pagination.pageSize,
@@ -214,11 +214,11 @@ const submitUserForm = () => {
           if (userForm.password) { // 只有密码不为空才发送
             dataToUpdate.password = userForm.password;
           }
-          await api.patch(`/users/${userForm.id}/update/`, dataToUpdate);
+          await api.patch(`/api/users/${userForm.id}/update/`, dataToUpdate);
           ElMessage.success('用户更新成功！');
         } else {
           // 添加用户，假设后端接口为 /api/users/register/ (或专门的admin创建用户接口)
-          await api.post('/users/register/', {
+          await api.post('/api/users/register/', {
             username: userForm.username,
             email: userForm.email,
             password: userForm.password,
@@ -254,7 +254,7 @@ const toggleUserActive = async (row) => {
     .then(async () => {
       try {
         // 假设后端接口为 /api/users/{id}/update_active_status/
-        await api.patch(`/users/${row.id}/update_active_status/`, {
+        await api.patch(`/api/users/${row.id}/update_active_status/`, {
           is_active: !row.is_active,
         });
         ElMessage.success(`用户 ${row.is_active ? '禁用' : '启用'}成功！`);
@@ -284,7 +284,7 @@ const deleteUser = async (id) => {
     .then(async () => {
       try {
         // 假设后端接口为 /api/users/{id}/delete/
-        await api.delete(`/users/${id}/delete/`);
+        await api.delete(`/api/users/${id}/delete/`);
         ElMessage.success('用户删除成功！');
         fetchUsers(); // 刷新列表
       } catch (error) {

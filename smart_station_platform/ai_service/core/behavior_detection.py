@@ -1,97 +1,74 @@
-# ai_service/core/behavior_detection.py
-import mediapipe as mp
-import cv2
-import numpy as np
+# 文件: ai_service/core/behavior_detection.py
+# 描述: 行为检测器，用于分析目标的姿态和动作。
 
-# 初始化MediaPipe Pose解决方案
-mp_pose = mp.solutions.pose
-mp_drawing = mp.solutions.drawing_utils
+import numpy as np
+from typing import List, Dict, Tuple
 
 
 class BehaviorDetector:
     def __init__(self):
         """
-        初始化行为检测器，主要用于跌倒检测。
+        初始化行为检测器。
+        在真实项目中，这里会加载行为识别模型（例如基于姿态估计的模型）。
+        目前，我们使用一个字典来跟踪每个目标的状态，以进行基于逻辑的判断。
         """
-        # 实例化姿态估计模型
-        # min_detection_confidence: 检测置信度阈值
-        # min_tracking_confidence: 跟踪置信度阈值
-        self.pose_estimator = mp_pose.Pose(
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5
-        )
-        print("Behavior Detector (Pose Estimation) model loaded successfully.")
+        print("行为检测器已初始化 (当前使用逻辑判断模式)。")
+        self.previous_states = {}  # 用于存储每个追踪目标上一帧的状态
 
-    def detect_fall(self, image_np):
+    def detect_behavior(self, frame: np.ndarray, person_boxes: List[List[float]]) -> List[Dict]:
         """
-        在单帧图像中检测是否有人跌倒。
+        对检测到的人员进行行为分析。
 
         Args:
-            image_np (np.ndarray): 输入的图像，格式为NumPy数组 (OpenCV BGR格式)。
+            frame (np.ndarray): 当前的视频帧。
+            person_boxes (List[List[float]]): 一个包含多个人边界框的列表，
+                                              每个边界框格式为 [x1, y1, x2, y2]。
 
         Returns:
-            tuple: (检测结果列表, 绘制了骨骼的图像)
-                   结果列表中的每个元素是一个字典，包含 'status' 和 'location'。
+            List[Dict]: 一个包含每个被分析人员行为结果的字典列表。
         """
-        # MediaPipe需要RGB格式的图像，而OpenCV默认是BGR
-        image_rgb = cv2.cvtColor(image_np, cv2.COLOR_BGR2RGB)
+        detected_behaviors = []
 
-        # 使用姿态估计模型进行处理
-        results = self.pose_estimator.process(image_rgb)
+        for i, box in enumerate(person_boxes):
+            x1, y1, x2, y2 = map(int, box)
 
-        detection_results = []
+            # --- 1. 跌倒检测 (Heuristic: 基于边界框的高宽比) ---
+            # 计算边界框的宽度和高度
+            box_w = x2 - x1
+            box_h = y2 - y1
 
-        # 在图像上绘制骨骼
-        annotated_image = image_np.copy()
-        if results.pose_landmarks:
-            mp_drawing.draw_landmarks(
-                annotated_image,
-                results.pose_landmarks,
-                mp_pose.POSE_CONNECTIONS,
-                landmark_drawing_spec=mp_drawing.DrawingSpec(color=(245, 117, 66), thickness=2, circle_radius=2),
-                connection_drawing_spec=mp_drawing.DrawingSpec(color=(245, 66, 230), thickness=2, circle_radius=2)
-            )
+            # 避免除以零的错误
+            if box_h == 0: continue
 
-            # --- 跌倒判断核心逻辑 ---
-            landmarks = results.pose_landmarks.landmark
+            # 计算高宽比
+            aspect_ratio = box_w / box_h
 
-            # 获取臀部关键点 (hip) 的y坐标
-            # MediaPipe的坐标是归一化的(0.0到1.0)，所以乘以图像高度得到像素坐标
-            h, w, _ = image_np.shape
-            hip_y = landmarks[mp_pose.PoseLandmark.LEFT_HIP.value].y * h
+            is_fallen = False
+            # 通常站立的人高宽比小于1 (例如 0.4-0.8)
+            # 如果高宽比大于某个阈值 (例如 1.2)，我们认为他可能摔倒了
+            if aspect_ratio > 1.2:
+                is_fallen = True
+                detected_behaviors.append({
+                    "person_id": i,  # 临时ID
+                    "box": [x1, y1, x2, y2],
+                    "behavior": "fall_down",
+                    "is_abnormal": True,
+                    "need_alert": True,  # 跌倒需要立即告警
+                    "confidence": 0.85  # 这是一个模拟的置信度
+                })
 
-            # 获取脚踝关键点 (ankle) 的y坐标
-            left_ankle_y = landmarks[mp_pose.PoseLandmark.LEFT_ANKLE.value].y * h
-            right_ankle_y = landmarks[mp_pose.PoseLandmark.RIGHT_ANKLE.value].y * h
-            # 取两个脚踝中位置更低的那个
-            ankle_y = max(left_ankle_y, right_ankle_y)
+            # --- 2. 奔跑检测 (Heuristic: 基于位置的快速变化) ---
+            # (这是一个简化的示例，完整的实现需要目标追踪)
+            # 在没有目标追踪的情况下，我们可以简化为：如果画面中有人，就认为他在活动
+            # 在这里，我们只添加一个占位的 "active" 行为
+            if not is_fallen:  # 如果没摔倒，就认为在活动
+                detected_behaviors.append({
+                    "person_id": i,
+                    "box": [x1, y1, x2, y2],
+                    "behavior": "active",  # 正常活动
+                    "is_abnormal": False,
+                    "need_alert": False,
+                    "confidence": 0.7
+                })
 
-            # 简单的跌倒判断规则：
-            # 如果臀部的位置非常接近脚踝的位置（垂直距离很小），我们认为可能发生了跌倒
-            is_fallen = (ankle_y - hip_y) < 50  # 阈值50像素，可以根据实际情况调整
-
-            status = "fallen" if is_fallen else "normal"
-
-            # 计算人体的边界框
-            x_coords = [lm.x * w for lm in landmarks]
-            y_coords = [lm.y * h for lm in landmarks]
-            x_min, x_max = min(x_coords), max(x_coords)
-            y_min, y_max = min(y_coords), max(y_coords)
-
-            detection_results.append({
-                "status": status,
-                "location": {
-                    "x": round(x_min),
-                    "y": round(y_min),
-                    "w": round(x_max - x_min),
-                    "h": round(y_max - y_min)
-                }
-            })
-
-        return detection_results, annotated_image
-
-    def close(self):
-        """
-        释放模型资源。
-        """
-        self.pose_estimator.close()
+        return detected_behaviors

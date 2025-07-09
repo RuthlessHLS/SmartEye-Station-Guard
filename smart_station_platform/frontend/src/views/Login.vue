@@ -101,10 +101,10 @@ const submitLogin = async () => {
     alert('登录成功！');
     console.log('Token:', response.data);
 
-    // 在此处理登录成功后的逻辑，例如保存 token、跳转到主页等
-    // localStorage.setItem('access_token', response.data.access);
-    // localStorage.setItem('refresh_token', response.data.refresh);
-    // window.location.href = '/dashboard';
+    //在此处理登录成功后的逻辑，例如保存 token、跳转到主页等
+     localStorage.setItem('access_token', response.data.access);
+     localStorage.setItem('refresh_token', response.data.refresh);
+     window.location.href = '/dashboard';
 
   } catch (error) {
     // 从后端响应中提取更具体的错误信息
