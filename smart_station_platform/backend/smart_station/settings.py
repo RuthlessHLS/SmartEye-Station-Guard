@@ -91,9 +91,9 @@ WSGI_APPLICATION = "smart_station.wsgi.application"
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
-        'NAME': 'smart_station_db', # 你的数据库名
-        'USER': 'zbl',  # 你的MySQL用户名
-        'PASSWORD': '123456', # 你的MySQL密码
+        'NAME': 'smartstationdb', # 你的数据库名
+        'USER': 'root',  # 你的MySQL用户名
+        'PASSWORD': '032526', # 你的MySQL密码
         'HOST': '127.0.0.1', # 数据库主机
         'PORT': '3306',      # 数据库端口
         'OPTIONS': {
@@ -186,7 +186,11 @@ SIMPLE_JWT = {
     'SLIDING_TOKEN_REFRESH_LIFETIME': timedelta(days=1),
 }
 
+# 指定自定义的用户模型
+AUTH_USER_MODEL = 'users.UserProfile'
 
+# 邮件配置 (开发环境)
+EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
 
 ASGI_APPLICATION = 'smart_station.asgi.application'
 
@@ -211,3 +215,4 @@ CELERY_ENABLE_UTC = False                         # 是否启用 UTC 时间
 # --- CORS跨域配置 ---
 # 允许所有来源访问（开发时使用，比较方便）
 CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_CREDENTIALS = True

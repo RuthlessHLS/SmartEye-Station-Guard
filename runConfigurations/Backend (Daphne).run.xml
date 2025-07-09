@@ -8,8 +8,8 @@
       <env name="PYTHONUNBUFFERED" value="1" />
     </envs>
     <option name="SDK_HOME" value="" />
-    <option name="SDK_NAME" value="G:\anaconda\envs\web_env" />
-    <option name="WORKING_DIRECTORY" value="G:\Web\SmartEye-Station-Guard\smart_station_platform\backend" />
+    <option name="SDK_NAME" value="back_env" />
+    <option name="WORKING_DIRECTORY" value="E:\SmartEye-Station-Guard\smart_station_platform\backend" />
     <option name="IS_MODULE_SDK" value="false" />
     <option name="ADD_CONTENT_ROOTS" value="true" />
     <option name="ADD_SOURCE_ROOTS" value="true" />
