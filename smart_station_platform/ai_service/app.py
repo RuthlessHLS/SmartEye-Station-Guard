@@ -1,374 +1,223 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks, File, UploadFile # <--- 修改这里
-from pydantic import BaseModel
-import uvicorn
-import requests
-import os
-import shutil  # <--- 添加这一行
-from dotenv import load_dotenv
-# ...其他import语句...
-from core.acoustic_detection import AcousticEventDetector # 导入我们刚创建的类
-# import datetime  <--- 删除或注释掉这一行
-# ...其他import语句...
-from core.fire_smoke_detection import FlameSmokeDetector # 导入我们刚创建的类
+# 文件: ai_service/app.py
+# 描述: AI智能分析服务的主应用文件，整合了视频流处理和AI模型。
 
-from core.object_detection import GenericPredictor
-from core.face_recognition import FaceRecognizer
-# ...其他import语句...
+import os
+import base64
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
+from typing import Dict, List, Optional
+
 import cv2
-from core.behavior_detection import BehaviorDetector # 导入我们刚创建的类
+import numpy as np
+import requests
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+
+# 导入我们自定义的核心模块
+from core.video_stream import VideoStream
+from core.object_detection import GenericPredictor
+
+# from core.behavior_detection import BehaviorDetector  # (下一步可以取消注释)
+# from core.face_recognition import FaceRecognizer    # (下一步可以取消注释)
+
+# 在应用启动时，从 .env 文件加载环境变量 (例如模型路径)
 load_dotenv()
+
+# --- 全局变量 ---
+# 使用一个字典来存储和管理所有正在运行的视频流实例
+# 键是 camera_id, 值是 VideoStream 类的实例
+video_streams: Dict[str, VideoStream] = {}
+# 使用一个字典来存储所有已初始化的AI模型实例
+detectors: Dict[str, object] = {}
+# 创建一个线程池，专门用于异步发送网络请求，避免阻塞主AI处理流程
+thread_pool = ThreadPoolExecutor(max_workers=os.cpu_count() or 4)
+
+
+# --- FastAPI 应用生命周期管理 ---
+
+def init_detectors():
+    """
+    初始化所有AI检测器模型。这个函数在服务启动时只执行一次。
+    """
+    try:
+        print("正在初始化所有检测器...")
+
+        # 1. 初始化通用目标检测器 (GenericPredictor)
+        class_names_path = os.getenv("CLASS_NAMES_PATH", "path/to/your/class_names.txt")
+        class_names = []
+        try:
+            with open(class_names_path, 'r') as f:
+                class_names = [line.strip() for line in f.readlines()]
+        except FileNotFoundError:
+            # 如果找不到类别文件，至少要保证有一个背景类，避免程序崩溃
+            print(f"警告: 找不到类别名称文件 at '{class_names_path}'。将使用默认类别。")
+            class_names = ["background", "person"]
+
+        detectors["object"] = GenericPredictor(
+            model_weights_path=os.getenv("OBJECT_DETECTION_MODEL_PATH", "path/to/your/model.pt"),
+            num_classes=len(class_names),
+            class_names=class_names
+        )
+
+        # 2. (未来步骤) 初始化行为检测器
+        # detectors["behavior"] = BehaviorDetector(...)
+
+        # 3. (未来步骤) 初始化人脸识别器
+        # detectors["face"] = FaceRecognizer(...)
+
+        print("所有检测器初始化完成。")
+
+    except Exception as e:
+        print(f"致命错误: 检测器初始化失败: {e}")
+        # 如果模型加载失败，服务启动将失败
+        raise
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    FastAPI 的生命周期管理器。
+    在 'yield' 之前的代码在服务启动时运行。
+    在 'yield' 之后的代码在服务关闭时运行。
+    """
+    # --- 启动任务 ---
+    init_detectors()
+    # --- 启动任务结束 ---
+
+    yield  # 服务在此运行时，处理API请求
+
+    # --- 关闭任务 ---
+    print("服务正在关闭，开始清理资源...")
+    # 停止所有正在运行的视频流线程
+    for stream in video_streams.values():
+        stream.stop()
+    # 等待所有挂起的网络请求完成
+    thread_pool.shutdown(wait=True)
+    print("资源清理完毕。")
+
+
+# 创建FastAPI应用实例，并应用生命周期管理器
 app = FastAPI(
     title="AI 智能分析服务",
     description="提供视频流处理、人脸识别、目标检测等AI分析能力",
-    version="1.0.0",
+    version="1.2.0",  # 版本升级
+    lifespan=lifespan
 )
 
-# ==========================================================
-#  ↓↓↓ 在这里添加模型加载代码 ↓↓↓ (修改后)
-# ==========================================================
-# --- 1. 定义模型配置 ---
-MODEL_WEIGHTS_PATH = "ai_service/weights/object_detection_best.pth"
-# !! 这里的类别数量和名称需要和您的模型完全匹配
-# 我们现在使用在COCO数据集上预训练的模型，它有91个类别
-NUM_CLASSES = 91
-# COCO数据集的91个类别名称列表
-COCO_INSTANCE_CATEGORY_NAMES = [
-    '__background__', 'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus',
-    'train', 'truck', 'boat', 'traffic light', 'fire hydrant', 'N/A', 'stop sign',
-    'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow',
-    'elephant', 'bear', 'zebra', 'giraffe', 'N/A', 'backpack', 'umbrella', 'N/A', 'N/A',
-    'handbag', 'tie', 'suitcase', 'frisbee', 'skis', 'snowboard', 'sports ball',
-    'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard', 'tennis racket',
-    'bottle', 'N/A', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl',
-    'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza',
-    'donut', 'cake', 'chair', 'couch', 'potted plant', 'bed', 'N/A', 'dining table',
-    'N/A', 'N/A', 'toilet', 'N/A', 'tv', 'laptop', 'mouse', 'remote', 'keyboard', 'cell phone',
-    'microwave', 'oven', 'toaster', 'sink', 'refrigerator', 'N/A', 'book',
-    'clock', 'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush'
-]
-CLASS_NAMES = COCO_INSTANCE_CATEGORY_NAMES
 
-# --- 2. 在服务启动时加载模型 ---
-try:
-    object_detector = GenericPredictor(
-        model_weights_path=MODEL_WEIGHTS_PATH,
-        num_classes=NUM_CLASSES,
-        class_names=CLASS_NAMES
-    )
-    print("Object Detection model loaded successfully.")
-except Exception as e:
-    object_detector = None
-    print(f"Failed to load Object Detection model: {e}")
-# ...在 object_detector 加载代码的下面添加...
+# --- 数据模型 (用于API请求和响应) ---
 
-# --- 3. 加载人脸识别模型 ---
-try:
-    face_recognizer = FaceRecognizer(face_db_path="ai_service/face_db/")
-    print("Face Recognition model loaded successfully.")
-except Exception as e:
-    face_recognizer = None
-    print(f"Failed to load Face Recognition model: {e}")
-
-
-# ...在 face_recognizer 加载代码的下面添加...
-
-# --- 4. 加载声音识别模型 ---
-try:
-    acoustic_detector = AcousticEventDetector()
-except Exception as e:
-    acoustic_detector = None
-    print(f"Failed to load Acoustic Event Detector: {e}")
-
-
-# ...在 acoustic_detector 加载代码的下面添加...
-
-# --- 5. 加载火焰烟雾检测模型 ---
-try:
-    FIRE_SMOKE_MODEL_PATH = "ai_service/weights/fire_smoke_yolov8.pt"
-    flame_smoke_detector = FlameSmokeDetector(model_path=FIRE_SMOKE_MODEL_PATH)
-except Exception as e:
-    flame_smoke_detector = None
-    print(f"Failed to load FlameSmokeDetector: {e}")
-
-
-# ...在 flame_smoke_detector 加载代码的下面添加...
-
-# --- 6. 加载行为检测模型 ---
-try:
-    behavior_detector = BehaviorDetector()
-except Exception as e:
-    behavior_detector = None
-    print(f"Failed to load BehaviorDetector: {e}")
-# ==========================================================
-#  ↑↑↑ 模型加载代码结束 ↑↑↑ (修改后)
-# ==========================================================
-
-# AI分析结果的数据模型，与后端保持一致
-# AI分析结果的数据模型，与后端保持一致
-class AIAnalysisResult(BaseModel):
+class StreamConfig(BaseModel):
     camera_id: str
-    event_type: str # 例如: "stranger_intrusion", "person_fall"
-    location: dict # 例如: {"x": 150, "y": 230, "w": 80, "h": 160}
-    confidence: float
-    image_snapshot_url: str | None = None # 使用 | None 表示可选
-    video_clip_url: str | None = None   # 使用 | None 表示可选
+    stream_url: str
+    enable_face_recognition: bool = False
+    enable_behavior_detection: bool = True
 
 
-# --- 这是关键函数，负责将结果发送给Django后端 ---
-def send_result_to_backend(result: AIAnalysisResult):
+class FaceData(BaseModel):
+    person_name: str
+    image_data: str  # Base64编码的图像数据
+
+
+# --- 核心AI处理器 ---
+
+def create_master_processor(camera_id: str):
     """
-    这是一个后台任务函数，专门用于发送HTTP请求到Django后端。
-    我们把它独立出来，这样发送网络请求就不会阻塞主程序的AI分析流程。
+    创建一个主AI处理器。
+    这个函数会被每个视频帧调用，它负责协调调用所有需要的AI检测器。
+
+    Args:
+        camera_id (str): 当前视频流对应的摄像头ID。
+
+    Returns:
+        Callable: 一个接收单帧图像(np.ndarray)作为输入的处理器函数。
     """
-    django_backend_url = os.getenv("DJANGO_BACKEND_URL", "http://127.0.0.1:8000/api/alerts/ai-results/")
-    print(f"准备将告警上报给后端: {django_backend_url}")
-    try:
-        # 使用 .model_dump() 方法将Pydantic模型转换为字典
-        response = requests.post(django_backend_url, json=result.model_dump(), timeout=10) # 设置10秒超时
-        response.raise_for_status() # 如果请求失败(状态码4xx或5xx), 则会抛出异常
-        print(f"成功上报告警，后端返回: {response.json()}")
-    except requests.exceptions.RequestException as e:
-        print(f"上报告警至后端时出错: {e}")
+
+    def master_processor(frame: np.ndarray):
+        # 1. 使用目标检测器进行预测
+        try:
+            # 我们只关心置信度高于0.6的结果，以减少误报
+            detected_objects = detectors["object"].predict(frame, confidence_threshold=0.6)
+
+            # (调试用) 打印出检测到的物体
+            if detected_objects:
+                object_names = [obj['class_name'] for obj in detected_objects]
+                print(f"[{camera_id}] 实时检测到: {object_names}")
+
+            # 2. (未来步骤) 基于目标检测结果，进行行为分析
+            # person_boxes = [obj["coordinates"] for obj in detected_objects if obj["class_name"] == "person"]
+            # if person_boxes and "behavior" in detectors:
+            #     behaviors = detectors["behavior"].detect_behavior(frame, person_boxes)
+            #     # ... 根据行为结果进行处理和上报
+
+        except Exception as e:
+            print(f"处理帧时发生错误 [{camera_id}]: {e}")
+
+    return master_processor
 
 
-# --- 这是修改后的视频流处理入口 ---
-@app.post("/analyze/video_stream/")
-async def analyze_video_stream(camera_id: str, background_tasks: BackgroundTasks):
+# --- API 端点 (Endpoints) ---
+
+@app.post("/stream/start/", status_code=202)
+async def start_stream(config: StreamConfig):
     """
-    这个API接收到请求后，会开始进行AI分析。
-    当分析出结果后，它会将发送结果的任务添加到后台去执行。
+    启动一个新的视频流处理任务。
+    它会创建一个VideoStream实例，并根据配置注册相应的AI处理器。
     """
-    print(f"接收到来自摄像头 {camera_id} 的视频流，开始进行AI分析...")
-
-    if not object_detector:
-        print(f"摄像头 {camera_id} 的分析任务中止，因为目标检测模型未加载。")
-        raise HTTPException(status_code=503, detail="Object Detection model is not available.")
-
-    # =================================================================
-    #  ↓↓↓ 在这里集成你真正的AI核心逻辑 ↓↓↓
-    # =================================================================
-
-    # 1. 从视频流中获取一帧图像
-    #    这里需要您自己实现视频流读取逻辑（例如使用OpenCV读取RTSP流）
-    #    我们假设您已经读取到了一帧，并保存为临时图片文件 `temp_frame.jpg`
-    #    (这是一个示例，您需要替换成真实的帧捕获和保存代码)
-    #    frame = get_frame_from_rtsp(f"rtsp://.../{camera_id}")
-    #    cv2.imwrite("temp_frame.jpg", frame)
-    image_to_predict = "temp_frame.jpg"  # 假设的图片路径
-
-    # 为了能运行示例，我们先创建一个虚拟的图片文件
-    # 在您的真实代码中请删除下面这两行
-    from PIL import Image
-    Image.new('RGB', (800, 600)).save(image_to_predict)
-
-    # 2. 调用模型进行预测
-    print(f"摄像头 {camera_id}: 开始对帧进行目标检测...")
-    detection_results = object_detector.predict(image_to_predict)
-    print(f"摄像头 {camera_id}: 检测到 {len(detection_results)} 个目标。")
-
-    # 在真实代码中请删除这个临时文件
-    os.remove(image_to_predict)
-
-    # 3. 遍历检测结果，并上报给后端
-    for result in detection_results:
-        # 您可以根据检测到的类别名(result['class_name'])来判断事件类型
-        # 例如，如果检测到 "dangerous_good"，就上报
-
-        event_type_to_report = f"detected_{result['class_name']}"
-
-        # 将检测结果构造成后端需要的数据模型
-        analysis_result = AIAnalysisResult(
-            camera_id=camera_id,
-            event_type=event_type_to_report,
-            location={
-                "x": result['coordinates'][0],
-                "y": result['coordinates'][1],
-                "w": result['coordinates'][2] - result['coordinates'][0],  # 计算宽度
-                "h": result['coordinates'][3] - result['coordinates'][1]  # 计算高度
-            },
-            confidence=result['confidence'],
-            # 如果您有保存截图的逻辑，可以在这里填写真实的URL
-            image_snapshot_url=f"http://your-storage-server.com/snapshots/{event_type_to_report}_{camera_id}.jpg"
-        )
-
-        # 使用您已有的后台任务系统，将格式化后的结果发送出去
-        background_tasks.add_task(send_result_to_backend, analysis_result)
-        print(f"摄像头 {camera_id}: 已将事件 '{event_type_to_report}' 添加到后台发送队列。")
-
-    return {"status": "AI分析任务完成，结果已交由后台处理", "camera_id": camera_id,
-            "detected_objects": len(detection_results)}
-
-    # 例如，想改成 8080 端口，就写成:
-    # uvicorn.run(app, host="0.0.0.0", port=8080)
-
-
-# ...在 analyze_video_stream 函数的下面添加...
-
-@app.post("/recognize/faces")
-async def api_recognize_faces(file: UploadFile = File(...)):
-    """
-    接收上传的图片文件，进行人脸识别，并返回结果。
-    """
-    if not face_recognizer:
-        raise HTTPException(status_code=503, detail="Face Recognition model is not available.")
-
-    temp_file_path = f"temp_{file.filename}"
-    with open(temp_file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    if config.camera_id in video_streams:
+        raise HTTPException(status_code=400, detail=f"摄像头 {config.camera_id} 已在处理中。")
 
     try:
-        recognition_results = face_recognizer.recognize_faces(temp_file_path)
+        print(f"正在为摄像头 {config.camera_id} 初始化视频流...")
+        stream = VideoStream(config.stream_url)
+
+        # 注册主AI处理器
+        stream.add_processor(create_master_processor(config.camera_id))
+
+        # 启动视频流的后台捕获线程
+        if not stream.start():
+            raise HTTPException(status_code=500, detail="无法启动视频流处理线程。")
+
+        # 将创建好的实例存入全局字典以便管理
+        video_streams[config.camera_id] = stream
+
+        return {"status": "accepted", "message": f"已启动摄像头 {config.camera_id} 的AI分析任务。"}
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"An error occurred during face recognition: {e}")
-    finally:
-        os.remove(temp_file_path)  # 清理临时文件
+        # 如果在启动过程中发生任何错误，确保清理
+        if config.camera_id in video_streams:
+            video_streams[config.camera_id].stop()
+            del video_streams[config.camera_id]
+        raise HTTPException(status_code=500, detail=f"启动处理失败: {str(e)}")
 
+
+@app.post("/stream/stop/{camera_id}")
+async def stop_stream(camera_id: str):
+    """停止指定摄像头的视频流处理。"""
+    if camera_id in video_streams:
+        video_streams[camera_id].stop()
+        del video_streams[camera_id]  # 从字典中移除，释放资源
+        return {"status": "success", "message": f"已停止摄像头 {camera_id} 的处理。"}
+    raise HTTPException(status_code=404, detail=f"未找到正在处理的摄像头 {camera_id}。")
+
+
+@app.get("/system/status/")
+async def get_system_status():
+    """获取整个AI服务的当前状态，包括活动的视频流信息。"""
     return {
-        "filename": file.filename,
-        "faces": recognition_results
+        "active_streams_count": len(video_streams),
+        "detectors_initialized": {name: det is not None for name, det in detectors.items()},
+        "active_streams_details": {
+            cam_id: stream.get_stream_info() for cam_id, stream in video_streams.items()
+        }
     }
 
 
-# ...在 api_recognize_faces 函数的下面添加...
+# (人脸注册等其他API端点可以保持不变)
 
-@app.post("/detect/acoustic_events")
-async def api_detect_acoustic_events(camera_id: str, background_tasks: BackgroundTasks, file: UploadFile = File(...)):
-    """
-    接收上传的音频文件，进行声音事件识别，并将高置信度的异常事件上报给后端。
-    """
-    if not acoustic_detector:
-        raise HTTPException(status_code=503, detail="Acoustic Event Detector is not available.")
-
-    temp_file_path = f"temp_{file.filename}"
-    with open(temp_file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-
-    try:
-        detection_results = acoustic_detector.detect_events(temp_file_path)
-
-        # 筛选出我们关心的、并且置信度较高的异常事件进行上报
-        # 您可以根据需要调整这个列表和阈值
-        events_of_interest = ["Screaming", "Glass", "Crying_and_sobbing", "Shout"]
-        confidence_threshold = 0.5
-
-        for result in detection_results:
-            if result["event"] in events_of_interest and result["confidence"] > confidence_threshold:
-                print(f"检测到高置信度异常声音: {result['event']}")
-
-                # 复用您已有的AI结果上报流程
-                analysis_result = AIAnalysisResult(
-                    camera_id=camera_id,  # 关联到某个摄像头ID
-                    event_type=f"acoustic_{result['event'].lower()}",
-                    location={"x": 0, "y": 0, "w": 0, "h": 0},  # 声音事件通常没有空间坐标
-                    confidence=result['confidence'],
-                    image_snapshot_url=None  # 声音事件没有快照
-                )
-                background_tasks.add_task(send_result_to_backend, analysis_result)
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"An error occurred during acoustic event detection: {e}")
-    finally:
-        os.remove(temp_file_path)
-    return {
-        "filename": file.filename,
-        "detected_events": detection_results
-    }
-
-
-# ...在 api_detect_acoustic_events 函数的下面添加...
-
-@app.post("/detect/fire_smoke")
-async def api_detect_fire_smoke(camera_id: str, background_tasks: BackgroundTasks, file: UploadFile = File(...)):
-    """
-    接收上传的图片文件，进行火焰和烟雾检测，并将结果上报给后端。
-    """
-    if not flame_smoke_detector:
-        raise HTTPException(status_code=503, detail="Flame/Smoke Detector is not available.")
-
-    temp_file_path = f"temp_{file.filename}"
-    with open(temp_file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-
-    try:
-        detection_results = flame_smoke_detector.detect(temp_file_path)
-
-        # 遍历所有检测结果并上报
-        for result in detection_results:
-            print(f"检测到紧急情况: {result['class_name']}")
-
-            # 复用您已有的AI结果上报流程
-            analysis_result = AIAnalysisResult(
-                camera_id=camera_id,
-                event_type=f"emergency_{result['class_name'].lower()}",
-                location={
-                    "x": result['coordinates'][0],
-                    "y": result['coordinates'][1],
-                    "w": result['coordinates'][2] - result['coordinates'][0],
-                    "h": result['coordinates'][3] - result['coordinates'][1]
-                },
-                confidence=result['confidence'],
-                image_snapshot_url=f"http://your-storage-server.com/snapshots/fire_{camera_id}.jpg"  # 示例URL
-            )
-            background_tasks.add_task(send_result_to_backend, analysis_result)
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"An error occurred during fire/smoke detection: {e}")
-    finally:
-        os.remove(temp_file_path)
-
-    return {
-        "filename": file.filename,
-        "detected_objects": detection_results
-    }
-
-
-# ...在 api_detect_fire_smoke 函数的下面添加...
-
-@app.post("/detect/behavior")
-async def api_detect_behavior(camera_id: str, background_tasks: BackgroundTasks, file: UploadFile = File(...)):
-    """
-    接收上传的图片文件，进行行为检测（如跌倒），并将异常行为上报给后端。
-    """
-    if not behavior_detector:
-        raise HTTPException(status_code=503, detail="Behavior Detector is not available.")
-
-    temp_file_path = f"temp_{file.filename}"
-    with open(temp_file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-
-    try:
-        # 使用OpenCV读取图片为NumPy数组
-        image = cv2.imread(temp_file_path)
-        if image is None:
-            raise HTTPException(status_code=400, detail="Could not read image file.")
-
-        detection_results, _ = behavior_detector.detect_fall(image)
-
-        # 遍历所有检测结果并上报
-        for result in detection_results:
-            if result["status"] == "fallen":
-                print(f"检测到跌倒行为!")
-
-                # 复用您已有的AI结果上报流程
-                analysis_result = AIAnalysisResult(
-                    camera_id=camera_id,
-                    event_type="behavior_person_fall",
-                    location=result["location"],
-                    confidence=0.9,  # 行为检测通常没有直接的置信度，可设为固定值
-                    image_snapshot_url=f"http://your-storage-server.com/snapshots/fall_{camera_id}.jpg"
-                )
-                background_tasks.add_task(send_result_to_backend, analysis_result)
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"An error occurred during behavior detection: {e}")
-    finally:
-        os.remove(temp_file_path)
-
-    return {
-        "filename": file.filename,
-        "detected_behaviors": detection_results
-    }
-# --- 如何修改端口 ---
 if __name__ == "__main__":
-    #  ↓↓↓ 要修改端口，直接修改这里的 port 数字即可 ↓↓↓
+    # 这段代码使得你可以直接运行 "python app.py" 来启动服务
+    # 这对于在非Docker环境或不使用gunicorn/uvicorn命令行时进行调试非常方便
     uvicorn.run(app, host="0.0.0.0", port=8001)
