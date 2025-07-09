@@ -1,6 +1,6 @@
 # 文件: ai_service/core/acoustic_detection.py
 # 描述: 声学事件检测器，用于分析音频流中的异常声音。
-
+from typing import Optional, Dict
 import sounddevice as sd
 import numpy as np
 import queue
