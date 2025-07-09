@@ -59,15 +59,56 @@ class AIResultReceiveSerializer(serializers.Serializer):
         )
         return alert
 
-# Alert 创建和更新的序列化器 (用于前端)
+# Alert 创建序列化器 (用于前端)
 class AlertCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Alert
         # 允许前端创建时只提供部分字段
         fields = ['camera', 'event_type', 'location', 'confidence', 'image_snapshot_url', 'video_clip_url']
 
+# Alert 处理序列化器 (专门用于处理告警状态和备注)
+class AlertHandleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Alert
+        # 只允许更新处理相关的字段
+        fields = ['status', 'processing_notes']
+        
+    def validate_status(self, value):
+        """验证状态值是否有效"""
+        valid_statuses = [choice[0] for choice in Alert.STATUS_CHOICES]
+        if value not in valid_statuses:
+            raise serializers.ValidationError(f"无效的状态值。有效选项：{valid_statuses}")
+        return value
+
+# Alert 一般更新序列化器 (用于更新告警的基本信息)
 class AlertUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Alert
-        # 允许前端更新状态和备注
-        fields = ['status', 'handler', 'processing_notes']
+        # 允许更新除了处理相关字段外的其他字段
+        fields = ['event_type', 'location', 'confidence', 'image_snapshot_url', 'video_clip_url']
+        
+    def validate_event_type(self, value):
+        """验证事件类型是否有效"""
+        valid_types = [choice[0] for choice in Alert.EVENT_TYPE_CHOICES]
+        if value not in valid_types:
+            raise serializers.ValidationError(f"无效的事件类型。有效选项：{valid_types}")
+        return value
+
+# Alert 详情序列化器 (包含更多详细信息)
+class AlertDetailSerializer(serializers.ModelSerializer):
+    camera_name = serializers.CharField(source='camera.name', read_only=True)
+    camera_location = serializers.CharField(source='camera.location', read_only=True)
+    handler_username = serializers.CharField(source='handler.username', read_only=True)
+    handler_full_name = serializers.SerializerMethodField()
+    event_type_display = serializers.CharField(source='get_event_type_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    
+    class Meta:
+        model = Alert
+        fields = '__all__'
+        
+    def get_handler_full_name(self, obj):
+        """获取处理人的完整姓名"""
+        if obj.handler:
+            return f"{obj.handler.first_name} {obj.handler.last_name}".strip() or obj.handler.username
+        return None

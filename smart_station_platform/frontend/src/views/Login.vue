@@ -10,6 +10,7 @@
         <div class="form-item">
           <input type="password" v-model="form.password" placeholder="请输入密码" required>
         </div>
+
         <div class="form-options">
           <label class="remember-me">
             <input type="checkbox" v-model="form.remember"> 记住密码
@@ -27,7 +28,7 @@
       </form>
     </div>
 
-    <!-- 滑动验证码组件 -->
+    <!-- 引入并使用滑动验证码组件 -->
     <SliderCaptcha
       v-if="showCaptcha"
       v-model:visible="showCaptcha"
@@ -66,7 +67,7 @@ const handleLoginAttempt = () => {
     alert('请输入用户名和密码');
     return;
   }
-  // 显示验证码组件
+  // 显示验证码模态框，而不是直接提交
   showCaptcha.value = true;
 };
 
@@ -91,38 +92,30 @@ const submitLogin = async () => {
       username: form.username,
       password: form.password,
       captcha_key: captchaResult.captcha_key,
-      captcha_position: captchaResult.captcha_position,
+      captcha_position: captchaResult.captcha_position.toString(), // 确保是字符串
     };
 
-    // 修正API端点 - 使用用户应用中带验证码的登录端点
+    // 【重要】请将 URL 替换为你的后端 API 地址
     const response = await axios.post('http://127.0.0.1:8000/api/users/token/', payload);
 
     alert('登录成功！');
     console.log('Token:', response.data);
 
-    // 保存token并跳转到主页
-    localStorage.setItem('access_token', response.data.access);
-    localStorage.setItem('refresh_token', response.data.refresh);
-    window.location.href = '/';
+    //在此处理登录成功后的逻辑，例如保存 token、跳转到主页等
+     localStorage.setItem('access_token', response.data.access);
+     localStorage.setItem('refresh_token', response.data.refresh);
+     window.location.href = '/dashboard';
 
   } catch (error) {
     // 从后端响应中提取更具体的错误信息
     const errorData = error.response?.data;
     let errorMessage = '登录失败，请重试。';
-    
-    if (!error.response) {
-      // 网络错误或服务器未运行
-      errorMessage = '无法连接到服务器，请检查网络连接或联系管理员';
-    } else if (errorData) {
-      // 覆盖默认错误信息
-      errorMessage = errorData.detail || errorData.captcha || 
-                    (errorData.username && `用户名: ${errorData.username[0]}`) || 
-                    (errorData.password && `密码: ${errorData.password[0]}`) || 
-                    JSON.stringify(errorData);
+    if (errorData) {
+        // 覆盖默认错误信息
+        errorMessage = errorData.detail || errorData.captcha || (errorData.username && `用户名: ${errorData.username[0]}`) || (errorData.password && `密码: ${errorData.password[0]}`) || JSON.stringify(errorData);
     }
-    
     alert(errorMessage);
-    console.error('登录失败:', error);
+    console.error('登录失败:', errorData);
   } finally {
     loading.value = false;
   }

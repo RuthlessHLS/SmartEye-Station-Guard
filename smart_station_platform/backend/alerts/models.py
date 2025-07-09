@@ -53,7 +53,7 @@ class Alert(models.Model):
     updated_at = models.DateTimeField(auto_now=True, verbose_name="更新时间")
 
     class Meta:
-        managed = False  # 让Django不管理这个表的创建和删除
+        managed = True  # 让Django管理这个表
         db_table = 'alerts_alert'
         verbose_name = "告警"
         verbose_name_plural = "告警管理"
