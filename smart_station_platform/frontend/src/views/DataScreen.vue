@@ -268,7 +268,7 @@ const updateCharts = () => {
 const fetchDashboardData = async () => {
   try {
     // 假设后端数据大屏API接口为 /api/data-analysis/dashboard/
-    const response = await api.get('/data-analysis/dashboard/');
+    const response = await api.get('/api/data-analysis/dashboard/');
     // 模拟数据填充，实际应从response.data中获取
     Object.assign(mapData, {
       heatmap: response.heatmap || [
@@ -308,7 +308,7 @@ const playTrajectory = async () => {
   }
   try {
     // 假设后端轨迹回放接口为 /api/data-analysis/trajectory/{vehicleId}/
-    const response = await api.get(`/data-analysis/trajectory/${vehicleId.value}/`);
+    const response = await api.get(`/api/data-analysis/trajectory/${vehicleId.value}/`);
     mapData.trajectory = response.trajectory || [
       // 模拟轨迹数据 [经度, 纬度, 速度]
       [116.3972, 39.9096, 40], [116.4000, 39.9100, 50],
