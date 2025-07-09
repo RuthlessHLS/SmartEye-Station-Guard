@@ -25,8 +25,30 @@ SECRET_KEY = "django-insecure-%x9g^(npsba0&xxkj9)5x_6w3ix$b5s4(619f(0@-#u4!*z1y8
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['127.0.0.1', 'localhost']
 
+# CORS配置
+CORS_ALLOW_ALL_ORIGINS = True  # 允许所有来源访问
+CORS_ALLOW_CREDENTIALS = True  # 允许携带cookie
+CORS_ALLOW_METHODS = [
+    'DELETE',
+    'GET',
+    'OPTIONS',
+    'PATCH',
+    'POST',
+    'PUT',
+]
+CORS_ALLOW_HEADERS = [
+    'accept',
+    'accept-encoding',
+    'authorization',
+    'content-type',
+    'dnt',
+    'origin',
+    'user-agent',
+    'x-csrftoken',
+    'x-requested-with',
+]
 
 # Application definition
 
@@ -53,6 +75,9 @@ INSTALLED_APPS = [
     'ai_reports',
     'data_analysis',
 ]
+
+# 指定自定义用户模型
+AUTH_USER_MODEL = 'users.UserProfile'
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
@@ -226,7 +251,7 @@ CELERY_TIMEZONE = 'Asia/Shanghai'                 # 设置时区
 CELERY_ENABLE_UTC = False                         # 是否启用 UTC 时间
 # --- CORS跨域配置 ---
 # 允许所有来源访问（开发时使用，比较方便）
-CORS_ALLOW_ALL_ORIGINS = True
+# CORS_ALLOW_ALL_ORIGINS = True # This line is now redundant as it's moved to the top
 
 STATIC_URL = '/static/'
 STATICFILES_DIRS = [
