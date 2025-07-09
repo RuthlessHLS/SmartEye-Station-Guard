@@ -83,7 +83,7 @@ class PasswordResetRequestView(APIView):
         uidb64 = urlsafe_base64_encode(force_bytes(user.pk))
 
         # [注意] 这里的域名需要换成你的前端应用的实际地址
-        reset_link = f"http://localhost:8081/reset-password/{uidb64}/{token}/"
+        reset_link = f"{settings.FRONTEND_URL}/reset-password/{uidb64}/{token}/"
 
         send_mail(
             '您的密码重置请求',
