@@ -9,7 +9,7 @@ https://docs.djangoproject.com/en/5.2/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
-
+import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -92,8 +92,8 @@ DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': 'smart_station_db', # 你的数据库名
-        'USER': 'zbl',  # 你的MySQL用户名
-        'PASSWORD': '123456', # 你的MySQL密码
+        'USER': 'Qiuyy',  # 你的MySQL用户名
+        'PASSWORD': 'Qiuyy2005.', # 你的MySQL密码
         'HOST': '127.0.0.1', # 数据库主机
         'PORT': '3306',      # 数据库端口
         'OPTIONS': {
@@ -211,3 +211,9 @@ CELERY_ENABLE_UTC = False                         # 是否启用 UTC 时间
 # --- CORS跨域配置 ---
 # 允许所有来源访问（开发时使用，比较方便）
 CORS_ALLOW_ALL_ORIGINS = True
+
+STATIC_URL = '/static/'
+STATICFILES_DIRS = [
+    BASE_DIR / "static",
+]
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
