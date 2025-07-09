@@ -68,20 +68,6 @@
           />
         </el-form-item>
         
-        <el-form-item prop="role">
-          <el-select 
-            v-model="registerForm.role" 
-            placeholder="请选择角色"
-            size="large"
-            :disabled="loading"
-            style="width: 100%"
-          >
-            <el-option label="管理员" value="admin" />
-            <el-option label="操作员" value="operator" />
-            <el-option label="访客" value="visitor" />
-          </el-select>
-        </el-form-item>
-        
         <el-form-item prop="agreement" class="agreement-item">
           <el-checkbox v-model="registerForm.agreement" :disabled="loading">
             我已阅读并同意
@@ -173,7 +159,6 @@ const registerForm = reactive({
   email: '',
   password: '',
   confirmPassword: '',
-  role: '',
   agreement: false
 });
 
@@ -204,8 +189,8 @@ const validateConfirmPassword = (rule, value, callback) => {
 const rules = {
   username: [
     { required: true, message: '请输入用户名', trigger: 'blur' },
-    { min: 3, max: 20, message: '用户名长度应为3-20个字符', trigger: 'blur' },
-    { pattern: /^[a-zA-Z0-9_-]+$/, message: '用户名只能包含字母、数字、下划线和横线', trigger: 'blur' }
+    { min: 5, max: 20, message: '用户名长度应为5-20个字符', trigger: 'blur' },
+    { pattern: /^[a-zA-Z0-9_]+$/, message: '用户名只能包含字母、数字和下划线' }
   ],
   email: [
     { required: true, message: '请输入邮箱地址', trigger: 'blur' },
@@ -216,9 +201,6 @@ const rules = {
   ],
   confirmPassword: [
     { required: true, validator: validateConfirmPassword, trigger: 'blur' }
-  ],
-  role: [
-    { required: true, message: '请选择角色', trigger: 'change' }
   ],
   agreement: [
     {
@@ -241,21 +223,41 @@ const submitForm = async () => {
     const valid = await registerFormRef.value.validate();
     if (!valid) return;
     
+    if (!registerForm.agreement) {
+      ElMessage.error('请阅读并同意用户协议和隐私政策');
+      return;
+    }
+    
     loading.value = true;
     
-    const response = await api.post('/users/register/', {
+    const response = await api.post('/api/users/register/', {
       username: registerForm.username,
       email: registerForm.email,
       password: registerForm.password,
-      role: registerForm.role
+      password2: registerForm.confirmPassword,
+      nickname: registerForm.username
     });
     
     ElMessage.success('注册成功！');
     router.push('/login');
     
   } catch (error) {
-    ElMessage.error('注册失败：' + (error.response?.data?.detail || '请检查输入或用户名是否已存在！'));
     console.error('Register error:', error);
+    let errorMessage = '注册失败：';
+    
+    if (error.response?.data?.detail) {
+      errorMessage += error.response.data.detail;
+    } else if (error.response?.data) {
+      // 处理字段错误
+      const fieldErrors = Object.entries(error.response.data)
+        .map(([field, errors]) => `${field}: ${Array.isArray(errors) ? errors[0] : errors}`)
+        .join('; ');
+      errorMessage += fieldErrors;
+    } else {
+      errorMessage += '请检查输入或用户名是否已存在！';
+    }
+    
+    ElMessage.error(errorMessage);
   } finally {
     loading.value = false;
   }
@@ -396,41 +398,5 @@ h2 {
 :deep(.el-input__wrapper) {
   border-radius: 6px;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-}
-
-:deep(.el-input__wrapper:hover) {
-  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
-}
-
-:deep(.el-input__wrapper.is-focus) {
-  box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.2);
-}
-
-:deep(.el-button--primary) {
-  background: linear-gradient(135deg, #409eff 0%, #667eea 100%);
-  border: none;
-  transition: all 0.3s ease;
-}
-
-:deep(.el-button--primary:hover) {
-  background: linear-gradient(135deg, #337ecc 0%, #5a6fd8 100%);
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(64, 158, 255, 0.3);
-}
-
-:deep(.el-checkbox__label) {
-  color: #606266;
-  font-size: 14px;
-}
-
-:deep(.el-select) {
-  width: 100%;
-}
-
-@media (max-width: 480px) {
-  .register-card {
-    width: 90%;
-    margin: 0 20px;
-  }
 }
 </style>
