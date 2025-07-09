@@ -23,11 +23,11 @@ class AlertConsumer(AsyncWebsocketConsumer):
 
     # 从组接收消息
     async def alert_message(self, event):
-        alert_data = event['data']
+        alert_data = event['message']  # 使用'message'而不是'data'
         # 你的前端代码需要一个 'type' 字段来识别消息类型
         message_to_send = {
             'type': 'alert',  # 告诉前端这是一条告警消息
             'data': alert_data
         }
         await self.send(text_data=json.dumps(message_to_send))
-        print(f"已向 {self.channel_name} 发送告警: {alert_data['id']}")
+        print(f"已向 {self.channel_name} 发送告警: {alert_data.get('id', 'unknown')}")
