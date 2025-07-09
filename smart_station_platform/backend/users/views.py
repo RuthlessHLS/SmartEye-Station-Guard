@@ -1,5 +1,5 @@
-# E:\SmartEye-Station-Guard\smart_station_platform\backend\users\views.py
-
+import uuid
+from django.core.cache import cache
 from django.shortcuts import render
 from .models import UserProfile
 from .serializers import (
@@ -18,6 +18,9 @@ from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.utils.encoding import force_bytes, force_str
 from django.conf import settings
+from rest_framework_simplejwt.views import TokenObtainPairView
+from .serializers import MyTokenObtainPairSerializer
+from .captcha_generator import create_captcha_images
 
 
 # ==========================================================
@@ -45,6 +48,7 @@ class UserProfileView(generics.RetrieveUpdateAPIView):
 
     def get_object(self):
         return self.request.user
+
 
 # ==========================================================
 # 视图 3: AvatarUpdateView
@@ -127,3 +131,43 @@ class PasswordResetConfirmView(APIView):
             return Response({"message": "密码重置成功！"}, status=status.HTTP_200_OK)
         else:
             return Response({"error": "密码重置链接无效或已过期。"}, status=status.HTTP_400_BAD_REQUEST)
+
+
+# ==========================================================
+# 视图 6: GenerateCaptchaView
+# ==========================================================
+class GenerateCaptchaView(APIView):
+    """
+    生成滑动验证码的视图。
+    调用辅助函数生成图片，并处理HTTP请求和响应。
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request, *args, **kwargs):
+        # 1. 调用辅助函数生成图片数据
+        image_data = create_captcha_images()
+
+        # 2. 生成唯一的 key 并将正确答案存入缓存
+        captcha_key = str(uuid.uuid4())
+        # 将 x 坐标作为答案存入缓存，有效期 5 分钟 (300秒)
+        cache.set(f"captcha:{captcha_key}", image_data['position_x'], timeout=300)
+
+        # 3. 准备返回给前端的数据
+        response_data = {
+            "captcha_key": captcha_key,
+            "background_image": f"data:image/png;base64,{image_data['background_base64']}",
+            "slider_image": f"data:image/png;base64,{image_data['slider_base64']}",
+            "slider_y": image_data['position_y']  # 滑块的 y 坐标，用于前端定位
+        }
+
+        return Response(response_data, status=status.HTTP_200_OK)
+
+
+# ==========================================================
+# 视图: MyTokenObtainPairView
+# ==========================================================
+class MyTokenObtainPairView(TokenObtainPairView):
+    """
+    自定义的Token获取视图，使用我们自己的序列化器
+    """
+    serializer_class = MyTokenObtainPairSerializer

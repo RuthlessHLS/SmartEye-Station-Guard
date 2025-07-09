@@ -1,8 +1,9 @@
 # G:\Web\smart_station_platform\backend\users\serializers.py (结构修正版)
-
+from .captcha_validator import validate_captcha
 from rest_framework import serializers
 from .models import UserProfile
 from django.contrib.auth.hashers import make_password
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 import re
 
 # ==========================================================
@@ -33,11 +34,17 @@ class UserRegisterSerializer(serializers.ModelSerializer):
             'blank': '确认密码不能为空。'
         }
     )
+    # 接收前端验证码数据的字段
+    captcha_key = serializers.CharField(write_only=True, required=True,
+                                        error_messages={'required': '验证码key是必填项。'})
+    captcha_position = serializers.CharField(write_only=True, required=True,
+                                             error_messages={'required': '验证码位置是必填项。'})
 
     class Meta:
         model = UserProfile
         # 注意：这里的 fields 需要包含 password2 以便接收数据
-        fields = ('username', 'password', 'password2', 'email', 'phone_number', 'nickname')
+        fields = ('username', 'password', 'password2', 'email', 'phone_number', 'nickname',
+                  'captcha_key', 'captcha_position')
 
     def validate_username(self, value):
         if UserProfile.objects.filter(username=value).exists():
@@ -63,9 +70,16 @@ class UserRegisterSerializer(serializers.ModelSerializer):
         return value
 
     def validate(self, data):
+        # 1. 校验密码一致性
         if data['password'] != data['password2']:
             raise serializers.ValidationError({"password2": "两次输入的密码不一致。"})
+        # 2. 调用验证码校验逻辑
+        validate_captcha(data)
+        # 3. 移除不再需要存入模型的字段
         data.pop('password2')
+        data.pop('captcha_key')
+        data.pop('captcha_position')
+
         return data
 
     def create(self, validated_data):
@@ -81,7 +95,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
     用户个人资料序列化器
     """
     gender = serializers.CharField(source='get_gender_display', read_only=True)
-    avatar = serializers.ImageField(read_only=True)
+    # avatar = serializers.ImageField(read_only=True)
 
     class Meta:
         model = UserProfile
@@ -144,4 +158,27 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
             raise serializers.ValidationError({"password2": "两次输入的密码不一致。"})
         # 验证后不再需要 password2
         data.pop('password2')
+        return data
+
+
+# ==========================================================
+# 类: MyTokenObtainPairSerializer
+# ==========================================================
+class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
+    """
+    自定义的Token获取序列化器，增加了滑动验证码校验
+    """
+    captcha_key = serializers.CharField(write_only=True, required=True)
+    captcha_position = serializers.CharField(write_only=True, required=True)
+
+    def validate(self, attrs):
+        # 先进行验证码校验
+        validate_captcha(attrs)
+
+        # 移除验证码字段，然后调用父类的 validate 方法
+        attrs.pop('captcha_key', None)
+        attrs.pop('captcha_position', None)
+
+        # 调用父类验证逻辑 (验证用户名密码，生成tokens)
+        data = super().validate(attrs)
         return data
