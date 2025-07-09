@@ -1,71 +1,104 @@
-# ai_service/core/acoustic_detection.py
+# 文件: ai_service/core/acoustic_detection.py
+# 描述: 声学事件检测器，用于分析音频流中的异常声音。
 
-import torch
-import librosa
-from panns_inference import AudioTagging
+import sounddevice as sd
+import numpy as np
+import queue
+from typing import Callable, Optional
 
 
-class AcousticEventDetector:
-    def __init__(self, device=None):
+class AcousticDetector:
+    def __init__(self, device_index: Optional[int] = None, sample_rate: int = 44100, block_size: int = 1024):
         """
-        初始化声音事件检测器。
-        """
-        if device is None:
-            self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        else:
-            self.device = device
-
-        print(f"Acoustic Event Detector using device: {self.device}")
-
-        # 1. 加载预训练的声音识别模型
-        #    和人脸识别类似，这个库会在首次运行时自动下载并缓存模型。
-        try:
-            self.model = AudioTagging(checkpoint_path=None, device=self.device)
-            print("Acoustic event detection model loaded successfully.")
-        except Exception as e:
-            self.model = None
-            print(f"Failed to load acoustic event detection model: {e}")
-
-    def detect_events(self, audio_path, top_n=5):
-        """
-        识别给定音频文件中的声音事件。
+        初始化声学事件检测器。
 
         Args:
-            audio_path (str): 待识别音频文件的路径 (如 .wav, .mp3)。
-            top_n (int): 返回置信度最高的n个结果。
-
-        Returns:
-            list: 包含每个识别到的声音事件及其置信度的列表。
+            device_index (Optional[int]): 要使用的麦克风设备索引。如果为None，则使用默认输入设备。
+            sample_rate (int): 采样率 (Hz)。
+            block_size (int): 每次读取的音频帧大小。
         """
-        if self.model is None:
-            print("Acoustic model not loaded, skipping detection.")
-            return []
+        print("正在初始化声学事件检测器...")
+        self.device_index = device_index
+        self.sample_rate = sample_rate
+        self.block_size = block_size
+        self.stream = None
+        self.is_running = False
+
+        # 创建一个队列来在线程间传递音频数据
+        self.audio_queue = queue.Queue()
+
+        # 检查是否有可用的麦克风设备
+        try:
+            sd.query_devices(kind='input')
+        except Exception as e:
+            print(f"错误: 无法找到音频输入设备: {e}")
+            raise
+
+    def _audio_callback(self, indata, frames, time, status):
+        """这是音频流的回调函数，当有新的音频数据时，sounddevice会自动调用它。"""
+        if status:
+            print(f"音频流状态警告: {status}")
+        # 将获取到的音频数据放入队列
+        self.audio_queue.put(indata.copy())
+
+    def start_listening(self):
+        """启动音频监听流。"""
+        if self.is_running:
+            print("音频监听已在运行中。")
+            return
 
         try:
-            # 1. 使用 librosa 加载音频文件
-            #    sr=32000 是模型所期望的采样率
-            (audio, _) = librosa.core.load(audio_path, sr=32000, mono=True)
+            # 创建并启动一个非阻塞的音频输入流
+            self.stream = sd.InputStream(
+                samplerate=self.sample_rate,
+                blocksize=self.block_size,
+                device=self.device_index,
+                channels=1,  # 单声道
+                callback=self._audio_callback
+            )
+            self.stream.start()
+            self.is_running = True
+            print("音频监听已启动。")
         except Exception as e:
-            print(f"Error loading audio file {audio_path}: {e}")
-            return []
+            print(f"启动音频监听失败: {e}")
+            self.is_running = False
 
-        # 2. 使用模型进行推理
-        #    模型输入需要是 (N,) 的numpy数组
-        audio = audio[None, :]  # 增加一个批次维度 -> (1, N)
-        framewise_output, clipwise_output = self.model.inference(audio)
+    def stop_listening(self):
+        """停止音频监听流。"""
+        if self.stream:
+            self.stream.stop()
+            self.stream.close()
+            self.is_running = False
+            print("音频监听已停止。")
 
-        # clipwise_output 包含了整个片段的识别结果和置信度
-        # 我们将结果格式化
-        results = []
-        sorted_indexes = (-clipwise_output[0]).argsort()
+    def analyze_audio_chunk(self, volume_threshold: float = 0.1) -> Optional[Dict]:
+        """
+        从队列中取出一块音频数据进行分析。
 
-        for i in range(top_n):
-            idx = sorted_indexes[i]
-            class_name = self.model.labels[idx]
-            confidence = clipwise_output[0][idx]
-            results.append({
-                "event": class_name,
-                "confidence": round(float(confidence), 3)
-            })
+        Args:
+            volume_threshold (float): 音量阈值，超过此值则判定为异常。范围 0.0 - 1.0。
 
-        return results
+        Returns:
+            Optional[Dict]: 如果检测到异常，返回一个包含事件信息的字典，否则返回None。
+        """
+        try:
+            # 从队列中获取音频数据，非阻塞
+            audio_chunk = self.audio_queue.get_nowait()
+
+            # 计算音量 (均方根 RMS)
+            volume = np.sqrt(np.mean(audio_chunk ** 2))
+
+            if volume > volume_threshold:
+                return {
+                    "event_type": "abnormal_sound_detected",
+                    "is_abnormal": True,
+                    "need_alert": True,
+                    "details": {
+                        "volume": round(volume, 3)
+                    },
+                    "confidence": min(1.0, volume / volume_threshold * 0.5)  # 模拟置信度
+                }
+        except queue.Empty:
+            # 队列为空是正常情况，表示没有新的音频数据
+            return None
+        return None
