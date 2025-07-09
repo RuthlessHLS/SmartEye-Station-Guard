@@ -36,9 +36,9 @@ urlpatterns = [
 
     path('admin/', admin.site.urls),
 
-    # JWT 登录认证
-    path('api/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
-    path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
+    # JWT 登录认证 - 使用自定义的验证码登录视图
+    # path('api/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),  # 注释掉原来的
+    path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),  # 保留刷新token
 
     # 模块路由
     path('api/users/', include('users.urls')),

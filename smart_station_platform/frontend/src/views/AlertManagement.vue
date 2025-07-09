@@ -229,8 +229,8 @@ const fetchAlerts = async () => {
       start_time: filterForm.dateRange && filterForm.dateRange[0] ? filterForm.dateRange[0] : '',
       end_time: filterForm.dateRange && filterForm.dateRange[1] ? filterForm.dateRange[1] : '',
     };
-    // 假设后端告警列表接口为 /api/alerts/list/
-    const response = await api.get('/alerts/list/', { params });
+    // 修正API路径，添加/api前缀
+    const response = await api.get('/api/alerts/', { params });
     alerts.value = response.results.map(alert => ({
       ...alert,
       alert_time: new Date(alert.timestamp).toLocaleString(), // 假设后端返回timestamp
@@ -280,7 +280,7 @@ const handleAlert = (row) => {
       // 假设后端处理告警接口为 /api/alerts/handle/
       // 实际应根据告警ID更新状态和备注
       try {
-        const response = await api.post(`/alerts/${row.id}/handle/`, {
+        const response = await api.patch(`/api/alerts/${row.id}/handle/`, {
           status: 'in_progress', // 或直接设置为 'resolved'
           processing_notes: value,
         });
@@ -300,7 +300,7 @@ const updateAlertStatus = async () => {
   try {
     // 假设后端更新告警接口为 /api/alerts/{id}/update/
     const newStatus = currentAlert.status === 'pending' ? 'in_progress' : 'resolved';
-    const response = await api.patch(`/alerts/${currentAlert.id}/update/`, {
+    const response = await api.patch(`/api/alerts/${currentAlert.id}/update/`, {
       status: newStatus,
       processing_notes: currentAlert.processing_notes,
     });

@@ -217,12 +217,19 @@ ASGI_APPLICATION = 'smart_station.asgi.application'
 
 CHANNEL_LAYERS = {
     'default': {
-        'BACKEND': 'channels_redis.core.RedisChannelLayer',
-        'CONFIG': {
-            "hosts": [('127.0.0.1', 6379)], # 确保Redis服务器运行在6379端口
-        },
+        'BACKEND': 'channels.layers.InMemoryChannelLayer',  # 使用内存Channel Layer，不依赖Redis
     },
 }
+
+# 如果需要Redis Channel Layer，取消注释下面的配置
+# CHANNEL_LAYERS = {
+#     'default': {
+#         'BACKEND': 'channels_redis.core.RedisChannelLayer',
+#         'CONFIG': {
+#             "hosts": [('127.0.0.1', 6379)], # 确保Redis服务器运行在6379端口
+#         },
+#     },
+# }
 
 # Django Caching
 CACHES = {

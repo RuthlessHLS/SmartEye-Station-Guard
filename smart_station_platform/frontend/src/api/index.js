@@ -32,6 +32,11 @@ service.interceptors.response.use(
   },
   async error => {
     const originalRequest = error.config;
+    // 检查是否有响应，如果没有响应（如连接被拒绝），直接拒绝
+    if (!error.response) {
+      console.error('Network error or server is not running:', error.message);
+      return Promise.reject(error);
+    }
     // 如果是 401 (未授权) 并且不是刷新 token 的请求，尝试刷新 token
     if (error.response.status === 401 && !originalRequest._retry) {
       originalRequest._retry = true;
