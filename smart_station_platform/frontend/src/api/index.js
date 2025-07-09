@@ -39,7 +39,7 @@ service.interceptors.response.use(
         const refreshToken = localStorage.getItem('refresh_token');
         if (refreshToken) {
           // 尝试向后端刷新 Token 的接口发送请求
-          const res = await service.post('/token/refresh/', { refresh: refreshToken });
+          const res = await service.post('/api/token/refresh/', { refresh: refreshToken });
           const newAccessToken = res.data.access;
           localStorage.setItem('access_token', newAccessToken); // 更新存储的 access_token
           // 重新设置授权头，然后重新发送原始请求

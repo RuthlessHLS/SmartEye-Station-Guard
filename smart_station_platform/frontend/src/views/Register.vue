@@ -223,9 +223,14 @@ const submitForm = async () => {
     const valid = await registerFormRef.value.validate();
     if (!valid) return;
     
+    if (!registerForm.agreement) {
+      ElMessage.error('请阅读并同意用户协议和隐私政策');
+      return;
+    }
+    
     loading.value = true;
     
-    const response = await api.post('/users/register/', {
+    const response = await api.post('/api/users/register/', {
       username: registerForm.username,
       email: registerForm.email,
       password: registerForm.password,
@@ -237,8 +242,22 @@ const submitForm = async () => {
     router.push('/login');
     
   } catch (error) {
-    ElMessage.error('注册失败：' + (error.response?.data?.detail || '请检查输入或用户名是否已存在！'));
     console.error('Register error:', error);
+    let errorMessage = '注册失败：';
+    
+    if (error.response?.data?.detail) {
+      errorMessage += error.response.data.detail;
+    } else if (error.response?.data) {
+      // 处理字段错误
+      const fieldErrors = Object.entries(error.response.data)
+        .map(([field, errors]) => `${field}: ${Array.isArray(errors) ? errors[0] : errors}`)
+        .join('; ');
+      errorMessage += fieldErrors;
+    } else {
+      errorMessage += '请检查输入或用户名是否已存在！';
+    }
+    
+    ElMessage.error(errorMessage);
   } finally {
     loading.value = false;
   }
