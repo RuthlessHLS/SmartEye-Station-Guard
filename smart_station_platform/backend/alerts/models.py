@@ -49,8 +49,8 @@ class Alert(models.Model):
         verbose_name="处理人"
     )
     processing_notes = models.TextField(blank=True, null=True, verbose_name="处理备注")
-    created_at = models.DateTimeField(verbose_name="创建时间")
-    updated_at = models.DateTimeField(verbose_name="更新时间")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="创建时间")
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="更新时间")
 
     class Meta:
         managed = False  # 让Django不管理这个表的创建和删除

@@ -3,6 +3,7 @@
 from rest_framework import serializers
 from .models import Alert
 from camera_management.models import Camera # 导入 Camera 模型
+from django.utils import timezone  # 添加导入
 
 # Alert 列表和详情的序列化器
 class AlertSerializer(serializers.ModelSerializer):
@@ -36,16 +37,25 @@ class AIResultReceiveSerializer(serializers.Serializer):
             print(f"警告: 未找到名为 '{camera_name}' 的摄像头。告警将不关联摄像头。")
             camera_instance = None
 
+        # 如果没有提供timestamp，使用当前时间
+        if 'timestamp' not in validated_data or validated_data['timestamp'] is None:
+            validated_data['timestamp'] = timezone.now()
+
+        # 获取当前时间
+        current_time = timezone.now()
+
         # 创建 Alert 实例
         alert = Alert.objects.create(
             camera=camera_instance,
             event_type=validated_data['event_type'],
-            timestamp=validated_data.get('timestamp', None), # 如果AI服务没发，就用默认的auto_now_add
+            timestamp=validated_data['timestamp'],
             location=validated_data['location'],
             confidence=validated_data['confidence'],
             image_snapshot_url=validated_data.get('image_snapshot_url'),
             video_clip_url=validated_data.get('video_clip_url'),
-            status='pending' # 初始状态设置为待处理
+            status='pending', # 初始状态设置为待处理
+            created_at=current_time,  # 手动设置创建时间
+            updated_at=current_time   # 手动设置更新时间
         )
         return alert
 
