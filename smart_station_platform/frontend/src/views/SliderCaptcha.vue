@@ -99,6 +99,8 @@ const fetchCaptcha = async () => {
   }
 };
 
+let startTime = 0; // 用于记录拖动开始的时间戳
+
 // 重置滑块状态
 const resetSlider = () => {
   sliderLeft.value = 0;
@@ -113,6 +115,8 @@ const onDragStart = (e) => {
   isDragging.value = true;
   // 兼容触摸和鼠标事件，获取起始X坐标
   startX = e.clientX || e.touches[0].clientX;
+  // 记录开始拖动的时间
+  startTime = Date.now();
 
   // 添加全局事件监听器，以便在页面任何位置移动都能响应
   window.addEventListener('mousemove', onDragMove);
@@ -148,6 +152,19 @@ const onDragEnd = () => {
   window.removeEventListener('touchmove', onDragMove);
   window.removeEventListener('mouseup', onDragEnd);
   window.removeEventListener('touchend', onDragEnd);
+
+  // [新增] 计算拖动耗时
+  const endTime = Date.now();
+  const duration = (endTime - startTime) / 1000; // 转换为秒
+  // 定义前端的最小耗时（可以比后端略短，给网络延迟留出空间）
+  const minDuration = 0.8; // 例如，0.8秒
+  if (duration < minDuration) {
+    alert('操作过快，请拖动滑块完成验证！');
+    // 操作过快时，重置滑块位置，并重新获取验证码以增加破解难度
+    fetchCaptcha();
+    // 不关闭模态框，也不触发 success 事件
+    return;
+  }
 
   // 触发 `success` 事件，将验证所需的数据传递给父组件
   emit('success', {
