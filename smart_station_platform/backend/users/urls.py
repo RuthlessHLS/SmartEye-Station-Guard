@@ -2,12 +2,12 @@
 
 from django.urls import path
 from . import views
-from rest_framework_simplejwt.views import (
-    TokenObtainPairView,
-    TokenRefreshView,
-)
+from rest_framework_simplejwt.views import TokenRefreshView
 
 urlpatterns = [
+    # 生成验证码的路由
+    path('captcha/generate/', views.GenerateCaptchaView.as_view(), name='captcha_generate'),
+
     # 用户注册
     path('register/', views.UserRegisterView.as_view(), name='register'),
 
@@ -19,8 +19,8 @@ urlpatterns = [
     path('profile/avatar/', views.AvatarUpdateView.as_view(), name='user_avatar_update'),
 
     # JWT Token 相关路由
-    # 'token/' 用于登录，用户提交 username 和 password，成功后返回 access 和 refresh tokens
-    path('token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
+    # 使用我们自定义的视图来处理登录请求
+    path('token/', views.MyTokenObtainPairView.as_view(), name='token_obtain_pair'),
 
     # 'token/refresh/' 用于刷新 access token
     path('token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
