@@ -1,128 +1,275 @@
 # smart_station_platform/backend/alerts/views.py
-
-from rest_framework import generics, status
+from drf_yasg.utils import swagger_auto_schema
+from .serializers import AIResultReceiveSerializer  # 如果没import的话
+from rest_framework import generics, status, filters
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from django.db.models import Q  # 用于复杂查询
+from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework.pagination import PageNumberPagination
 
 from .models import Alert
-from .serializers import AlertSerializer, AIResultReceiveSerializer, AlertUpdateSerializer
+from .serializers import (
+    AlertSerializer, 
+    AlertDetailSerializer,
+    AIResultReceiveSerializer, 
+    AlertUpdateSerializer,
+    AlertHandleSerializer
+)
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 import json
 from datetime import datetime, timedelta
+from drf_yasg.utils import swagger_auto_schema
+
+
+class AlertPagination(PageNumberPagination):
+    """告警列表分页配置"""
+    page_size = 20
+    page_size_query_param = 'page_size'
+    max_page_size = 100
 
 
 class AlertListView(generics.ListAPIView):
     """
     获取告警列表，支持筛选、排序和分页。
+    GET /alerts/list/
     """
     queryset = Alert.objects.all()
     serializer_class = AlertSerializer
-    permission_classes = [IsAuthenticated]  # 只有认证用户才能访问
+    permission_classes = [IsAuthenticated]
+    pagination_class = AlertPagination
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter, filters.SearchFilter]
+    
+    # 支持的筛选字段
+    filterset_fields = {
+        'event_type': ['exact', 'in'],
+        'status': ['exact', 'in'],
+        'camera': ['exact'],
+        'confidence': ['gte', 'lte'],
+        'timestamp': ['gte', 'lte', 'date'],
+    }
+    
+    # 支持的排序字段
+    ordering_fields = ['timestamp', 'confidence', 'created_at', 'updated_at']
+    ordering = ['-timestamp']  # 默认按时间倒序
+    
+    # 支持搜索的字段
+    search_fields = ['event_type', 'camera__name', 'processing_notes']
 
     def get_queryset(self):
         queryset = super().get_queryset()
-
-        # 筛选条件
-        alert_type = self.request.query_params.get('alert_type')
-        status = self.request.query_params.get('status')
+        
+        # 自定义时间范围筛选
         start_time_str = self.request.query_params.get('start_time')
         end_time_str = self.request.query_params.get('end_time')
-
-        if alert_type:
-            queryset = queryset.filter(event_type=alert_type)
-        if status:
-            queryset = queryset.filter(status=status)
-
-        # 时间范围筛选
+        
         if start_time_str:
             try:
-                start_time = datetime.fromisoformat(start_time_str)
+                start_time = datetime.fromisoformat(start_time_str.replace('Z', '+00:00'))
                 queryset = queryset.filter(timestamp__gte=start_time)
             except ValueError:
-                pass  # 忽略无效时间格式
-
+                pass
+                
         if end_time_str:
             try:
-                end_time = datetime.fromisoformat(end_time_str)
+                end_time = datetime.fromisoformat(end_time_str.replace('Z', '+00:00'))
                 queryset = queryset.filter(timestamp__lte=end_time)
             except ValueError:
-                pass  # 忽略无效时间格式
+                pass
+        
+        return queryset.select_related('camera', 'handler')
 
-        # 默认按时间倒序
-        return queryset.order_by('-timestamp')
+
+class AlertDetailView(generics.RetrieveAPIView):
+    """
+    获取告警详情。
+    GET /alerts/{id}/
+    """
+    queryset = Alert.objects.all()
+    serializer_class = AlertDetailSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return super().get_queryset().select_related('camera', 'handler')
+
+
+class AlertHandleView(generics.RetrieveUpdateAPIView):
+    """
+    处理告警：更新告警状态和添加处理备注。
+    PUT/PATCH /alerts/{id}/handle/
+    """
+    queryset = Alert.objects.all()
+    serializer_class = AlertHandleSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return super().get_queryset().select_related('camera', 'handler')
+
+    def perform_update(self, serializer):
+        # 自动设置处理人为当前用户
+        alert = serializer.save(handler=self.request.user)
+        
+        # 发送WebSocket通知告警状态更新
+        self._send_alert_update_notification(alert, 'handle')
+
+    def _send_alert_update_notification(self, alert, action_type):
+        """发送告警更新的WebSocket通知"""
+        try:
+            channel_layer = get_channel_layer()
+            if channel_layer:
+                alert_data = AlertDetailSerializer(alert).data
+                # 确保时间字段可以序列化
+                alert_data['timestamp'] = alert.timestamp.isoformat()
+                if alert.created_at:
+                    alert_data['created_at'] = alert.created_at.isoformat()
+                if alert.updated_at:
+                    alert_data['updated_at'] = alert.updated_at.isoformat()
+
+                async_to_sync(channel_layer.group_send)(
+                    "alerts_group",
+                    {
+                        "type": "alert_update_message",
+                        "message": {
+                            "action": action_type,
+                            "alert": alert_data
+                        }
+                    }
+                )
+                print(f"告警 {alert.id} 的{action_type}操作已推送到WebSocket。")
+        except Exception as e:
+            print(f"发送WebSocket通知时发生错误: {e}")
+
+
+class AlertUpdateView(generics.RetrieveUpdateAPIView):
+    """
+    更新告警基本信息。
+    PUT/PATCH /alerts/{id}/update/
+    """
+    queryset = Alert.objects.all()
+    serializer_class = AlertUpdateSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return super().get_queryset().select_related('camera', 'handler')
+
+    def perform_update(self, serializer):
+        alert = serializer.save()
+        
+        # 发送WebSocket通知告警信息更新
+        self._send_alert_update_notification(alert, 'update')
+
+    def _send_alert_update_notification(self, alert, action_type):
+        """发送告警更新的WebSocket通知"""
+        try:
+            channel_layer = get_channel_layer()
+            if channel_layer:
+                alert_data = AlertDetailSerializer(alert).data
+                # 确保时间字段可以序列化
+                alert_data['timestamp'] = alert.timestamp.isoformat()
+                if alert.created_at:
+                    alert_data['created_at'] = alert.created_at.isoformat()
+                if alert.updated_at:
+                    alert_data['updated_at'] = alert.updated_at.isoformat()
+
+                async_to_sync(channel_layer.group_send)(
+                    "alerts_group",
+                    {
+                        "type": "alert_update_message",
+                        "message": {
+                            "action": action_type,
+                            "alert": alert_data
+                        }
+                    }
+                )
+                print(f"告警 {alert.id} 的{action_type}操作已推送到WebSocket。")
+        except Exception as e:
+            print(f"发送WebSocket通知时发生错误: {e}")
 
 
 class AIResultReceiveView(APIView):
     """
     接收AI服务发送的分析结果，保存为告警记录，并实时推送到前端。
+    POST /alerts/ai-results/
     """
     # 允许任何来源访问，因为AI服务可能没有认证（或者使用内部API Key认证）
-    permission_classes = []  # 或者自定义一个内部API Key的权限类
-    authentication_classes = []  # 不需要JWT认证
+    permission_classes = []
+    authentication_classes = []
 
+    @swagger_auto_schema(request_body=AIResultReceiveSerializer)
     def post(self, request, *args, **kwargs):
         serializer = AIResultReceiveSerializer(data=request.data)
         if serializer.is_valid():
             try:
-                alert = serializer.save()  # 保存告警记录
+                alert = serializer.save()
                 print(f"成功接收并保存AI告警: {alert.event_type} (ID: {alert.id})")
 
-                # 获取 Channel Layer 实例
-                channel_layer = get_channel_layer()
-                if channel_layer:
-                    # 准备要发送给前端的数据
-                    # 使用 AlertSerializer 再次序列化，确保包含所有前端需要显示的字段
-                    # 并且将外键关联的名称也包含进去
-                    alert_data = AlertSerializer(alert).data
-                    # 将 datetime 对象转换为 ISO 格式字符串，以便 JSON 序列化
-                    alert_data['timestamp'] = alert.timestamp.isoformat()
-                    if alert.created_at:
-                        alert_data['created_at'] = alert.created_at.isoformat()
-                    if alert.updated_at:
-                        alert_data['updated_at'] = alert.updated_at.isoformat()
+                # 暂时注释WebSocket推送，专注于基本功能
+                # 发送WebSocket实时推送
+                # self._send_new_alert_notification(alert)
 
-                    # 发送消息到 alerts_group
-                    async_to_sync(channel_layer.group_send)(
-                        "alerts_group",  # 组名，前端会订阅这个组
-                        {
-                            "type": "alert_message",  # 消息类型，对应 consumer 中的方法名
-                            "message": alert_data,
-                        }
-                    )
-                    print(f"告警 {alert.id} 已推送到 WebSocket alerts_group。")
-                else:
-                    print("警告: Channel Layer 未配置或无法获取。无法推送WebSocket消息。")
-
-                return Response(AlertSerializer(alert).data, status=status.HTTP_201_CREATED)
+                return Response(AlertDetailSerializer(alert).data, status=status.HTTP_201_CREATED)
             except Exception as e:
-                print(f"保存告警或推送WebSocket时发生错误: {e}")
-                return Response({"error": "处理告警时发生内部错误", "details": str(e)},
-                                status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                print(f"保存告警时发生错误: {e}")
+                import traceback
+                traceback.print_exc()
+                return Response(
+                    {"error": "处理告警时发生内部错误", "details": str(e)},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-class AlertUpdateView(generics.RetrieveUpdateAPIView):
+class AlertStatsView(APIView):
     """
-    更新指定ID的告警状态和处理备注。
+    获取告警统计信息。
+    GET /alerts/stats/
     """
-    queryset = Alert.objects.all()
-    serializer_class = AlertUpdateSerializer  # 只允许更新状态和备注
-    permission_classes = [IsAuthenticated]  # 只有认证用户才能访问
+    permission_classes = [IsAuthenticated]
 
-    def perform_update(self, serializer):
-        # 自动设置处理人
-        serializer.save(handler=self.request.user)
-        # 可以在这里添加额外的WebSocket推送，通知告警状态更新
+    def get(self, request, *args, **kwargs):
+        try:
+            # 基础统计
+            total_alerts = Alert.objects.count()
+            pending_alerts = Alert.objects.filter(status='pending').count()
+            in_progress_alerts = Alert.objects.filter(status='in_progress').count()
+            resolved_alerts = Alert.objects.filter(status='resolved').count()
+            
+            # 按事件类型统计
+            event_type_stats = {}
+            for event_type, display_name in Alert.EVENT_TYPE_CHOICES:
+                count = Alert.objects.filter(event_type=event_type).count()
+                event_type_stats[event_type] = {
+                    'count': count,
+                    'display_name': display_name
+                }
+            
+            # 最近24小时告警数量
+            from django.utils import timezone
+            twenty_four_hours_ago = timezone.now() - timedelta(hours=24)
+            recent_alerts = Alert.objects.filter(timestamp__gte=twenty_four_hours_ago).count()
+            
+            return Response({
+                'total_alerts': total_alerts,
+                'pending_alerts': pending_alerts,
+                'in_progress_alerts': in_progress_alerts,
+                'resolved_alerts': resolved_alerts,
+                'recent_alerts': recent_alerts,
+                'event_type_stats': event_type_stats,
+            })
+        except Exception as e:
+            return Response(
+                {'error': f'获取统计信息失败: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 class AlertTestView(APIView):
     """
     测试Alert模型的视图
     """
-    permission_classes = []  # 测试时暂时不需要认证
+    permission_classes = []
     
     def get(self, request, *args, **kwargs):
         try:

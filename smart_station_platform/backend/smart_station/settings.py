@@ -217,3 +217,15 @@ STATICFILES_DIRS = [
     BASE_DIR / "static",
 ]
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+
+SWAGGER_SETTINGS = {
+    'SECURITY_DEFINITIONS': {
+        'Bearer': {
+            'type': 'apiKey',
+            'in': 'header',
+            'name': 'Authorization',
+            'description': '在此输入 JWT Token，格式为：Bearer <token>',
+        }
+    },
+ 'USE_SESSION_AUTH': False, # 关键！关闭 session 认证
+}
