@@ -3,6 +3,5 @@
   <componet name="Black">
     <option name="sdkName" value="G:\anaconda\envs\web_env" />
   </componet>
-
   <component name="ProjectRootManager" version="2" project-jdk-name="backend_env" project-jdk-type="Python SDK" />
 </project>
