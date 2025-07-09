@@ -232,16 +232,24 @@ CHANNEL_LAYERS = {
 #     },
 # }
 
-# Django Caching
+# Django Caching - 使用内存缓存，不依赖Redis
 CACHES = {
     "default": {
-        "BACKEND": "django_redis.cache.RedisCache",
-        "LOCATION": "redis://127.0.0.1:6379/1",  # 使用不同的数据库 (e.g., DB 1) 以便与 Celery 分开
-        "OPTIONS": {
-            "CLIENT_CLASS": "django_redis.client.DefaultClient",
-        }
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "unique-snowflake",
     }
 }
+
+# 如果需要Redis缓存，取消注释下面的配置并安装 django_redis
+# CACHES = {
+#     "default": {
+#         "BACKEND": "django_redis.cache.RedisCache",
+#         "LOCATION": "redis://127.0.0.1:6379/1",  # 使用不同的数据库 (e.g., DB 1) 以便与 Celery 分开
+#         "OPTIONS": {
+#             "CLIENT_CLASS": "django_redis.client.DefaultClient",
+#         }
+#     }
+# }
 
 # 指定自定义的用户模型
 AUTH_USER_MODEL = 'users.UserProfile'

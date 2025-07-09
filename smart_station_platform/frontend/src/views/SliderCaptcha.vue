@@ -60,7 +60,7 @@ const props = defineProps({
 const emit = defineEmits(['update:visible', 'success']);
 
 // --- State Management ---
-const loading = ref(true);
+const loading = ref(false); // 初始不加载，等watcher触发时再设置为true
 const imageHeight = 150; // 图片高度，应与后端生成的一致
 const trackRef = ref(null); // 滑动轨道的DOM引用
 
@@ -187,7 +187,7 @@ watch(() => props.visible, (newVal) => {
   if (newVal) {
     fetchCaptcha();
   }
-});
+}, { immediate: true }); // 添加 immediate: true，确保初始化时也会执行
 
 </script>
 
