@@ -121,10 +121,16 @@ const submitForm = async () => {
     
     loading.value = true;
     
-    const response = await api.post('/token/', {
+    const response = await api.post('/api/token/', {
       username: loginForm.username,
       password: loginForm.password,
     });
+    
+    console.log('登录响应:', response); // 添加调试日志
+    
+    if (!response.data || !response.data.access) {
+      throw new Error('登录响应格式错误');
+    }
     
     // 处理记住密码
     if (loginForm.remember) {
@@ -136,15 +142,30 @@ const submitForm = async () => {
     }
     
     // 存储认证信息
-    localStorage.setItem('access_token', response.access);
-    localStorage.setItem('refresh_token', response.refresh);
+    localStorage.setItem('access_token', response.data.access);
+    localStorage.setItem('refresh_token', response.data.refresh);
     
     ElMessage.success('登录成功！');
     router.push('/');
     
   } catch (error) {
-    ElMessage.error('登录失败：' + (error.response?.data?.detail || '用户名或密码错误！'));
-    console.error('Login error:', error);
+    console.error('登录错误:', error);
+    console.error('错误响应:', error.response);
+    
+    let errorMessage = '登录失败：';
+    if (error.response?.data?.detail) {
+      errorMessage += error.response.data.detail;
+    } else if (error.response?.status === 401) {
+      errorMessage += '用户名或密码错误';
+    } else if (error.response?.status === 404) {
+      errorMessage += '登录服务不可用';
+    } else if (error.message) {
+      errorMessage += error.message;
+    } else {
+      errorMessage += '未知错误';
+    }
+    
+    ElMessage.error(errorMessage);
   } finally {
     loading.value = false;
   }

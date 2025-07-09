@@ -2,7 +2,7 @@ import axios from 'axios';
 import router from '../router'; // 引入Vue Router实例
 
 const service = axios.create({
-  baseURL: import.meta.env.VITE_APP_API_BASE_URL || 'http://127.0.0.1:8000/api', // 后端API基础URL
+  baseURL: import.meta.env.VITE_APP_API_BASE_URL || 'http://127.0.0.1:8000', // 基础URL，不包含/api
   timeout: 10000, // 请求超时时间
 });
 
@@ -24,6 +24,10 @@ service.interceptors.request.use(
 // 响应拦截器
 service.interceptors.response.use(
   response => {
+    // 如果是登录或刷新token的响应，直接返回完整的response
+    if (response.config.url.includes('/token/')) {
+      return response;
+    }
     return response.data;
   },
   async error => {
@@ -35,7 +39,7 @@ service.interceptors.response.use(
         const refreshToken = localStorage.getItem('refresh_token');
         if (refreshToken) {
           // 尝试向后端刷新 Token 的接口发送请求
-          const res = await axios.post('http://127.0.0.1:8000/api/token/refresh/', { refresh: refreshToken });
+          const res = await service.post('/token/refresh/', { refresh: refreshToken });
           const newAccessToken = res.data.access;
           localStorage.setItem('access_token', newAccessToken); // 更新存储的 access_token
           // 重新设置授权头，然后重新发送原始请求
