@@ -12,6 +12,7 @@ from rest_framework_simplejwt.views import (
 from rest_framework import permissions
 from drf_yasg.views import get_schema_view
 from drf_yasg import openapi
+from rest_framework_simplejwt.authentication import JWTAuthentication
 
 def redirect_to_docs(request):
     return redirect('/swagger/')
@@ -53,6 +54,9 @@ urlpatterns = [
     path('redoc/', schema_view.with_ui('redoc', cache_timeout=0), name='schema-redoc'),
 ]
 
-# 静态文件配置
+
+urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
+# 仅在 DEBUG 模式下生效
 if settings.DEBUG:
-    urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+

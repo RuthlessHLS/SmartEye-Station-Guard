@@ -25,8 +25,30 @@ SECRET_KEY = "django-insecure-%x9g^(npsba0&xxkj9)5x_6w3ix$b5s4(619f(0@-#u4!*z1y8
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['127.0.0.1', 'localhost']
 
+# CORS配置
+CORS_ALLOW_ALL_ORIGINS = True  # 允许所有来源访问
+CORS_ALLOW_CREDENTIALS = True  # 允许携带cookie
+CORS_ALLOW_METHODS = [
+    'DELETE',
+    'GET',
+    'OPTIONS',
+    'PATCH',
+    'POST',
+    'PUT',
+]
+CORS_ALLOW_HEADERS = [
+    'accept',
+    'accept-encoding',
+    'authorization',
+    'content-type',
+    'dnt',
+    'origin',
+    'user-agent',
+    'x-csrftoken',
+    'x-requested-with',
+]
 
 # Application definition
 
@@ -53,6 +75,9 @@ INSTALLED_APPS = [
     'ai_reports',
     'data_analysis',
 ]
+
+# 指定自定义用户模型
+AUTH_USER_MODEL = 'users.UserProfile'
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
@@ -91,9 +116,9 @@ WSGI_APPLICATION = "smart_station.wsgi.application"
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
-        'NAME': 'smart_station_db', # 你的数据库名
-        'USER': 'Qiuyy',  # 你的MySQL用户名
-        'PASSWORD': 'Qiuyy2005.', # 你的MySQL密码
+        'NAME': 'smartstationdb', # 你的数据库名
+        'USER': 'root',  # 你的MySQL用户名
+        'PASSWORD': '032526', # 你的MySQL密码
         'HOST': '127.0.0.1', # 数据库主机
         'PORT': '3306',      # 数据库端口
         'OPTIONS': {
@@ -199,7 +224,23 @@ CHANNEL_LAYERS = {
     },
 }
 
+# Django Caching
+CACHES = {
+    "default": {
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": "redis://127.0.0.1:6379/1",  # 使用不同的数据库 (e.g., DB 1) 以便与 Celery 分开
+        "OPTIONS": {
+            "CLIENT_CLASS": "django_redis.client.DefaultClient",
+        }
+    }
+}
 
+# 指定自定义的用户模型
+AUTH_USER_MODEL = 'users.UserProfile'
+# 邮件配置 (开发环境)
+EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+DEFAULT_FROM_EMAIL = 'noreply@yourdomain.com'
+FRONTEND_URL = "http://localhost:8081"
 
 CELERY_BROKER_URL = 'redis://127.0.0.1:6379/0'     # 使用 Redis 作为 Celery 消息代理
 CELERY_RESULT_BACKEND = 'django-db'               # 使用 Django 数据库存储 Celery 任务结果
@@ -210,13 +251,14 @@ CELERY_TIMEZONE = 'Asia/Shanghai'                 # 设置时区
 CELERY_ENABLE_UTC = False                         # 是否启用 UTC 时间
 # --- CORS跨域配置 ---
 # 允许所有来源访问（开发时使用，比较方便）
-CORS_ALLOW_ALL_ORIGINS = True
+# CORS_ALLOW_ALL_ORIGINS = True # This line is now redundant as it's moved to the top
 
 STATIC_URL = '/static/'
 STATICFILES_DIRS = [
     BASE_DIR / "static",
 ]
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+
 
 SWAGGER_SETTINGS = {
     'SECURITY_DEFINITIONS': {
@@ -229,3 +271,8 @@ SWAGGER_SETTINGS = {
     },
  'USE_SESSION_AUTH': False, # 关键！关闭 session 认证
 }
+
+# 媒体文件配置 (用户上传的文件)
+MEDIA_URL = '/media/'
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+
