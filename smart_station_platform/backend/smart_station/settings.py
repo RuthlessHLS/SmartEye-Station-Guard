@@ -92,8 +92,8 @@ DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': 'smart_station_db', # 你的数据库名
-        'USER': 'Qiuyy',  # 你的MySQL用户名
-        'PASSWORD': 'Qiuyy2005.', # 你的MySQL密码
+        'USER': 'xhy',  # 你的MySQL用户名
+        'PASSWORD': 'qiyuan2539', # 你的MySQL密码
         'HOST': '127.0.0.1', # 数据库主机
         'PORT': '3306',      # 数据库端口
         'OPTIONS': {
@@ -199,8 +199,12 @@ CHANNEL_LAYERS = {
     },
 }
 
-
-
+# 指定自定义的用户模型
+AUTH_USER_MODEL = 'users.UserProfile'
+# 邮件配置 (开发环境)
+EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+DEFAULT_FROM_EMAIL = 'noreply@yourdomain.com'
+FRONTEND_URL = "http://localhost:8081"
 CELERY_BROKER_URL = 'redis://127.0.0.1:6379/0'     # 使用 Redis 作为 Celery 消息代理
 CELERY_RESULT_BACKEND = 'django-db'               # 使用 Django 数据库存储 Celery 任务结果
 CELERY_ACCEPT_CONTENT = ['json']                  # 接受 JSON 序列化的任务内容
@@ -217,3 +221,6 @@ STATICFILES_DIRS = [
     BASE_DIR / "static",
 ]
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+# 媒体文件配置 (用户上传的文件)
+MEDIA_URL = '/media/'
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
