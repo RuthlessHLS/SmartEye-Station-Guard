@@ -91,9 +91,9 @@ WSGI_APPLICATION = "smart_station.wsgi.application"
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
-        'NAME': 'smart_station_db', # 你的数据库名
-        'USER': 'xhy',  # 你的MySQL用户名
-        'PASSWORD': 'qiyuan2539', # 你的MySQL密码
+        'NAME': 'smartstationdb', # 你的数据库名
+        'USER': 'root',  # 你的MySQL用户名
+        'PASSWORD': '032526', # 你的MySQL密码
         'HOST': '127.0.0.1', # 数据库主机
         'PORT': '3306',      # 数据库端口
         'OPTIONS': {
@@ -199,12 +199,24 @@ CHANNEL_LAYERS = {
     },
 }
 
+# Django Caching
+CACHES = {
+    "default": {
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": "redis://127.0.0.1:6379/1",  # 使用不同的数据库 (e.g., DB 1) 以便与 Celery 分开
+        "OPTIONS": {
+            "CLIENT_CLASS": "django_redis.client.DefaultClient",
+        }
+    }
+}
+
 # 指定自定义的用户模型
 AUTH_USER_MODEL = 'users.UserProfile'
 # 邮件配置 (开发环境)
 EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
 DEFAULT_FROM_EMAIL = 'noreply@yourdomain.com'
 FRONTEND_URL = "http://localhost:8081"
+
 CELERY_BROKER_URL = 'redis://127.0.0.1:6379/0'     # 使用 Redis 作为 Celery 消息代理
 CELERY_RESULT_BACKEND = 'django-db'               # 使用 Django 数据库存储 Celery 任务结果
 CELERY_ACCEPT_CONTENT = ['json']                  # 接受 JSON 序列化的任务内容
