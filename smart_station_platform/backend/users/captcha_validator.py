@@ -28,8 +28,8 @@ def validate_captcha(data):
     if correct_position is None:
         raise serializers.ValidationError({"captcha": "验证码已过期或无效，请刷新。"})
 
-    # 允许 ±5 像素的容差
-    if not (correct_position - 5 <= user_position <= correct_position + 5):
+    # 允许 ±20 像素的容差
+    if not (correct_position - 20 <= user_position <= correct_position + 20):
         raise serializers.ValidationError({"captcha": "验证失败，请重试。"})
 
     # 校验成功
