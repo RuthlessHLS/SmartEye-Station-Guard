@@ -1,4 +1,5 @@
 import uuid
+import time
 from django.core.cache import cache
 from django.shortcuts import render
 from .models import UserProfile
@@ -149,6 +150,11 @@ class GenerateCaptchaView(APIView):
 
         # 2. 生成唯一的 key 并将正确答案存入缓存
         captcha_key = str(uuid.uuid4())
+        # 我们将一个字典存入缓存，而不是单个值
+        cache_data = {
+            'position': image_data['position_x'],
+            'timestamp': time.time()  # 记录当前时间的 Unix 时间戳
+        }
         # 将 x 坐标作为答案存入缓存，有效期 5 分钟 (300秒)
         cache.set(f"captcha:{captcha_key}", image_data['position_x'], timeout=300)
 
