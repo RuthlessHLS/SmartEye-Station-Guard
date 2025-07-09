@@ -4,13 +4,21 @@ import time
 
 # 定义一个最小验证时间（秒）
 MIN_CAPTCHA_TIME_SECONDS = 1
+
+def validate_captcha(data):
+    """
+    可重用的滑动验证码校验函数。
+    从 data 字典中提取 'captcha_key' 和 'captcha_position'。
+
+# 定义一个最小验证时间（秒）
+MIN_CAPTCHA_TIME_SECONDS = 1
 # 定义容差
 TOLERANCE = 10  # 将容差改回一个更合理的值，比如 10
 
 
 def validate_captcha(data):
     """
-    可重用的滑动验证码校验函数，增加了时间和位置验证。
+    # 可重用的滑动验证码校验函数，增加了时间和位置验证。
     """
     captcha_key = data.get('captcha_key')
     user_position_str = data.get('captcha_position')
@@ -18,6 +26,9 @@ def validate_captcha(data):
     if not captcha_key or not user_position_str:
         raise serializers.ValidationError({"captcha": "验证码参数缺失。"})
 
+
+    try:
+        # 前端传来的可能是字符串，需要转换
     # 1. 从缓存中获取数据
     cache_key = f"captcha:{captcha_key}"
     cached_data = cache.get(cache_key)
@@ -36,6 +47,25 @@ def validate_captcha(data):
     except (ValueError, TypeError):
         raise serializers.ValidationError({"captcha": "验证码位置参数无效。"})
 
+
+    cache_key = f"captcha:{captcha_key}"
+    # 从缓存中获取整个字典
+    cached_data = cache.get(cache_key)
+    correct_position = cache.get(cache_key)
+
+    # 无论成功与否，立即删除 key，防止重放攻击
+    if correct_position is not None:
+        cache.delete(cache_key)
+
+    if correct_position is None:
+        raise serializers.ValidationError({"captcha": "验证码已过期或无效，请刷新。"})
+
+        # 增加兼容性判断，处理新旧两种数据格式
+    if isinstance(cached_data, dict):
+        # 新格式：cached_data 是一个字典
+        generation_time = cached_data.get('timestamp')
+        correct_position = cached_data.get('position')
+
     # 5. 兼容性处理和验证
     correct_position = None
     if isinstance(cached_data, dict):
@@ -48,6 +78,9 @@ def validate_captcha(data):
             time_diff = time.time() - generation_time
             if time_diff < MIN_CAPTCHA_TIME_SECONDS:
                 raise serializers.ValidationError({"captcha": "操作过快，请稍后再试。"})
+
+    elif isinstance(cached_data, int):
+        # 旧格式：cached_data 是一个整数
         else:
             # 如果字典里没有时间戳，说明数据异常
             raise serializers.ValidationError({"captcha": "验证码时间戳丢失，请刷新。"})
@@ -58,6 +91,25 @@ def validate_captcha(data):
         correct_position = cached_data
 
     else:
+        # 未知格式，直接报错
+        raise serializers.ValidationError({"captcha": "验证码数据格式错误。"})
+        # --- 修改结束 ---
+
+        # 检查 correct_position 是否成功获取
+    if correct_position is None:
+        raise serializers.ValidationError({"captcha": "验证码数据异常，请刷新。"})
+
+    try:
+        user_position = int(float(user_position_str))
+    except (ValueError, TypeError):
+        raise serializers.ValidationError({"captcha": "验证码位置参数无效。"})
+
+    # 允许 ±20 像素的容差
+    if not (correct_position - 20 <= user_position <= correct_position + 20):
+        raise serializers.ValidationError({"captcha": "验证失败，请重试。"})
+
+    # 校验成功
+
         # --- 未知格式 ---
         raise serializers.ValidationError({"captcha": "验证码数据格式错误，请刷新。"})
 
@@ -69,4 +121,4 @@ def validate_captcha(data):
         raise serializers.ValidationError({"captcha": "验证失败，请重试。"})
 
     # 7. 所有验证通过
-    return
+    return  """
