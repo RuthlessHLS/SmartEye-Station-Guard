@@ -118,8 +118,8 @@ DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': 'smart_station_db', # 你的数据库名
-        'USER': 'xhy',  # 你的MySQL用户名
-        'PASSWORD': 'qiyuan2539', # 你的MySQL密码
+        'USER': 'Qiuyy',  # 你的MySQL用户名
+        'PASSWORD': 'Qiuyy2005.', # 你的MySQL密码
         'HOST': '127.0.0.1', # 数据库主机
         'PORT': '3306',      # 数据库端口
         'OPTIONS': {
