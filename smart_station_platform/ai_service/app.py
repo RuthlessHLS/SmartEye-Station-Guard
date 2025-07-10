@@ -30,6 +30,7 @@ from core.object_detection import GenericPredictor
 from core.behavior_detection import BehaviorDetector
 from core.face_recognition import FaceRecognizer
 from core.acoustic_detection import AcousticEventDetector  # 更新为新的类名
+from core.fire_smoke_detection import FlameSmokeDetector  # 添加火焰烟雾检测器
 from models.alert_models import AIAnalysisResult  # 确保这个文件存在
 
 # 在应用启动时，从 .env 文件加载环境变量
@@ -109,6 +110,24 @@ def init_detectors():
                 detectors["acoustic"] = acoustic_detector
             except Exception as e:
                 print(f"警告: 声学检测器初始化失败，将禁用此功能。错误: {e}")
+                
+        # 5. 初始化火焰烟雾检测器
+        try:
+            # 检查是否有专用的火焰检测模型
+            fire_model_path = os.path.join(ASSET_BASE_PATH, "models", "torch", "yolov8n-fire.pt")
+            if os.path.exists(fire_model_path):
+                print(f"发现专用火焰检测模型: {fire_model_path}")
+                fire_detector = FlameSmokeDetector(model_path=fire_model_path)
+            else:
+                # 如果没有专用模型，使用通用YOLOv8模型
+                general_model_path = os.path.join(ASSET_BASE_PATH, "models", "torch", "yolov8n.pt")
+                print(f"未找到专用火焰检测模型，尝试使用通用YOLO模型: {general_model_path}")
+                fire_detector = FlameSmokeDetector(model_path=general_model_path)
+                
+            detectors["fire"] = fire_detector
+            print("火焰烟雾检测器初始化成功")
+        except Exception as e:
+            print(f"警告: 火焰烟雾检测器初始化失败，将禁用此功能。错误: {e}")
 
         print("--- 所有检测器初始化完成 ---")
 
@@ -297,6 +316,34 @@ def create_master_processor(camera_id: str, config: StreamConfig):
                             }
                         )
                         send_result_to_backend(alert)
+                        
+            # 添加火焰烟雾检测
+            if "fire" in detectors:
+                try:
+                    fire_detector = detectors["fire"]
+                    fire_results = fire_detector.detect(frame, confidence_threshold=0.45)
+                    
+                    if fire_results:
+                        for fire_obj in fire_results:
+                            print(f"🔥 [{camera_id}] 检测到{fire_obj['type']}: {fire_obj['class_name']}, 置信度={fire_obj['confidence']:.2f}")
+                            
+                            # 发送火灾告警
+                            alert = AIAnalysisResult(
+                                camera_id=camera_id,
+                                event_type=f"fire_detection_{fire_obj['type']}",
+                                location={"box": fire_obj["coordinates"]},
+                                confidence=fire_obj["confidence"],
+                                timestamp=datetime.datetime.now().isoformat(),
+                                details={
+                                    "detection_type": fire_obj["type"],
+                                    "object_type": fire_obj["class_name"],
+                                    "area": fire_obj["area"],
+                                    "center": fire_obj["center"]
+                                }
+                            )
+                            send_result_to_backend(alert)
+                except Exception as e:
+                    print(f"火焰检测过程中出错: {e}")
 
         except Exception as e:
             print(f"处理帧时发生致命错误 [{camera_id}]: {e}")
@@ -312,7 +359,8 @@ async def start_stream(
     stream_url: str = Body(...),
     enable_face_recognition: bool = Body(default=True),
     enable_behavior_detection: bool = Body(default=True),
-    enable_sound_detection: bool = Body(default=True)  # 默认启用声音检测
+    enable_sound_detection: bool = Body(default=True),  # 默认启用声音检测
+    enable_fire_detection: bool = Body(default=True)    # 默认启用火焰检测
 ):
     """启动视频流处理。"""
     if camera_id in video_streams:
@@ -411,6 +459,38 @@ async def start_stream(
                                 timestamp=datetime.datetime.now().isoformat(),
                             )
                             send_result_to_backend(alert)
+                            
+            # 火焰烟雾检测
+            if "fire" in detectors:
+                try:
+                    fire_detector = detectors["fire"]
+                    fire_results = fire_detector.detect(frame, confidence_threshold=0.25)  # 降低置信度阈值
+                    
+                    if fire_results:
+                        for fire_obj in fire_results:
+                            print(f"🔥 [{camera_id}] 检测到{fire_obj['type']}: {fire_obj['class_name']}, 置信度={fire_obj['confidence']:.2f}, 坐标={fire_obj['coordinates']}")
+                            
+                            # 发送火灾告警
+                            alert = AIAnalysisResult(
+                                camera_id=camera_id,
+                                event_type=f"fire_detection_{fire_obj['type']}",
+                                location={"box": fire_obj["coordinates"]},
+                                confidence=fire_obj["confidence"],
+                                timestamp=datetime.datetime.now().isoformat(),
+                                details={
+                                    "detection_type": fire_obj["type"],
+                                    "object_type": fire_obj["class_name"],
+                                    "area": fire_obj["area"],
+                                    "center": fire_obj["center"]
+                                }
+                            )
+                            send_result_to_backend(alert)
+                    else:
+                        # 打印没有检测到火焰的调试信息
+                        if frame_count % 100 == 0:  # 每100帧打印一次，避免日志过多
+                            print(f"[{camera_id}] 未检测到火焰或烟雾")
+                except Exception as e:
+                    print(f"火焰检测过程中出错: {e}")
 
             # 人脸识别
             if enable_face_recognition:
@@ -671,7 +751,8 @@ async def analyze_frame(
     camera_id: str = Body(...),
     enable_face_recognition: bool = Body(default=True),
     enable_object_detection: bool = Body(default=True),
-    enable_behavior_detection: bool = Body(default=False)
+    enable_behavior_detection: bool = Body(default=False),
+    enable_fire_detection: bool = Body(default=True)
 ):
     """高性能单帧图像分析"""
     try:
@@ -693,6 +774,61 @@ async def analyze_frame(
             "detections": [],
             "alerts": []
         }
+        
+        # 火焰检测（如果可用且启用）
+        if enable_fire_detection and "fire" in detectors:
+            try:
+                # 添加调试信息
+                print(f"执行火焰检测: 图像大小={image.shape}")
+                
+                fire_results = detectors["fire"].detect(image, confidence_threshold=0.25)  # 降低置信度阈值
+                
+                print(f"火焰检测结果: 检测到{len(fire_results)}个火焰/烟雾对象")
+                for idx, fire_obj in enumerate(fire_results):
+                    print(f"  火焰对象 #{idx+1}: 类型={fire_obj['type']}, 类别={fire_obj['class_name']}, 置信度={fire_obj['confidence']:.3f}")
+                
+                for fire_obj in fire_results:
+                    # 确保坐标转换为Python原生int类型
+                    bbox = [int(float(coord)) for coord in fire_obj["coordinates"]]
+                    detection = {
+                        "type": "fire_detection",
+                        "class_name": fire_obj["class_name"],
+                        "detection_type": fire_obj["type"],
+                        "confidence": float(fire_obj["confidence"]),
+                        "bbox": bbox,
+                        "timestamp": datetime.datetime.now().isoformat()
+                    }
+                    results["detections"].append(detection)
+                    
+                    # 生成火灾告警
+                    alert = {
+                        "type": f"fire_{fire_obj['type']}",
+                        "message": f"检测到{fire_obj['type']}: {fire_obj['class_name']} (置信度: {fire_obj['confidence']:.2f})",
+                        "confidence": float(fire_obj["confidence"]),
+                        "location": bbox
+                    }
+                    results["alerts"].append(alert)
+                    
+                    # 异步发送到后端
+                    backend_alert = AIAnalysisResult(
+                        camera_id=camera_id,
+                        event_type=f"fire_detection_{fire_obj['type']}",
+                        location={"box": bbox},
+                        confidence=float(fire_obj["confidence"]),
+                        timestamp=datetime.datetime.now().isoformat(),
+                        details={
+                            "detection_type": fire_obj["type"],
+                            "object_type": fire_obj["class_name"],
+                            "realtime_detection": True
+                        }
+                    )
+                    # 使用线程池异步处理，不阻塞响应
+                    import threading
+                    threading.Thread(target=lambda: send_result_to_backend(backend_alert), daemon=True).start()
+            except Exception as e:
+                print(f"火焰检测失败: {e}")
+                traceback.print_exc()  # 打印详细堆栈信息
+                # 火焰检测失败时不影响其他功能继续运行
         
         # 高性能目标检测
         if enable_object_detection:
