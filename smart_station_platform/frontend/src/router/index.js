@@ -4,6 +4,7 @@ import Login from '../views/Login.vue'
 import Register from '../views/Register.vue'
 import Dashboard from '../views/Dashboard.vue'
 import MonitorCenter from '../views/MonitorCenter.vue'
+import AIVideoMonitor from '../views/AIVideoMonitor.vue'
 import AlertManagement from '../views/AlertManagement.vue'
 import DailyReport from '../views/DailyReport.vue'
 import DataScreen from '../views/DataScreen.vue'
@@ -33,6 +34,12 @@ const router = createRouter({
       path: '/monitor',
       name: 'MonitorCenter',
       component: MonitorCenter,
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/ai-monitor',
+      name: 'AIVideoMonitor',
+      component: AIVideoMonitor,
       meta: { requiresAuth: true }
     },
     {
