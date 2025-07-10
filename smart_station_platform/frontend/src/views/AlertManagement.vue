@@ -230,7 +230,7 @@ const fetchAlerts = async () => {
       end_time: filterForm.dateRange && filterForm.dateRange[1] ? filterForm.dateRange[1] : '',
     };
     // 修正API路径，添加/api前缀
-    const response = await api.get('/api/alerts/', { params });
+    const response = await api.get('/api/alerts/list/', { params });
     alerts.value = response.results.map(alert => ({
       ...alert,
       alert_time: new Date(alert.timestamp).toLocaleString(), // 假设后端返回timestamp
