@@ -3,6 +3,7 @@ import os
 import base64
 import time
 import asyncio
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from typing import Dict, List, Optional
@@ -13,7 +14,7 @@ import cv2
 import numpy as np
 import requests
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Body
+from fastapi import FastAPI, HTTPException, Body, File, UploadFile
 from pydantic import BaseModel
 
 # 导入我们自定义的所有核心AI模块
@@ -27,7 +28,7 @@ from core.video_stream import VideoStream
 from core.object_detection import GenericPredictor
 from core.behavior_detection import BehaviorDetector
 from core.face_recognition import FaceRecognizer
-from core.acoustic_detection import AcousticDetector
+from core.acoustic_detection import AcousticEventDetector  # 更新为新的类名
 from models.alert_models import AIAnalysisResult  # 确保这个文件存在
 
 # 在应用启动时，从 .env 文件加载环境变量
@@ -81,16 +82,12 @@ def init_detectors():
             # 即使找不到文件，也提供一个基础的默认值以维持运行
             class_names = ["background", "person"]
 
-            # 检查模型文件是否存在
-        if not os.path.exists(model_weights_path):
-            print(f"致命错误: 模型文件在指定路径未找到: {model_weights_path}")
-            print("请确认模型已下载并放置在正确的G盘目录下，目录结构请参考文档说明。")
-            raise FileNotFoundError(f"模型文件未找到: {model_weights_path}")
-
-        print(f"正在加载目标检测模型权重: {model_weights_path}")
+        # 使用YOLOv8模型
+        model_weights_path = os.path.join(ASSET_BASE_PATH, "models", "torch", "yolov8n.pt")
+        print(f"正在加载YOLOv8模型权重: {model_weights_path}")
 
         detectors["object"] = GenericPredictor(
-            model_weights_path=model_weights_path,  # 使用我们新构建的路径
+            model_weights_path=model_weights_path,
             num_classes=len(class_names),
             class_names=class_names
         )
@@ -107,7 +104,8 @@ def init_detectors():
         # 4. 初始化声学事件检测器 (如果启用了)
         if os.getenv("ENABLE_SOUND_DETECTION", "false").lower() == "true":
             try:
-                detectors["acoustic"] = AcousticDetector()
+                acoustic_detector = AcousticEventDetector()  # 使用新的类名
+                detectors["acoustic"] = acoustic_detector
             except Exception as e:
                 print(f"警告: 声学检测器初始化失败，将禁用此功能。错误: {e}")
 
@@ -123,8 +121,8 @@ async def lifespan(app: FastAPI):
     """FastAPI 的生命周期管理器。"""
     # 启动任务
     init_detectors()
+    # 移除对 start_listening 的调用，因为我们现在使用 process_audio_file 方法
     if "acoustic" in detectors:
-        detectors["acoustic"].start_listening()
         asyncio.create_task(run_acoustic_analysis())
 
     yield  # 服务在此运行时，处理API请求
@@ -133,8 +131,8 @@ async def lifespan(app: FastAPI):
     print("服务正在关闭，开始清理资源...")
     for stream in video_streams.values():
         stream.stop()
-    if "acoustic" in detectors and detectors["acoustic"].is_running:
-        detectors["acoustic"].stop_listening()
+    if "acoustic" in detectors:
+        detectors["acoustic"].stop_monitoring()  # 使用正确的方法名
     thread_pool.shutdown(wait=True)
     print("资源清理完毕。")
 
@@ -185,21 +183,47 @@ async def run_acoustic_analysis():
     """在后台持续运行的协程，用于分析音频数据。"""
     print("声学分析后台任务已启动。")
     acoustic_detector = detectors.get("acoustic")
-    if not acoustic_detector: return
+    if not acoustic_detector: 
+        return
 
-    while acoustic_detector.is_running:
-        result = acoustic_detector.analyze_audio_chunk(volume_threshold=0.1)
-        if result and result["need_alert"]:
-            print(f"🚨 [音频] 检测到异常声音! 音量: {result['details']['volume']}")
-            alert = AIAnalysisResult(
-                camera_id="audio_sensor_01",
-                event_type=result["event_type"],
-                location={"source": "microphone", "details": result['details']},
-                confidence=result["confidence"],
-                timestamp=datetime.datetime.now().isoformat(),
-            )
-            send_result_to_backend(alert)
-        await asyncio.sleep(0.1)
+    while True:  # 持续运行，直到服务停止
+        try:
+            for stream in video_streams.values():
+                audio_file = stream.get_audio_file()
+                if audio_file and os.path.exists(audio_file):
+                    events = await acoustic_detector.process_audio_file(audio_file)
+                    for event in events:
+                        # 根据事件类型选择不同的emoji
+                        event_emoji = {
+                            "volume_anomaly": "📢",
+                            "high_frequency_noise": "🔊",
+                            "sudden_noise": "💥"
+                        }.get(event['type'], "🔔")
+                        
+                        print(f"{event_emoji} [音频] {event['description']}")
+                        print(f"   - 类型: {event['type']}")
+                        print(f"   - 时间: {datetime.datetime.fromtimestamp(event['timestamp']).strftime('%H:%M:%S')}")
+                        print(f"   - 置信度: {event['confidence']:.2f}")
+                        
+                        alert = AIAnalysisResult(
+                            camera_id=stream.camera_id,
+                            event_type=f"acoustic_{event['type']}",
+                            location={"timestamp": event['timestamp']},
+                            confidence=event['confidence'],
+                            timestamp=datetime.datetime.now().isoformat(),
+                            details={
+                                "description": event['description'],
+                                "audio_timestamp": event['timestamp']
+                            }
+                        )
+                        send_result_to_backend(alert)
+                else:
+                    print(f"⚠️ 未找到音频文件: {audio_file}")
+        except Exception as e:
+            print(f"声学分析过程中发生错误: {e}")
+            traceback.print_exc()
+        
+        await asyncio.sleep(5)  # 每5秒检查一次，减少检测频率
 
 
 def create_master_processor(camera_id: str, config: StreamConfig):
@@ -211,7 +235,7 @@ def create_master_processor(camera_id: str, config: StreamConfig):
         try:
             # 目标检测
             detected_objects = detectors["object"].predict(frame, confidence_threshold=0.6)
-            
+
             # 打印检测到的目标
             for obj in detected_objects:
                 print(f"🎯 检测到 {obj['class_name']}: 置信度={obj['confidence']:.2f}, 位置={obj['coordinates']}")
@@ -274,26 +298,92 @@ async def start_stream(
     enable_behavior_detection: bool = Body(default=True),
     enable_sound_detection: bool = Body(default=True)  # 默认启用声音检测
 ):
-    """
-    启动视频流处理。
-    """
+    """启动视频流处理。"""
     if camera_id in video_streams:
         return {"status": "error", "message": f"摄像头 {camera_id} 已在运行"}
 
     def master_processor(frame: np.ndarray):
         try:
-            # 目标检测
-            detected_objects = detectors["object"].predict(frame, confidence_threshold=0.6)
+            # 目标检测 (提高置信度阈值到 0.85)
+            detected_objects = detectors["object"].predict(frame, confidence_threshold=0.85)
             
-            # 打印检测到的目标
+            # 过滤掉一些可能的误报
+            filtered_objects = []
             for obj in detected_objects:
-                print(f"🎯 检测到 {obj['class_name']}: 置信度={obj['confidence']:.2f}, 位置={obj['coordinates']}")
+                # 1. 检查目标大小是否合理
+                box = obj["coordinates"]
+                width = box[2] - box[0]
+                height = box[3] - box[1]
+                area_ratio = (width * height) / (frame.shape[0] * frame.shape[1])
+                
+                # 如果目标占据了超过80%的画面，可能是误报
+                if area_ratio > 0.8:
+                    continue
+                    
+                # 2. 对特定类别应用更严格的置信度要求
+                if obj["class_name"] in ["bicycle", "sports ball", "bird", "traffic light"]:
+                    if obj["confidence"] < 0.9:  # 对这些容易误报的类别要求更高的置信度
+                        continue
+                
+                filtered_objects.append(obj)
+            
+            # 人脸识别（提前进行，以便与人物检测结果关联）
+            recognized_faces = []
+            if enable_face_recognition:
+                recognized_faces = detectors["face"].detect_and_recognize(frame)
+
+            # 处理检测到的目标
+            for obj in filtered_objects:
+                if obj["class_name"] == "person":
+                    # 对人物进行身份识别
+                    person_box = obj["coordinates"]
+                    person_identity = "未知人员"
+                    
+                    for face in recognized_faces:
+                        face_box = face["location"]
+                        # 计算人脸框的中心点（注意：face_box格式为{top, right, bottom, left}）
+                        face_center_x = (face_box["left"] + face_box["right"]) / 2
+                        face_center_y = (face_box["top"] + face_box["bottom"]) / 2
+                        
+                        # 检查人脸中心点是否在人物框内，添加一些容差
+                        # 有时YOLO的人物框可能比实际略小，所以我们扩大检查范围
+                        box_width = person_box[2] - person_box[0]
+                        box_height = person_box[3] - person_box[1]
+                        tolerance_x = box_width * 0.1  # 10%的容差
+                        tolerance_y = box_height * 0.1
+                        
+                        if (face_center_x >= (person_box[0] - tolerance_x) and 
+                            face_center_x <= (person_box[2] + tolerance_x) and
+                            face_center_y >= (person_box[1] - tolerance_y) and 
+                            face_center_y <= (person_box[3] + tolerance_y)):
+                            if face["identity"]["known"]:
+                                person_identity = face["identity"]["name"]
+                                print(f"✅ 成功匹配人脸到人物框: {person_identity}")
+                                print(f"   人脸位置: ({face_center_x:.0f}, {face_center_y:.0f})")
+                                print(f"   人物框: {person_box}")
+                            break
+                    
+                    print(f"🎯 检测到人员 [{person_identity}]: 置信度={obj['confidence']:.2f}, 位置={obj['coordinates']}")
+                    
+                    # 如果是未知人员，发送告警
+                    if person_identity == "未知人员":
+                        alert = AIAnalysisResult(
+                            camera_id=camera_id,
+                            event_type="unknown_person_detected",
+                            location={"box": person_box},
+                            confidence=obj["confidence"],
+                            timestamp=datetime.datetime.now().isoformat(),
+                        )
+                        send_result_to_backend(alert)
+                else:
+                    # 其他物体只显示基本检测信息
+                    print(f"🎯 检测到物体 [{obj['class_name']}]: 置信度={obj['confidence']:.2f}, 位置={obj['coordinates']}")
 
             # 行为检测
             if enable_behavior_detection:
-                person_boxes = [obj["coordinates"] for obj in detected_objects if obj["class_name"] == "person"]
+                person_boxes = [obj["coordinates"] for obj in filtered_objects if obj["class_name"] == "person"]
                 if person_boxes:
-                    behaviors = detectors["behavior"].detect_behavior(frame, person_boxes, time.time())
+                    behaviors = detectors["behavior"].detect_behavior(frame, person_boxes)  # 移除time.time()参数
                     for behavior in behaviors:
                         if behavior["is_abnormal"] and behavior["need_alert"]:
                             print(f"🚨 [{camera_id}] 检测到异常行为: {behavior['behavior']}!")
@@ -316,21 +406,24 @@ async def start_stream(
                             camera_id=camera_id,
                             event_type="unknown_face_detected",
                             location=face["location"],
-                            confidence=face["identity"]["confidence"],
+                            confidence=face.get("identity", {}).get("confidence", 0.5),  # 使用 get 方法安全获取值
                             timestamp=datetime.datetime.now().isoformat(),
                         )
                         send_result_to_backend(alert)
 
         except Exception as e:
             print(f"处理器执行错误: {e}")
-            traceback.print_exc()
+            traceback.print_exc()  # 现在可以正常使用 traceback
 
     try:
-        # 创建视频流实例，如果启用了声音检测，传入声音检测器
-        acoustic_detector = detectors.get("acoustic") if enable_sound_detection else None
-        stream = VideoStream(stream_url, acoustic_detector=acoustic_detector)
+        # 创建视频流实例
+        stream = VideoStream(stream_url=stream_url, camera_id=camera_id)
         
-        if not stream.start():
+        # 如果启用了声音检测，启动音频提取
+        if enable_sound_detection:
+            await stream.start_audio_extraction()
+        
+        if not await stream.start():
             return {"status": "error", "message": "无法启动视频流"}
 
         # 添加主处理器
@@ -338,6 +431,9 @@ async def start_stream(
         
         # 保存流实例
         video_streams[camera_id] = stream
+        
+        # 启动异步处理循环
+        asyncio.create_task(process_video_stream_async(stream, camera_id))
         
         return {
             "status": "success",
@@ -348,6 +444,31 @@ async def start_stream(
     except Exception as e:
         print(f"启动视频流时出错: {e}")
         return {"status": "error", "message": str(e)}
+
+async def process_video_stream_async(stream: VideoStream, camera_id: str):
+    """异步处理视频流"""
+    print(f"开始处理视频流: {camera_id}")
+    while stream.is_running:
+        try:
+            success, frame = await stream.read_frame()
+            if not success:
+                print(f"读取视频帧失败: {camera_id}")
+                continue
+                
+            # 处理帧
+            with stream.lock:
+                for processor in stream.processors:
+                    try:
+                        processor(frame)
+                    except Exception as e:
+                        print(f"处理器执行错误: {e}")
+            
+            # 控制帧率
+            await asyncio.sleep(0.033)  # 约30fps
+            
+        except Exception as e:
+            print(f"视频流处理错误 [{camera_id}]: {e}")
+            await asyncio.sleep(1)
 
 @app.post("/stream/stop/{camera_id}")
 async def stop_stream(camera_id: str):
@@ -407,6 +528,236 @@ async def get_system_status():
             cam_id: stream.get_stream_info() for cam_id, stream in video_streams.items()
         }
     }
+
+
+@app.post("/audio/settings/")
+async def update_audio_settings(
+    confidence_threshold: float = Body(default=None),
+    detection_interval: float = Body(default=None), 
+    event_cooldown: float = Body(default=None),
+    sensitivity: str = Body(default=None)  # "low", "medium", "high"
+):
+    """更新音频检测设置"""
+    try:
+        acoustic_detector = detectors.get("acoustic")
+        if not acoustic_detector:
+            return {"status": "error", "message": "音频检测器未初始化"}
+            
+        # 验证敏感度参数
+        if sensitivity is not None and sensitivity not in ["low", "medium", "high"]:
+            return {"status": "error", "message": "敏感度必须是 'low', 'medium' 或 'high'"}
+            
+        # 更新设置
+        acoustic_detector.update_settings(
+            confidence_threshold=confidence_threshold,
+            detection_interval=detection_interval,
+            event_cooldown=event_cooldown,
+            sensitivity=sensitivity
+        )
+        
+        return {
+            "status": "success", 
+            "message": "音频检测设置已更新",
+            "current_settings": {
+                "confidence_threshold": acoustic_detector.confidence_threshold,
+                "detection_interval": acoustic_detector.detection_interval,
+                "event_cooldown": acoustic_detector.event_cooldown,
+                "volume_multiplier": acoustic_detector.volume_multiplier,
+                "frequency_multiplier": acoustic_detector.frequency_multiplier,
+                "noise_multiplier": acoustic_detector.noise_multiplier
+            }
+        }
+        
+    except Exception as e:
+        return {"status": "error", "message": f"更新设置失败: {str(e)}"}
+
+
+@app.get("/audio/settings/")
+async def get_audio_settings():
+    """获取当前音频检测设置"""
+    try:
+        acoustic_detector = detectors.get("acoustic")
+        if not acoustic_detector:
+            return {"status": "error", "message": "音频检测器未初始化"}
+            
+        return {
+            "status": "success",
+            "settings": {
+                "confidence_threshold": acoustic_detector.confidence_threshold,
+                "detection_interval": acoustic_detector.detection_interval,
+                "event_cooldown": acoustic_detector.event_cooldown,
+                "volume_multiplier": acoustic_detector.volume_multiplier,
+                "frequency_multiplier": acoustic_detector.frequency_multiplier,
+                "noise_multiplier": acoustic_detector.noise_multiplier
+            }
+        }
+        
+    except Exception as e:
+        return {"status": "error", "message": f"获取设置失败: {str(e)}"}
+
+
+@app.post("/audio/reset/")
+async def reset_audio_history():
+    """重置音频事件历史"""
+    try:
+        acoustic_detector = detectors.get("acoustic")
+        if not acoustic_detector:
+            return {"status": "error", "message": "音频检测器未初始化"}
+            
+        acoustic_detector.reset_event_history()
+        return {"status": "success", "message": "音频事件历史已重置"}
+        
+    except Exception as e:
+        return {"status": "error", "message": f"重置失败: {str(e)}"}
+
+
+@app.post("/frame/analyze/")
+async def analyze_frame(
+    frame: UploadFile = File(...),
+    camera_id: str = Body(...),
+    enable_face_recognition: bool = Body(default=True),
+    enable_object_detection: bool = Body(default=True),
+    enable_behavior_detection: bool = Body(default=False)
+):
+    """分析单帧图像并返回检测结果"""
+    try:
+        # 读取图像数据
+        image_data = await frame.read()
+        image_array = np.frombuffer(image_data, np.uint8)
+        image = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
+        
+        if image is None:
+            return {"status": "error", "message": "无效的图像数据"}
+        
+        results = {
+            "camera_id": camera_id,
+            "timestamp": datetime.datetime.now().isoformat(),
+            "detections": [],
+            "alerts": []
+        }
+        
+        # 目标检测
+        if enable_object_detection:
+            detected_objects = detectors["object"].predict(image, confidence_threshold=0.7)
+            for obj in detected_objects:
+                detection = {
+                    "type": "object",
+                    "class_name": obj["class_name"],
+                    "confidence": float(obj["confidence"]),
+                    "bbox": [int(coord) for coord in obj["coordinates"]],
+                    "timestamp": datetime.datetime.now().isoformat()
+                }
+                results["detections"].append(detection)
+                
+                # 如果检测到人员，生成告警
+                if obj["class_name"] == "person" and obj["confidence"] > 0.8:
+                    alert = {
+                        "type": "person_detected",
+                        "message": f"检测到人员 (置信度: {obj['confidence']:.2f})",
+                        "confidence": float(obj["confidence"]),
+                        "location": obj["coordinates"]
+                    }
+                    results["alerts"].append(alert)
+        
+        # 人脸识别
+        if enable_face_recognition:
+            recognized_faces = detectors["face"].detect_and_recognize(image)
+            for face in recognized_faces:
+                detection = {
+                    "type": "face",
+                    "known": face["identity"]["known"],
+                    "name": face["identity"].get("name", "未知"),
+                    "confidence": float(face.get("confidence", 0.5)),
+                    "bbox": [
+                        int(face["location"]["left"]),
+                        int(face["location"]["top"]),
+                        int(face["location"]["right"]),
+                        int(face["location"]["bottom"])
+                    ],
+                    "timestamp": datetime.datetime.now().isoformat()
+                }
+                results["detections"].append(detection)
+                
+                # 如果是未知人脸，生成告警
+                if not face["identity"]["known"]:
+                    alert = {
+                        "type": "unknown_face",
+                        "message": "检测到未知人脸",
+                        "confidence": float(face.get("confidence", 0.5)),
+                        "location": face["location"]
+                    }
+                    results["alerts"].append(alert)
+                    
+                    # 发送到后端
+                    backend_alert = AIAnalysisResult(
+                        camera_id=camera_id,
+                        event_type="unknown_face_detected",
+                        location=face["location"],
+                        confidence=float(face.get("confidence", 0.5)),
+                        timestamp=datetime.datetime.now().isoformat(),
+                        details={"realtime_detection": True}
+                    )
+                    send_result_to_backend(backend_alert)
+        
+        return {"status": "success", "results": results}
+        
+    except Exception as e:
+        print(f"分析帧时发生错误: {e}")
+        return {"status": "error", "message": f"分析失败: {str(e)}"}
+
+
+@app.get("/stream/webcam/start/{camera_id}")
+async def start_webcam_stream(camera_id: str):
+    """启动网络摄像头流处理（用于前端摄像头）"""
+    try:
+        # 为网络摄像头创建一个虚拟的视频流处理器
+        if camera_id not in video_streams:
+            # 创建虚拟流处理器
+            class WebcamProcessor:
+                def __init__(self, camera_id):
+                    self.camera_id = camera_id
+                    self.is_running = True
+                    self.frame_count = 0
+                    
+                def get_status(self):
+                    return {
+                        "camera_id": self.camera_id,
+                        "status": "running" if self.is_running else "stopped",
+                        "type": "webcam",
+                        "frame_count": self.frame_count
+                    }
+                    
+                def stop(self):
+                    self.is_running = False
+                    
+                def process_frame(self):
+                    self.frame_count += 1
+            
+            video_streams[camera_id] = WebcamProcessor(camera_id)
+        
+        return {
+            "status": "success",
+            "message": f"网络摄像头流 {camera_id} 已启动",
+            "camera_id": camera_id
+        }
+        
+    except Exception as e:
+        return {"status": "error", "message": f"启动失败: {str(e)}"}
+
+
+@app.post("/stream/webcam/stop/{camera_id}")
+async def stop_webcam_stream(camera_id: str):
+    """停止网络摄像头流处理"""
+    try:
+        if camera_id in video_streams:
+            video_streams[camera_id].stop()
+            del video_streams[camera_id]
+            return {"status": "success", "message": f"网络摄像头流 {camera_id} 已停止"}
+        else:
+            return {"status": "error", "message": f"未找到摄像头流: {camera_id}"}
+            
+    except Exception as e:
+        return {"status": "error", "message": f"停止失败: {str(e)}"}
 
 
 if __name__ == "__main__":

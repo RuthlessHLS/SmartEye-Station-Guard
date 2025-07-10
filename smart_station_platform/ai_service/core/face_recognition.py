@@ -23,7 +23,7 @@ class FaceRecognizer:
         if not os.path.exists(known_faces_dir):
             print(f"警告: 已知人脸目录不存在: {known_faces_dir}")
             return
-            
+
         # 遍历目录加载已知人脸
         print(f"\n=== 开始加载已知人脸数据库 ===")
         print(f"目录路径: {known_faces_dir}")
@@ -87,7 +87,7 @@ class FaceRecognizer:
             List[Dict]: 一个包含检测到的所有人脸信息的字典列表。
         """
         results = []
-        
+
         # 检测人脸位置
         face_locations = face_recognition.face_locations(frame)
         if not face_locations:
