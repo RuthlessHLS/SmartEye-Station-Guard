@@ -1,7 +1,7 @@
 # 文件: ai_service/core/models.py (修复后)
 from pydantic import BaseModel, Field, ConfigDict # 新增导入 ConfigDict
 from typing import Optional, Any
-import datetime
+from datetime import datetime
 
 # 这个模型需要严格对应后端 Django 的 Alert 模型字段
 # 它定义了发送给后端的数据应该长什么样
@@ -25,7 +25,7 @@ class AlertPayload(BaseModel):
 
     camera_id: int = 1
     event_type: str = Field(..., example="人员检测")
-    timestamp: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
+    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
     location: dict = Field(default_factory=lambda: {"desc": "车站大厅A区"})
     confidence: Optional[float] = Field(None, example=0.95)
     image_snapshot_url: Optional[str] = None
