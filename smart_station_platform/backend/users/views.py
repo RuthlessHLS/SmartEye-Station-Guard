@@ -8,7 +8,8 @@ from .serializers import (
     UserProfileSerializer,
     AvatarUpdateSerializer,
     PasswordResetRequestSerializer,
-    PasswordResetConfirmSerializer
+    PasswordResetConfirmSerializer,
+    UserAdminSerializer
 )
 from rest_framework import generics, permissions, status
 from rest_framework.parsers import MultiPartParser, FormParser
@@ -22,8 +23,10 @@ from django.conf import settings
 from rest_framework_simplejwt.views import TokenObtainPairView
 from .serializers import MyTokenObtainPairSerializer
 from .captcha_generator import create_captcha_images
+from rest_framework import viewsets
+from rest_framework import filters
+from .serializers import UserDirectorySerializer
 
-# Create your views here.
 import uuid
 import time
 from django.core.cache import cache
@@ -206,7 +209,7 @@ class GenerateCaptchaView(APIView):
 
 
 # ==========================================================
-# 视图: MyTokenObtainPairView
+# 视图7: MyTokenObtainPairView
 # ==========================================================
 class MyTokenObtainPairView(TokenObtainPairView):
     """
@@ -214,3 +217,36 @@ class MyTokenObtainPairView(TokenObtainPairView):
     """
     serializer_class = MyTokenObtainPairSerializer
 
+# ==========================================================
+# 视图 8: UserAdminViewSet
+# ==========================================================
+class UserAdminViewSet(viewsets.ModelViewSet):
+    """
+    供管理员使用的用户管理API。
+    - 权限: 仅限管理员 (is_staff=True) 访问。
+    - 支持: 列表、创建、检索、更新、删除用户。
+    """
+    queryset = UserProfile.objects.all().order_by('-date_joined')
+    serializer_class = UserAdminSerializer
+    permission_classes = [permissions.IsAdminUser] # <-- 核心权限控制！
+
+# ==========================================================
+# 视图 9: UserDirectoryViewSet
+# ==========================================================
+class UserDirectoryViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    提供一个公开的用户目录（通讯录）。
+    - 权限: 任何已认证的用户 (IsAuthenticated) 均可访问。
+    - 功能:
+        - 列表查看所有用户。
+        - 详情查看单个用户。
+        - 支持按用户名、昵称、手机号、邮箱进行搜索。
+    - 操作: 只读 (ReadOnlyModelViewSet)，不允许创建、修改、删除。
+    """
+    queryset = UserProfile.objects.filter(is_active=True).order_by('username') # 只显示激活的用户
+    serializer_class = UserDirectorySerializer
+    permission_classes = [permissions.IsAuthenticated] # <-- 权限修改为：任何登录用户
+
+    # --- 实现搜索功能 ---
+    filter_backends = [filters.SearchFilter]
+    search_fields = ['username', 'nickname', 'phone_number', 'email']

@@ -3,7 +3,19 @@ import cv2
 import time
 import threading
 import numpy as np
-from typing import List, Callable, Optional
+from typing import List, Callable, Optional, Dict
+from datetime import datetime
+import traceback
+from models.alert_models import AIAnalysisResult  # 修改为绝对导入
+import logging
+from datetime import datetime
+import ffmpeg
+import tempfile
+import os
+import asyncio
+from typing import Optional, Tuple, Dict
+
+logger = logging.getLogger(__name__)
 
 
 def process_video_stream(video_url: str):
@@ -39,19 +51,23 @@ class VideoStream:
     视频流处理类，负责管理视频流的捕获和AI处理
     """
     
-    def __init__(self, stream_url: str):
+    def __init__(self, stream_url: str, camera_id: str):
         """
         初始化视频流
         
         Args:
             stream_url (str): 视频流URL
+            acoustic_detector: 声音检测器实例
         """
         self.stream_url = stream_url
-        self.cap: Optional[cv2.VideoCapture] = None
-        self.processors: List[Callable[[np.ndarray], None]] = []
+        self.camera_id = camera_id
+        self.cap = None
         self.is_running = False
-        self.thread: Optional[threading.Thread] = None
+        self.temp_audio_file = None
+        self.audio_process = None
+        self.processors: List[Callable[[np.ndarray], None]] = []
         self.lock = threading.Lock()
+        self.acoustic_detector = None # This attribute is no longer used for audio processing
     
     def add_processor(self, processor: Callable[[np.ndarray], None]):
         """
@@ -63,7 +79,7 @@ class VideoStream:
         with self.lock:
             self.processors.append(processor)
     
-    def start(self) -> bool:
+    async def start(self) -> bool:
         """
         启动视频流处理
         
@@ -80,13 +96,75 @@ class VideoStream:
             print(f"错误: 无法打开视频流 {self.stream_url}")
             return False
         
+        # 如果是本地视频文件且有声音检测器，启动音频处理
+        # if self.acoustic_detector and self.stream_url.startswith(('G:/', 'C:/', 'D:/', 'E:/', 'F:/')):
+        #     print("检测到本地视频文件，启动音频处理...")
+        #     self.acoustic_detector.start_video_audio_processing(self.stream_url)
+        
         # 启动处理线程
         self.is_running = True
-        self.thread = threading.Thread(target=self._process_loop, daemon=True)
-        self.thread.start()
+        # self.thread = threading.Thread(target=self._process_loop, daemon=True) # This line is removed
+        # self.thread.start() # This line is removed
         
         print(f"成功启动视频流: {self.stream_url}")
         return True
+    
+    async def start_audio_extraction(self):
+        """启动音频提取过程"""
+        try:
+            # 创建临时文件来存储音频
+            temp_dir = tempfile.gettempdir()
+            self.temp_audio_file = os.path.join(temp_dir, f"audio_{self.camera_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.wav")
+            
+            # 检查是否是本地文件
+            is_local_file = self.stream_url.startswith(('file:///', 'G:/', 'C:/', 'D:/', 'E:/', 'F:/'))
+            if is_local_file:
+                stream_url = self.stream_url.replace('file:///', '')
+            else:
+                stream_url = self.stream_url
+            
+            print(f"开始从 {stream_url} 提取音频...")
+            print(f"音频将保存到: {self.temp_audio_file}")
+            
+            # 使用ffmpeg提取音频
+            stream = ffmpeg.input(stream_url)
+            audio = stream.audio
+            stream = ffmpeg.output(audio, self.temp_audio_file, 
+                                 acodec='pcm_s16le',  # 16位PCM格式
+                                 ac=1,                # 单声道
+                                 ar='44100',          # 44.1kHz采样率
+                                 loglevel='error')    # 只显示错误日志
+                                 
+            # 启动ffmpeg进程
+            self.audio_process = await asyncio.create_subprocess_exec(
+                *ffmpeg.compile(stream),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            print("✅ 音频提取进程已启动")
+            
+        except Exception as e:
+            print(f"❌ 启动音频提取时发生错误: {str(e)}")
+            traceback.print_exc()
+            self.temp_audio_file = None
+            
+    def get_audio_file(self) -> Optional[str]:
+        """获取当前正在写入的音频文件路径"""
+        return self.temp_audio_file
+            
+    async def read_frame(self) -> Tuple[bool, Optional[np.ndarray]]:
+        if not self.is_running or not self.cap:
+            return False, None
+            
+        try:
+            ret, frame = self.cap.read()
+            if not ret:
+                logger.warning(f"无法读取视频帧: {self.stream_url}")
+                return False, None
+            return True, frame
+        except Exception as e:
+            logger.error(f"读取视频帧时发生错误: {str(e)}")
+            return False, None
     
     def stop(self):
         """
@@ -94,8 +172,13 @@ class VideoStream:
         """
         self.is_running = False
         
-        if self.thread and self.thread.is_alive():
-            self.thread.join(timeout=5)
+        # 停止音频处理
+        if self.acoustic_detector:
+            self.acoustic_detector.stop_video_audio_processing()
+        
+        # The following lines are removed as per the new_code:
+        # if self.thread and self.thread.is_alive():
+        #     self.thread.join(timeout=5)
         
         if self.cap:
             self.cap.release()
@@ -155,7 +238,8 @@ class VideoStream:
         info = {
             "stream_url": self.stream_url,
             "is_running": self.is_running,
-            "processors_count": len(self.processors)
+            "processors_count": len(self.processors),
+            "has_audio_processing": self.acoustic_detector is not None
         }
         
         if self.cap and self.cap.isOpened():
@@ -166,3 +250,68 @@ class VideoStream:
             })
         
         return info
+
+    def process_frame(self, frame: np.ndarray) -> Dict:
+        """处理单帧图像。"""
+        results = {
+            "faces": [],
+            "objects": [],
+            "behaviors": [],
+            "alerts": []
+        }
+        
+        try:
+            # 1. 人脸检测和识别
+            if self.face_recognizer:
+                face_results = self.face_recognizer.detect_and_recognize(frame)
+                results["faces"] = face_results
+                
+                # 检查每个未知人脸并生成告警
+                for face in face_results:
+                    if face["alert_needed"]:
+                        alert = AIAnalysisResult(
+                            camera_id=self.camera_id,
+                            event_type="unknown_face_detected",
+                            timestamp=face["detection_time"],
+                            location={
+                                "box": [
+                                    face["location"]["left"],
+                                    face["location"]["top"],
+                                    face["location"]["right"],
+                                    face["location"]["bottom"]
+                                ],
+                                "description": "摄像头视野内"
+                            },
+                            confidence=face["confidence"],
+                            details={
+                                "best_match_info": face["best_match"] if face["best_match"] else None,
+                                "face_location": face["location"]
+                            }
+                        )
+                        
+                        # 发送报警到后端
+                        try:
+                            self.alert_sender.send_alert(alert)
+                            print(f"🚨 未知人员报警已发送! 位置: {face['location']}")
+                        except Exception as e:
+                            print(f"发送未知人员报警失败: {str(e)}")
+                            traceback.print_exc()
+            
+            # 2. 行为检测（如果需要）
+            if self.behavior_detector:
+                behavior_results = self.behavior_detector.detect(frame)
+                results["behaviors"] = behavior_results
+            
+            # 3. 目标检测（如果需要）
+            if self.object_detector:
+                object_results = self.object_detector.detect(frame)
+                results["objects"] = object_results
+                
+        except Exception as e:
+            print(f"处理帧时发生错误: {str(e)}")
+            traceback.print_exc()
+        
+        return results
+
+# 全局视频流管理器
+active_streams: Dict[str, VideoStream] = {}

@@ -9,8 +9,10 @@
               <span>实时安全概览</span>
             </div>
           </template>
-          <p>此处将展示当前实时告警数量、重点区域风险等级等。</p>
-          <el-empty description="暂无数据"></el-empty>
+          <div class="card-content">
+            <p>此处将展示当前实时告警数量、重点区域风险等级等。</p>
+            <el-empty description="暂无数据"></el-empty>
+          </div>
           <el-button type="primary" @click="router.push('/monitor')">进入智能监控中心</el-button>
         </el-card>
       </el-col>
@@ -21,86 +23,75 @@
               <span>运营数据洞察</span>
             </div>
           </template>
-          <p>此处将展示客流量趋势、资源利用率等运营指标。</p>
-          <el-empty description="暂无数据"></el-empty>
+           <div class="card-content">
+            <p>此处将展示客流量趋势、资源利用率等运营指标。</p>
+            <el-empty description="暂无数据"></el-empty>
+          </div>
           <el-button type="success" @click="router.push('/data-screen')">查看数据大屏</el-button>
         </el-card>
       </el-col>
     </el-row>
-    <el-row :gutter="20" style="margin-top: 20px;">
-        <el-col :span="24">
-             <el-card class="box-card">
-              <template #header>
-                <div class="card-header">
-                  <span>快速导航</span>
-                </div>
-              </template>
-              <el-space wrap>
-                <el-button type="info" @click="router.push('/alerts')">告警事件管理</el-button>
-                <el-button type="warning" @click="router.push('/reports')">AI监控日报</el-button>
-                <el-button type="danger" @click="logout">退出登录</el-button>
-              </el-space>
-             </el-card>
-        </el-col>
-    </el-row>
+
+    <!-- 包含“快速导航”的整个 el-row 已经被删除了 -->
+
   </div>
 </template>
 
 <script setup>
 import { useRouter } from 'vue-router';
-import { ElMessage, ElMessageBox } from 'element-plus';
 
 const router = useRouter();
 
-const logout = () => {
-  ElMessageBox.confirm('确定要退出登录吗？', '提示', {
-    confirmButtonText: '确定',
-    cancelButtonText: '取消',
-    type: 'warning',
-  })
-  .then(() => {
-    localStorage.removeItem('access_token');
-    localStorage.removeItem('refresh_token');
-    ElMessage.success('已安全退出！');
-    router.push('/login');
-  })
-  .catch(() => {
-    // 用户取消操作
-  });
-};
+// 【重要修改】
+// 由于“退出登录”按钮已经从这个页面移除（现在位于全局导航栏 App.vue 中），
+// 此处的 logout 函数和相关的 Element Plus 弹窗组件导入也一并移除了，让组件更简洁。
+
 </script>
 
 <style scoped>
 .dashboard-container {
   padding: 20px;
 }
+
 .dashboard-container h1 {
   text-align: center;
-  margin-bottom: 30px;
+  margin-bottom: 40px;
+  font-size: 2em;
   color: #303133;
 }
+
 .box-card {
-  margin-bottom: 20px;
-  min-height: 250px;
+  height: 350px; /* 固定卡片高度 */
   display: flex;
   flex-direction: column;
 }
-.box-card .card-header {
-  font-size: 1.1em;
+
+.card-header {
+  font-size: 1.2em;
   font-weight: bold;
-  color: #303133;
 }
-.box-card p {
-  margin-top: 10px;
+
+.card-content {
+  flex-grow: 1; /* 让内容区域占据所有剩余空间 */
+  display: flex;
+  flex-direction: column;
+}
+
+.card-content p {
+  margin-bottom: 10px;
   color: #606266;
 }
-.box-card .el-empty {
+
+/* 让 el-empty 填满其父容器的剩余空间 */
+.card-content .el-empty {
   flex-grow: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
 }
+
+/* 按钮总是位于卡片底部 */
 .box-card .el-button {
-  margin-top: auto; /* 将按钮推到底部 */
+  margin-top: auto; /* 使用 margin-top: auto 将按钮推到底部 */
+  width: 100%; /* 让按钮宽度与卡片一致 */
+  padding: 12px 0;
+  font-size: 1em;
 }
 </style>
