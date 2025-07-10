@@ -1,3 +1,4 @@
+import datetime
 import os
 import base64
 import time
@@ -12,10 +13,16 @@ import cv2
 import numpy as np
 import requests
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Body
 from pydantic import BaseModel
 
 # 导入我们自定义的所有核心AI模块
+import sys
+import os
+
+# 添加当前目录到Python路径
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 from core.video_stream import VideoStream
 from core.object_detection import GenericPredictor
 from core.behavior_detection import BehaviorDetector
@@ -189,7 +196,7 @@ async def run_acoustic_analysis():
                 event_type=result["event_type"],
                 location={"source": "microphone", "details": result['details']},
                 confidence=result["confidence"],
-                timestamp=time.time(),
+                timestamp=datetime.datetime.now().isoformat(),
             )
             send_result_to_backend(alert)
         await asyncio.sleep(0.1)
@@ -202,8 +209,14 @@ def create_master_processor(camera_id: str, config: StreamConfig):
 
     def master_processor(frame: np.ndarray):
         try:
+            # 目标检测
             detected_objects = detectors["object"].predict(frame, confidence_threshold=0.6)
+            
+            # 打印检测到的目标
+            for obj in detected_objects:
+                print(f"🎯 检测到 {obj['class_name']}: 置信度={obj['confidence']:.2f}, 位置={obj['coordinates']}")
 
+            # 行为检测
             if config.enable_behavior_detection:
                 person_boxes = [obj["coordinates"] for obj in detected_objects if obj["class_name"] == "person"]
                 if person_boxes:
@@ -216,21 +229,32 @@ def create_master_processor(camera_id: str, config: StreamConfig):
                                 event_type=f"abnormal_behavior_{behavior['behavior']}",
                                 location={"box": behavior["box"]},
                                 confidence=behavior["confidence"],
-                                timestamp=time.time(),
+                                timestamp=datetime.datetime.now().isoformat(),
                             )
                             send_result_to_backend(alert)
 
             if config.enable_face_recognition:
                 recognized_faces = detectors["face"].detect_and_recognize(frame)
                 for face in recognized_faces:
-                    if face["identity"] == "Unknown":
+                    if not face["identity"]["known"]:  # 修改这里，使用新的判断逻辑
                         print(f"🚨 [{camera_id}] 检测到未知人员!")
                         alert = AIAnalysisResult(
                             camera_id=camera_id,
                             event_type="unknown_face_detected",
-                            location={"box": face["box"]},
+                            location={
+                                "box": [
+                                    face["location"]["left"],
+                                    face["location"]["top"],
+                                    face["location"]["right"],
+                                    face["location"]["bottom"]
+                                ]
+                            },
                             confidence=face.get("confidence", 0.9),
-                            timestamp=time.time(),
+                            timestamp=datetime.datetime.now().isoformat(),
+                            details={
+                                "face_location": face["location"],
+                                "best_match": face.get("best_match")
+                            }
                         )
                         send_result_to_backend(alert)
 
@@ -242,33 +266,112 @@ def create_master_processor(camera_id: str, config: StreamConfig):
 
 # --- API 端点 (保持不变) ---
 
-@app.post("/stream/start/", status_code=202)
-async def start_stream(config: StreamConfig):
-    """启动一个新的视频流处理任务。"""
-    if config.camera_id in video_streams:
-        raise HTTPException(status_code=400, detail=f"摄像头 {config.camera_id} 已在处理中。")
-    try:
-        stream = VideoStream(config.stream_url)
-        stream.add_processor(create_master_processor(config.camera_id, config))
-        if not stream.start():
-            raise HTTPException(status_code=500, detail="无法启动视频流处理线程。")
-        video_streams[config.camera_id] = stream
-        return {"status": "accepted", "message": f"已启动摄像头 {config.camera_id} 的AI分析任务。"}
-    except Exception as e:
-        if config.camera_id in video_streams:
-            video_streams[config.camera_id].stop()
-            del video_streams[config.camera_id]
-        raise HTTPException(status_code=500, detail=f"启动处理失败: {str(e)}")
+@app.post("/stream/start/")
+async def start_stream(
+    camera_id: str = Body(...),
+    stream_url: str = Body(...),
+    enable_face_recognition: bool = Body(default=True),
+    enable_behavior_detection: bool = Body(default=True),
+    enable_sound_detection: bool = Body(default=True)  # 默认启用声音检测
+):
+    """
+    启动视频流处理。
+    """
+    if camera_id in video_streams:
+        return {"status": "error", "message": f"摄像头 {camera_id} 已在运行"}
 
+    def master_processor(frame: np.ndarray):
+        try:
+            # 目标检测
+            detected_objects = detectors["object"].predict(frame, confidence_threshold=0.6)
+            
+            # 打印检测到的目标
+            for obj in detected_objects:
+                print(f"🎯 检测到 {obj['class_name']}: 置信度={obj['confidence']:.2f}, 位置={obj['coordinates']}")
+
+            # 行为检测
+            if enable_behavior_detection:
+                person_boxes = [obj["coordinates"] for obj in detected_objects if obj["class_name"] == "person"]
+                if person_boxes:
+                    behaviors = detectors["behavior"].detect_behavior(frame, person_boxes, time.time())
+                    for behavior in behaviors:
+                        if behavior["is_abnormal"] and behavior["need_alert"]:
+                            print(f"🚨 [{camera_id}] 检测到异常行为: {behavior['behavior']}!")
+                            alert = AIAnalysisResult(
+                                camera_id=camera_id,
+                                event_type=f"abnormal_behavior_{behavior['behavior']}",
+                                location={"box": behavior["box"]},
+                                confidence=behavior["confidence"],
+                                timestamp=datetime.datetime.now().isoformat(),
+                            )
+                            send_result_to_backend(alert)
+
+            # 人脸识别
+            if enable_face_recognition:
+                recognized_faces = detectors["face"].detect_and_recognize(frame)
+                for face in recognized_faces:
+                    if not face["identity"]["known"]:
+                        print(f"🚨 [{camera_id}] 检测到未知人脸!")
+                        alert = AIAnalysisResult(
+                            camera_id=camera_id,
+                            event_type="unknown_face_detected",
+                            location=face["location"],
+                            confidence=face["identity"]["confidence"],
+                            timestamp=datetime.datetime.now().isoformat(),
+                        )
+                        send_result_to_backend(alert)
+
+        except Exception as e:
+            print(f"处理器执行错误: {e}")
+            traceback.print_exc()
+
+    try:
+        # 创建视频流实例，如果启用了声音检测，传入声音检测器
+        acoustic_detector = detectors.get("acoustic") if enable_sound_detection else None
+        stream = VideoStream(stream_url, acoustic_detector=acoustic_detector)
+        
+        if not stream.start():
+            return {"status": "error", "message": "无法启动视频流"}
+
+        # 添加主处理器
+        stream.add_processor(master_processor)
+        
+        # 保存流实例
+        video_streams[camera_id] = stream
+        
+        return {
+            "status": "success",
+            "message": f"成功启动摄像头 {camera_id}",
+            "stream_info": stream.get_stream_info()
+        }
+        
+    except Exception as e:
+        print(f"启动视频流时出错: {e}")
+        return {"status": "error", "message": str(e)}
 
 @app.post("/stream/stop/{camera_id}")
 async def stop_stream(camera_id: str):
-    """停止指定摄像头的视频流处理。"""
-    if camera_id in video_streams:
-        video_streams[camera_id].stop()
-        del video_streams[camera_id]
-        return {"status": "success", "message": f"已停止摄像头 {camera_id} 的处理。"}
-    raise HTTPException(status_code=404, detail=f"未找到正在处理的摄像头 {camera_id}。")
+    """停止视频流处理。"""
+    try:
+        if camera_id in video_streams:
+            # 停止视频流处理
+            stream_processor = video_streams[camera_id]
+            stream_processor.stop()
+            del video_streams[camera_id]
+            
+            # 如果没有活跃的视频流了，停止声音检测
+            if not video_streams and detectors.get("acoustic") and detectors["acoustic"].is_running:
+                detectors["acoustic"].stop_listening()
+                print("声音检测已停止")
+
+            print(f"已停止视频流: {stream_processor.stream_url}")
+            return {"status": "success", "message": "视频流处理已停止"}
+        else:
+            return {"status": "error", "message": f"未找到摄像头 {camera_id} 的视频流"}
+
+    except Exception as e:
+        print(f"停止视频流时发生错误: {str(e)}")
+        return {"status": "error", "message": str(e)}
 
 
 @app.post("/face/register/")
