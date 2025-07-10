@@ -7,11 +7,14 @@
           <el-select v-model="filterForm.type" placeholder="选择类型" clearable>
             <el-option label="所有" value=""></el-option>
             <el-option label="陌生人闯入" value="stranger_intrusion"></el-option>
-            <el-option label="危险区域入侵" value="dangerous_area_intrusion"></el-option>
-            <el-option label="人员跌倒" value="person_fall"></el-option>
             <el-option label="明火烟雾" value="fire_smoke"></el-option>
-            <el-option label="异常声音" value="abnormal_sound"></el-option>
-            </el-select>
+            <el-option label="人员跌倒" value="person_fall"></el-option>
+            <el-option label="异常声音: 尖叫" value="abnormal_sound_scream"></el-option>
+            <el-option label="异常声音: 音量异常" value="acoustic_volume_anomaly"></el-option>
+            <el-option label="异常声音: 高频" value="acoustic_high_frequency"></el-option>
+            <el-option label="异常声音: 突发噪声" value="acoustic_sudden_noise"></el-option>
+            <el-option label="未知人脸检测" value="unknown_face_detected"></el-option>
+          </el-select>
         </el-form-item>
         <el-form-item label="处理状态">
           <el-select v-model="filterForm.status" placeholder="选择状态" clearable>
@@ -224,20 +227,22 @@ const fetchAlerts = async () => {
     const params = {
       page: pagination.currentPage,
       page_size: pagination.pageSize,
-      alert_type: filterForm.type,
+      event_type: filterForm.type, // 修改参数名为 event_type
       status: filterForm.status,
       start_time: filterForm.dateRange && filterForm.dateRange[0] ? filterForm.dateRange[0] : '',
       end_time: filterForm.dateRange && filterForm.dateRange[1] ? filterForm.dateRange[1] : '',
     };
     // 修正API路径，添加/api前缀
     const response = await api.get('/api/alerts/', { params });
-    alerts.value = response.results.map(alert => ({
-      ...alert,
-      alert_time: new Date(alert.timestamp).toLocaleString(), // 假设后端返回timestamp
-      event_type_display: alertTypeMap[alert.event_type] || alert.event_type,
-      status_display: alertStatusMap[alert.status],
-      location_desc: JSON.stringify(alert.location), // 简化位置描述
-    }));
+    alerts.value = response.results.map(alert => {
+      return {
+        ...alert,
+        alert_time: alert.timestamp.replace('T', ' ').slice(0, 19), // 保证与数据库一致
+        event_type_display: alertTypeMap[alert.event_type] || alert.event_type,
+        status_display: alertStatusMap[alert.status],
+        location_desc: JSON.stringify(alert.location), // 简化位置描述
+      };
+    });
     pagination.total = response.count;
   } catch (error) {
     ElMessage.error('获取告警列表失败！');
