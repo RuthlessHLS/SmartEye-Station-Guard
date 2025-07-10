@@ -117,10 +117,10 @@ WSGI_APPLICATION = "smart_station.wsgi.application"
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
-        'NAME': 'smartstationdb', # 你的数据库名
-        'USER': 'root',  # 你的MySQL用户名
-        'PASSWORD': '032526', # 你的MySQL密码
-        'HOST': '127.0.0.1', # 数据库主机
+        'NAME': 'smart_station_db', # 你的数据库名
+        'USER': 'qiuyy',  # 你的MySQL用户名
+        'PASSWORD': 'Qiuyy2005.', # 你的MySQL密码
+        'HOST': '124.70.76.219', # 数据库主机
         'PORT': '3306',      # 数据库端口
         'OPTIONS': {
             'charset': 'utf8mb4',
