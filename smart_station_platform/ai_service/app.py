@@ -1,5 +1,3 @@
-# 文件: ai_service/app.py
-
 import os
 import base64
 import time
@@ -8,6 +6,8 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from typing import Dict, List, Optional
 
+import torch
+import uvicorn
 import cv2
 import numpy as np
 import requests
@@ -24,6 +24,15 @@ from core.acoustic_detection import AcousticDetector
 from models.alert_models import AIAnalysisResult  # 确保这个文件存在
 
 # 在应用启动时，从 .env 文件加载环境变量
+current_dir = os.path.dirname(os.path.abspath(__file__))
+# 构建 .env 文件的完整路径
+dotenv_path = os.path.join(current_dir, '.env')
+# 从指定路径加载环境变量
+if os.path.exists(dotenv_path):
+    print(f"--- 正在从 '{dotenv_path}' 加载环境变量 ---")
+    load_dotenv(dotenv_path=dotenv_path)
+else:
+    print(f"--- 警告: 未找到 .env 文件 at '{dotenv_path}'，将使用系统环境变量 ---")
 load_dotenv()
 
 # --- 全局变量 ---
@@ -39,19 +48,42 @@ def init_detectors():
     try:
         print("--- 正在初始化所有检测器 ---")
 
+
+        # 我们不再硬编码任何路径，而是从 .env 文件中读取统一的根路径。
+        ASSET_BASE_PATH = os.getenv("G_DRIVE_ASSET_PATH")
+        if not ASSET_BASE_PATH or not os.path.isdir(ASSET_BASE_PATH):
+            raise FileNotFoundError(
+                f"致命错误: 环境变量 'G_DRIVE_ASSET_PATH' 指向的资源目录 '{ASSET_BASE_PATH}' 不存在或未配置。请检查 .env 文件和G盘目录。")
+
+        print(f"--- 使用资源根目录: {ASSET_BASE_PATH} ---")
+
+        # 所有资源的路径都将基于 ASSET_BASE_PATH 构建，实现集中管理。
+        model_weights_path = os.path.join(ASSET_BASE_PATH, "models", "torch",
+                                          "fasterrcnn_resnet50_fpn_coco-258fb6c6.pth")
+        class_names_path = os.path.join(ASSET_BASE_PATH, "models", "coco.names")
+        known_faces_dir = os.path.join(ASSET_BASE_PATH, "known_faces")
+
         # 1. 初始化通用目标检测器
-        class_names_path = os.getenv("CLASS_NAMES_PATH", "models/coco.names")
         class_names = []
         try:
-            with open(class_names_path, 'r') as f:
+            with open(class_names_path, 'r', encoding='utf-8') as f:
                 class_names = [line.strip() for line in f.readlines()]
-            print(f"成功加载 {len(class_names)} 个类别名称。")
+            print(f"成功从 '{class_names_path}' 加载 {len(class_names)} 个类别名称。")
         except FileNotFoundError:
             print(f"警告: 找不到类别名称文件 at '{class_names_path}'。")
+            # 即使找不到文件，也提供一个基础的默认值以维持运行
             class_names = ["background", "person"]
 
+            # 检查模型文件是否存在
+        if not os.path.exists(model_weights_path):
+            print(f"致命错误: 模型文件在指定路径未找到: {model_weights_path}")
+            print("请确认模型已下载并放置在正确的G盘目录下，目录结构请参考文档说明。")
+            raise FileNotFoundError(f"模型文件未找到: {model_weights_path}")
+
+        print(f"正在加载目标检测模型权重: {model_weights_path}")
+
         detectors["object"] = GenericPredictor(
-            model_weights_path=os.getenv("OBJECT_DETECTION_MODEL_PATH", "models/fasterrcnn_resnet50_fpn.pt"),
+            model_weights_path=model_weights_path,  # 使用我们新构建的路径
             num_classes=len(class_names),
             class_names=class_names
         )
@@ -60,8 +92,9 @@ def init_detectors():
         detectors["behavior"] = BehaviorDetector()
 
         # 3. 初始化人脸识别器
+        print(f"正在从目录 '{known_faces_dir}' 加载已知人脸。")
         detectors["face"] = FaceRecognizer(
-            known_faces_dir=os.getenv("KNOWN_FACES_DIR", "known_faces")
+            known_faces_dir=known_faces_dir  # 使用我们新构建的路径
         )
 
         # 4. 初始化声学事件检测器 (如果启用了)
@@ -108,21 +141,21 @@ app = FastAPI(
 )
 
 
-# --- 数据模型 ---
+# --- 数据模型 (保持不变) ---
 
 class StreamConfig(BaseModel):
     camera_id: str
     stream_url: str
-    enable_face_recognition: bool = True  # 默认启用
-    enable_behavior_detection: bool = True  # 默认启用
+    enable_face_recognition: bool = True
+    enable_behavior_detection: bool = True
 
 
 class FaceData(BaseModel):
     person_name: str
-    image_data: str  # Base64编码的图像数据
+    image_data: str
 
 
-# --- 核心函数 ---
+# --- 核心函数 (保持不变) ---
 
 def send_result_to_backend(result: AIAnalysisResult):
     """将分析结果异步发送到后端Django服务。"""
@@ -130,11 +163,10 @@ def send_result_to_backend(result: AIAnalysisResult):
     def task():
         backend_url = os.getenv("DJANGO_BACKEND_URL", "http://127.0.0.1:8000/api/alerts/ai-results/")
         try:
-            response = requests.post(backend_url, json=result.dict(), timeout=10)
+            response = requests.post(backend_url, json=result.model_dump(), timeout=10)
             if 200 <= response.status_code < 300:
                 print(f"✅ [结果上报] 成功发送事件 '{result.event_type}' 到后端。")
             else:
-                # 打印后端返回的更详细的错误信息
                 print(f"❌ [结果上报] 发送失败，状态码: {response.status_code}, 后端响应: {response.text}")
         except requests.exceptions.RequestException as e:
             print(f"❌ [请求异常] 无法连接到后端服务: {e}")
@@ -170,10 +202,8 @@ def create_master_processor(camera_id: str, config: StreamConfig):
 
     def master_processor(frame: np.ndarray):
         try:
-            # 1. 目标检测 (总是执行，因为是其他分析的基础)
             detected_objects = detectors["object"].predict(frame, confidence_threshold=0.6)
 
-            # 2. 行为检测
             if config.enable_behavior_detection:
                 person_boxes = [obj["coordinates"] for obj in detected_objects if obj["class_name"] == "person"]
                 if person_boxes:
@@ -190,7 +220,6 @@ def create_master_processor(camera_id: str, config: StreamConfig):
                             )
                             send_result_to_backend(alert)
 
-            # 3. 人脸识别
             if config.enable_face_recognition:
                 recognized_faces = detectors["face"].detect_and_recognize(frame)
                 for face in recognized_faces:
@@ -200,7 +229,7 @@ def create_master_processor(camera_id: str, config: StreamConfig):
                             camera_id=camera_id,
                             event_type="unknown_face_detected",
                             location={"box": face["box"]},
-                            confidence=face.get("confidence", 0.9),  # 使用识别出的置信度，若无则默认
+                            confidence=face.get("confidence", 0.9),
                             timestamp=time.time(),
                         )
                         send_result_to_backend(alert)
@@ -211,7 +240,7 @@ def create_master_processor(camera_id: str, config: StreamConfig):
     return master_processor
 
 
-# --- API 端点 (Endpoints) ---
+# --- API 端点 (保持不变) ---
 
 @app.post("/stream/start/", status_code=202)
 async def start_stream(config: StreamConfig):

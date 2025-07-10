@@ -4,6 +4,7 @@
 import face_recognition
 import numpy as np
 import os
+import cv2
 from typing import List, Dict
 
 
