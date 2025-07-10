@@ -128,17 +128,106 @@
                       @change="updateAISettings"
                     />
                   </el-form-item>
+                  <el-form-item label="实时模式">
+                    <el-switch 
+                      v-model="aiSettings.realtimeMode"
+                      :disabled="!isStreaming"
+                      active-text="高频检测"
+                      inactive-text="节能模式"
+                      @change="updateAISettings"
+                    />
+                    <div class="frequency-hint">
+                      <small v-if="aiSettings.realtimeMode" style="color: #409EFF;">
+                        🚀 实时模式：~15FPS高频检测，响应更快
+                      </small>
+                      <small v-else style="color: #67C23A;">
+                        💡 节能模式：智能调频，省电优化
+                      </small>
+                    </div>
+                  </el-form-item>
                   <el-form-item label="检测频率">
                     <el-slider
                       v-model="analysisInterval"
-                      :min="500"
-                      :max="5000"
-                      :step="500"
+                      :min="100"
+                      :max="2000"
+                      :step="100"
                       :disabled="!isStreaming"
                       show-input
                       input-size="small"
                       @change="updateAnalysisInterval"
                     />
+                    <div class="frequency-hint">
+                      <small>{{Math.round(1000/analysisInterval)}} FPS (推荐: 100-500ms)</small>
+                    </div>
+                  </el-form-item>
+                  
+                  <el-form-item label="性能优化" v-if="isStreaming">
+                    <div class="optimization-status">
+                      <div class="opt-item">
+                        <el-icon><Cpu /></el-icon>
+                        <span>帧差检测: 已启用</span>
+                      </div>
+                      <div class="opt-item">
+                        <el-icon><VideoCamera /></el-icon>
+                        <span>动态画质: 自适应</span>
+                      </div>
+                      <div class="opt-item">
+                        <el-text type="success" size="small">
+                          当前延迟: {{ performanceStats.avgProcessTime }}ms
+                        </el-text>
+                      </div>
+                      <div class="performance-advice" v-if="performanceStats.avgProcessTime > 0">
+                        <el-alert
+                          :title="getPerformanceAdvice().title"
+                          :description="getPerformanceAdvice().advice"
+                          :type="getPerformanceAdvice().level"
+                          :closable="false"
+                          size="small"
+                          show-icon
+                        />
+                      </div>
+                    </div>
+                  </el-form-item>
+                  
+                  <el-form-item label="检测框测试" v-if="isStreaming">
+                    <div class="test-controls">
+                      <el-button 
+                        type="primary" 
+                        size="small" 
+                        @click="testDetectionBoxes"
+                        :icon="Search"
+                      >
+                        测试检测框显示
+                      </el-button>
+                      <el-button 
+                        type="warning" 
+                        size="small" 
+                        @click="clearDetectionBoxes"
+                        :icon="Close"
+                      >
+                        清除检测框
+                      </el-button>
+                      <el-text type="info" size="small">
+                        测试检测框是否正常显示和清除
+                      </el-text>
+                    </div>
+                  </el-form-item>
+                  
+                  <el-form-item label="音频监控" v-if="aiSettings.soundDetection && isStreaming">
+                    <div class="audio-monitor">
+                      <div class="audio-level-display">
+                        <span class="audio-text">音量: {{ performanceStats.audioLevel }}%</span>
+                        <div class="audio-bar">
+                          <div 
+                            class="audio-level" 
+                            :style="{ 
+                              width: performanceStats.audioLevel + '%',
+                              backgroundColor: performanceStats.audioLevel > 50 ? '#f56c6c' : '#67c23a'
+                            }"
+                          ></div>
+                        </div>
+                      </div>
+                    </div>
                   </el-form-item>
                 </el-form>
               </div>
@@ -183,6 +272,36 @@
               </el-scrollbar>
             </el-card>
 
+            <!-- 性能监控 -->
+            <el-card class="performance-panel" shadow="never" v-show="aiAnalysisEnabled">
+              <template #header>
+                <span>📊 性能监控</span>
+              </template>
+              
+              <div class="performance-stats">
+                <div class="stat-item">
+                  <span class="stat-label">检测FPS</span>
+                  <span class="stat-value">{{ performanceStats.fps }}</span>
+                </div>
+                <div class="stat-item">
+                  <span class="stat-label">平均延迟</span>
+                  <span class="stat-value">{{ performanceStats.avgProcessTime }}ms</span>
+                </div>
+                <div class="stat-item">
+                  <span class="stat-label">并发跳过</span>
+                  <span class="stat-value">{{ performanceStats.skippedFrames }}</span>
+                </div>
+                <div class="stat-item">
+                  <span class="stat-label">无变化跳过</span>
+                  <span class="stat-value">{{ performanceStats.motionSkippedFrames }}</span>
+                </div>
+                <div class="stat-item" v-if="aiSettings.soundDetection">
+                  <span class="stat-label">音量级别</span>
+                  <span class="stat-value">{{ performanceStats.audioLevel }}%</span>
+                </div>
+              </div>
+            </el-card>
+
             <!-- 实时告警 -->
             <el-card class="alerts-panel" shadow="never">
               <template #header>
@@ -220,7 +339,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { ElMessage, ElNotification } from 'element-plus'
 import {
   VideoCamera,
@@ -238,14 +357,15 @@ const isStreaming = ref(false)
 const aiAnalysisEnabled = ref(false)
 const selectedDeviceId = ref('')
 const videoDevices = ref([])
-const analysisInterval = ref(1000) // 分析间隔（毫秒）
+const analysisInterval = ref(300) // 分析间隔（毫秒）- 平衡性能与实时性，默认更快
 
 // AI设置
 const aiSettings = reactive({
   faceRecognition: true,
   objectDetection: true,
   behaviorAnalysis: true,
-  soundDetection: true
+  soundDetection: true,
+  realtimeMode: false  // 实时模式：更高的检测频率
 })
 
 // 检测结果和告警
@@ -257,6 +377,34 @@ let mediaStream = null
 let analysisTimer = null
 let canvasContext = null
 let cameraId = 'webcam_monitor'
+
+// 告警去重机制
+const alertCooldowns = new Map() // 存储各类型告警的冷却时间
+const ALERT_COOLDOWN = 5000 // 5秒冷却时间，避免频繁弹窗
+let isProcessingFrame = false // 防止并发处理帧
+
+// 性能优化相关
+let lastFrameData = null // 上一帧的图像数据，用于帧差检测
+let audioContext = null // 音频上下文，用于音量检测
+let audioAnalyser = null // 音频分析器
+let audioDataArray = null // 音频数据数组
+const MOTION_THRESHOLD = 0.015 // 帧差阈值，更敏感的检测
+const MAX_ACCEPTABLE_DELAY = 300 // 最大可接受延迟（毫秒）
+let consecutiveSlowFrames = 0 // 连续慢帧计数
+let currentImageScale = 1 // 当前图像缩放比例，用于坐标转换
+
+// 性能监控
+const performanceStats = reactive({
+  fps: 0,
+  avgProcessTime: 0,
+  processedFrames: 0,
+  skippedFrames: 0,
+  motionSkippedFrames: 0, // 因为无变化而跳过的帧
+  audioLevel: 0 // 当前音量级别
+})
+
+let frameProcessTimes = []
+let lastStatsUpdate = Date.now()
 
 // 获取可用摄像头设备
 const getVideoDevices = async () => {
@@ -270,6 +418,88 @@ const getVideoDevices = async () => {
     console.error('获取摄像头设备失败:', error)
     ElMessage.error('无法获取摄像头设备列表')
   }
+}
+
+// 初始化音频分析
+const initAudioAnalysis = async (stream) => {
+  try {
+    audioContext = new (window.AudioContext || window.webkitAudioContext)()
+    audioAnalyser = audioContext.createAnalyser()
+    audioAnalyser.fftSize = 256
+    
+    const source = audioContext.createMediaStreamSource(stream)
+    source.connect(audioAnalyser)
+    
+    audioDataArray = new Uint8Array(audioAnalyser.frequencyBinCount)
+    
+    // 开始音频监控
+    startAudioMonitoring()
+    
+  } catch (error) {
+    console.error('音频分析初始化失败:', error)
+  }
+}
+
+// 开始音频监控
+const startAudioMonitoring = () => {
+  const monitorAudio = () => {
+    if (!audioAnalyser || !audioDataArray) return
+    
+    audioAnalyser.getByteFrequencyData(audioDataArray)
+    
+    // 计算平均音量
+    const average = audioDataArray.reduce((sum, value) => sum + value, 0) / audioDataArray.length
+    performanceStats.audioLevel = Math.round(average / 255 * 100)
+    
+    // 检测异常音量
+    if (average > 100) { // 阈值可调整
+      const now = Date.now()
+      const alertKey = 'audio_volume_high'
+      
+      if (!alertCooldowns.has(alertKey) || now - alertCooldowns.get(alertKey) > ALERT_COOLDOWN) {
+        addAlert({
+          title: '🔊 检测到高音量',
+          description: `音量级别: ${performanceStats.audioLevel}%`,
+          type: 'warning'
+        })
+        
+        // 发送音频告警到AI服务
+        sendAudioAlertToAI(performanceStats.audioLevel, 'high_volume')
+        
+        alertCooldowns.set(alertKey, now)
+      }
+    }
+    
+    requestAnimationFrame(monitorAudio)
+  }
+  
+  monitorAudio()
+}
+
+// 超高效帧差检测 - 判断画面是否有显著变化
+const hasSignificantMotion = (currentImageData, lastImageData) => {
+  if (!lastImageData) return true // 第一帧总是发送
+  
+  const threshold = MOTION_THRESHOLD
+  let diffPixels = 0
+  const sampleCount = Math.min(500, Math.floor(currentImageData.length / 32)) // 限制采样数量
+  const step = Math.max(32, Math.floor(currentImageData.length / sampleCount))
+  
+  // 超级稀疏采样检测，大幅提高性能
+  for (let i = 0; i < currentImageData.length; i += step) {
+    if (i + 2 >= currentImageData.length || i + 2 >= lastImageData.length) break
+    
+    // 使用亮度差异检测（更高效）
+    const currentBrightness = (currentImageData[i] + currentImageData[i + 1] + currentImageData[i + 2]) / 3
+    const lastBrightness = (lastImageData[i] + lastImageData[i + 1] + lastImageData[i + 2]) / 3
+    
+    if (Math.abs(currentBrightness - lastBrightness) > 20) { // 亮度差异阈值
+      diffPixels++
+    }
+  }
+  
+  const motionRatio = diffPixels / sampleCount
+  return motionRatio > threshold
 }
 
 // 启动本地摄像头
@@ -288,6 +518,11 @@ const startLocalCamera = async () => {
     mediaStream = await navigator.mediaDevices.getUserMedia(constraints)
     videoElement.value.srcObject = mediaStream
     isStreaming.value = true
+
+    // 如果启用了声音检测，初始化音频分析
+    if (aiSettings.soundDetection && mediaStream.getAudioTracks().length > 0) {
+      await initAudioAnalysis(mediaStream)
+    }
 
     ElMessage.success('摄像头启动成功！')
     
@@ -319,6 +554,29 @@ const stopCamera = async () => {
     isStreaming.value = false
     aiAnalysisEnabled.value = false
     detectionResults.value = []
+    realtimeAlerts.value = []
+    
+    // 重置性能统计
+    performanceStats.fps = 0
+    performanceStats.avgProcessTime = 0
+    performanceStats.processedFrames = 0
+    performanceStats.skippedFrames = 0
+    performanceStats.motionSkippedFrames = 0
+    performanceStats.audioLevel = 0
+    frameProcessTimes = []
+    isProcessingFrame = false
+    
+    // 清理音频相关资源
+    if (audioContext) {
+      audioContext.close()
+      audioContext = null
+    }
+    audioAnalyser = null
+    audioDataArray = null
+    lastFrameData = null
+    
+    // 清除告警冷却时间
+    alertCooldowns.clear()
     
     // 清除画布
     if (canvasContext) {
@@ -366,6 +624,8 @@ const stopAIStream = async () => {
 
     if (response.ok) {
       aiAnalysisEnabled.value = false
+      // 停止AI分析时清除检测框
+      clearDetectionBoxes()
       ElMessage.info('AI分析已停止')
     }
   } catch (error) {
@@ -376,39 +636,130 @@ const stopAIStream = async () => {
 // 开始帧捕获和分析
 const startFrameCapture = () => {
   if (analysisTimer) {
-    clearInterval(analysisTimer)
+    clearTimeout(analysisTimer)
   }
 
-  analysisTimer = setInterval(async () => {
+
+
+  const scheduleNextCapture = () => {
+    if (!isStreaming.value || !aiAnalysisEnabled.value) return
+    
+    const interval = getDynamicInterval()
+    analysisTimer = setTimeout(async () => {
+      await captureAndAnalyze()
+      scheduleNextCapture()  // 递归调度下一次捕获
+    }, interval)
+  }
+
+  const captureAndAnalyze = async () => {
     if (!isStreaming.value || !aiAnalysisEnabled.value || !videoElement.value) {
       return
     }
 
+    // 防止并发处理，跳过正在处理的帧（实时模式下减少跳过）
+    if (isProcessingFrame) {
+      performanceStats.skippedFrames++
+      // 实时模式下允许更多并发，降低跳帧率
+      if (!aiSettings.realtimeMode) {
+        return
+      }
+      // 实时模式下只在延迟过高时才跳帧
+      if (performanceStats.avgProcessTime > 400) {
+        return
+      }
+    }
+
     try {
+      isProcessingFrame = true
+      
       // 捕获当前帧
       const canvas = document.createElement('canvas')
       const video = videoElement.value
-      canvas.width = video.videoWidth
-      canvas.height = video.videoHeight
+      
+      // 更激进的动态分辨率调整
+      let scale = 1
+      if (performanceStats.avgProcessTime > 400) {
+        scale = 0.3  // 超高延迟时使用极低分辨率
+        consecutiveSlowFrames++
+      } else if (performanceStats.avgProcessTime > 300) {
+        scale = 0.4  // 高延迟时使用很低分辨率
+        consecutiveSlowFrames++
+      } else if (performanceStats.avgProcessTime > 200) {
+        scale = 0.5  // 中延迟时使用低分辨率
+        consecutiveSlowFrames = Math.max(0, consecutiveSlowFrames - 1)
+      } else {
+        scale = performanceStats.avgProcessTime > 100 ? 0.7 : 0.8  // 正常情况
+        consecutiveSlowFrames = 0
+      }
+      
+      // 如果连续多帧都很慢，进一步降低质量
+      if (consecutiveSlowFrames > 3) {
+        scale = Math.max(0.2, scale * 0.8)
+      }
+      
+      // 保存当前缩放比例用于坐标转换
+      currentImageScale = scale
+      
+      canvas.width = Math.floor(video.videoWidth * scale)
+      canvas.height = Math.floor(video.videoHeight * scale)
       
       const ctx = canvas.getContext('2d')
-      ctx.drawImage(video, 0, 0)
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+      
+      // 获取当前帧数据用于帧差检测（使用降采样提高速度）
+      const sampleWidth = Math.max(50, Math.floor(canvas.width / 8))
+      const sampleHeight = Math.max(50, Math.floor(canvas.height / 8))
+      const currentImageData = ctx.getImageData(0, 0, sampleWidth, sampleHeight).data
+      
+      // 检测画面变化（实时模式下降低跳帧概率）
+      if (!aiSettings.realtimeMode && !hasSignificantMotion(currentImageData, lastFrameData)) {
+        performanceStats.motionSkippedFrames++
+        isProcessingFrame = false
+        return // 画面无显著变化，跳过此帧（实时模式下不跳帧）
+      }
+      
+      // 保存当前帧数据作为下一次比较的基准
+      lastFrameData = new Uint8ClampedArray(currentImageData)
+      
+      // 极致的画质优化 - 根据延迟激进调整
+      let quality = 0.4  // 默认较低画质
+      if (performanceStats.avgProcessTime > 500) {
+        quality = 0.2  // 超高延迟时使用极低画质
+      } else if (performanceStats.avgProcessTime > 350) {
+        quality = 0.3  // 高延迟时使用很低画质
+      } else if (performanceStats.avgProcessTime > 200) {
+        quality = 0.4  // 中延迟时使用低画质
+      } else {
+        quality = 0.5  // 正常情况稍微提高画质
+      }
       
       // 转换为blob并发送到AI服务
       canvas.toBlob(async (blob) => {
         if (blob) {
-          await sendFrameToAI(blob)
+          try {
+            await sendFrameToAI(blob)
+          } finally {
+            isProcessingFrame = false
+          }
+        } else {
+          isProcessingFrame = false
         }
-      }, 'image/jpeg', 0.8)
+      }, 'image/jpeg', quality)
       
     } catch (error) {
       console.error('帧捕获失败:', error)
+      isProcessingFrame = false
     }
-  }, analysisInterval.value)
+  }
+
+  // 开始第一次捕获
+  scheduleNextCapture()
 }
 
 // 发送帧到AI服务进行分析
 const sendFrameToAI = async (frameBlob) => {
+  const startTime = performance.now()
+  
   try {
     const formData = new FormData()
     formData.append('frame', frameBlob, 'frame.jpg')
@@ -417,22 +768,70 @@ const sendFrameToAI = async (frameBlob) => {
     formData.append('enable_object_detection', aiSettings.objectDetection)
     formData.append('enable_behavior_detection', aiSettings.behaviorAnalysis)
 
+    // 创建AbortController来控制请求超时
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 3000) // 3秒超时
+
     const response = await fetch('http://localhost:8001/frame/analyze/', {
       method: 'POST',
-      body: formData
+      body: formData,
+      signal: controller.signal
     })
+
+    clearTimeout(timeoutId)
 
     if (response.ok) {
       const result = await response.json()
       if (result.status === 'success') {
         processAIResults(result.results)
+        
+        // 更新性能统计
+        const processTime = performance.now() - startTime
+        updatePerformanceStats(processTime, true)
       }
+    } else {
+      console.warn('AI服务响应异常:', response.status)
     }
     
   } catch (error) {
-    console.error('发送帧到AI服务失败:', error)
-    // 如果AI服务不可用，回退到模拟结果
-    simulateAIResults()
+    if (error.name === 'AbortError') {
+      console.warn('AI请求超时，跳过此帧')
+    } else {
+      console.error('发送帧到AI服务失败:', error)
+    }
+    // 更新性能统计（失败的请求）
+    const processTime = performance.now() - startTime
+    updatePerformanceStats(processTime, false)
+  }
+}
+
+// 更新性能统计
+const updatePerformanceStats = (processTime, success) => {
+  if (success) {
+    performanceStats.processedFrames++
+    frameProcessTimes.push(processTime)
+    
+    // 保持最近100次的处理时间
+    if (frameProcessTimes.length > 100) {
+      frameProcessTimes.shift()
+    }
+    
+    // 计算平均处理时间
+    const avgTime = frameProcessTimes.reduce((a, b) => a + b, 0) / frameProcessTimes.length
+    performanceStats.avgProcessTime = Math.round(avgTime)
+  }
+  
+  // 每5秒更新一次FPS
+  const now = Date.now()
+  if (now - lastStatsUpdate > 5000) {
+    const timeDiff = (now - lastStatsUpdate) / 1000
+    performanceStats.fps = Math.round(performanceStats.processedFrames / timeDiff * 10) / 10
+    
+    // 重置计数器
+    performanceStats.processedFrames = 0
+    performanceStats.skippedFrames = 0
+    performanceStats.motionSkippedFrames = 0
+    lastStatsUpdate = now
   }
 }
 
@@ -465,10 +864,9 @@ const processAIResults = (results) => {
     })
   }
   
-  if (detections.length > 0) {
-    updateDetectionResults(detections)
-    drawDetectionResults(detections)
-  }
+  // 总是更新检测结果，即使为空（这样可以清除之前的检测框）
+  updateDetectionResults(detections)
+  drawDetectionResults(detections)
 }
 
 // 获取检测标签
@@ -547,41 +945,181 @@ const simulateAIResults = () => {
   }
 }
 
-// 更新检测结果列表
+// 更新检测结果列表 - 实时替换而非累积
 const updateDetectionResults = (results) => {
-  detectionResults.value = results.concat(detectionResults.value.slice(0, 19)) // 保持最多20条记录
+  // 只保留当前帧的检测结果，确保实时性
+  detectionResults.value = results.slice(0, 20) // 仅显示最新的20个检测结果
 }
 
 // 在视频上绘制检测结果
 const drawDetectionResults = (results) => {
-  if (!canvasContext || !overlayCanvas.value) return
+  if (!canvasContext || !overlayCanvas.value || !videoElement.value) {
+    console.log('绘制条件不满足:', { canvasContext, overlayCanvas: overlayCanvas.value, videoElement: videoElement.value })
+    return
+  }
 
+  // 清除之前的检测框
   canvasContext.clearRect(0, 0, overlayCanvas.value.width, overlayCanvas.value.height)
 
-  results.forEach(result => {
-    if (result.bbox) {
+  // 获取各种尺寸信息
+  const canvasWidth = overlayCanvas.value.width
+  const canvasHeight = overlayCanvas.value.height
+  const videoWidth = videoElement.value.videoWidth || canvasWidth
+  const videoHeight = videoElement.value.videoHeight || canvasHeight
+  
+  console.log('绘制参数:', { 
+    canvasWidth, canvasHeight, 
+    videoWidth, videoHeight, 
+    currentImageScale, 
+    resultCount: results.length 
+  })
+
+  results.forEach((result, index) => {
+    if (result.bbox && result.bbox.length === 4) {
+      console.log(`绘制检测框 ${index}:`, result)
+      
+      // AI返回的坐标是基于缩放后图像的，需要直接转换到Canvas显示坐标
       const [x1, y1, x2, y2] = result.bbox
-      const width = x2 - x1
-      const height = y2 - y1
+      
+      // 计算正确的转换比例：
+      // AI坐标基于: (videoWidth * currentImageScale) x (videoHeight * currentImageScale)
+      // Canvas显示基于: canvasWidth x canvasHeight
+      const scaledVideoWidth = videoWidth * currentImageScale
+      const scaledVideoHeight = videoHeight * currentImageScale
+      
+      const scaleX = canvasWidth / scaledVideoWidth
+      const scaleY = canvasHeight / scaledVideoHeight
+      
+      const displayX1 = x1 * scaleX
+      const displayY1 = y1 * scaleY
+      const displayX2 = x2 * scaleX
+      const displayY2 = y2 * scaleY
+      
+      const width = displayX2 - displayX1
+      const height = displayY2 - displayY1
+
+      console.log('坐标转换:', {
+        aiCoords: [x1, y1, x2, y2],
+        scaledVideoSize: [scaledVideoWidth, scaledVideoHeight],
+        canvasSize: [canvasWidth, canvasHeight],
+        scaleRatio: [scaleX, scaleY],
+        displayCoords: [displayX1, displayY1, displayX2, displayY2],
+        boxSize: [width, height],
+        currentImageScale: currentImageScale
+      })
 
       // 绘制检测框
       canvasContext.strokeStyle = getDetectionColor(result.type)
-      canvasContext.lineWidth = 3
-      canvasContext.strokeRect(x1, y1, width, height)
+      canvasContext.lineWidth = 3 // 加粗线条，更容易看见
+      canvasContext.strokeRect(displayX1, displayY1, width, height)
 
       // 绘制标签背景
       const label = `${result.label} ${(result.confidence * 100).toFixed(1)}%`
-      canvasContext.font = '14px Arial'
-      const textWidth = canvasContext.measureText(label).width
+      canvasContext.font = 'bold 14px Arial' // 加粗字体
+      const textMetrics = canvasContext.measureText(label)
+      const textWidth = textMetrics.width
+      const textHeight = 18
+      
+      // 确保标签不会超出画布边界
+      const labelX = Math.max(0, Math.min(displayX1, canvasWidth - textWidth - 10))
+      const labelY = Math.max(textHeight, displayY1)
       
       canvasContext.fillStyle = getDetectionColor(result.type)
-      canvasContext.fillRect(x1, y1 - 25, textWidth + 10, 25)
+      canvasContext.fillRect(labelX, labelY - textHeight, textWidth + 8, textHeight)
 
       // 绘制标签文字
       canvasContext.fillStyle = 'white'
-      canvasContext.fillText(label, x1 + 5, y1 - 8)
+      canvasContext.fillText(label, labelX + 4, labelY - 4)
+      
+      // 绘制中心点（调试用）
+      canvasContext.fillStyle = getDetectionColor(result.type)
+      canvasContext.fillRect(displayX1 + width/2 - 2, displayY1 + height/2 - 2, 4, 4)
+    } else {
+      console.log(`检测框 ${index} 数据无效:`, result.bbox)
     }
   })
+  
+  console.log(`完成绘制 ${results.length} 个检测框`)
+}
+
+// 测试检测框显示
+const testDetectionBoxes = () => {
+  if (!isStreaming.value) {
+    ElMessage.warning('请先启动摄像头')
+    return
+  }
+  
+  // 获取当前视频尺寸，生成相对应的测试坐标
+  const video = videoElement.value
+  if (!video) return
+  
+  const videoWidth = video.videoWidth || 640
+  const videoHeight = video.videoHeight || 480
+  
+  // 测试坐标基于当前缩放比例的图像尺寸
+  const scaledWidth = videoWidth * currentImageScale
+  const scaledHeight = videoHeight * currentImageScale
+  
+  const testResults = [
+    {
+      type: 'person',
+      label: '测试人员',
+      confidence: 0.95,
+      bbox: [
+        scaledWidth * 0.1,   // 左上X (10%)
+        scaledHeight * 0.1,  // 左上Y (10%)
+        scaledWidth * 0.4,   // 右下X (40%)
+        scaledHeight * 0.7   // 右下Y (70%)
+      ],
+      timestamp: new Date()
+    },
+    {
+      type: 'face', 
+      label: '测试人脸',
+      confidence: 0.87,
+      bbox: [
+        scaledWidth * 0.15,  // 左上X (15%)
+        scaledHeight * 0.15, // 左上Y (15%)
+        scaledWidth * 0.35,  // 右下X (35%)
+        scaledHeight * 0.4   // 右下Y (40%)
+      ],
+      timestamp: new Date()
+    },
+    {
+      type: 'unknown_face',
+      label: '未知人脸',
+      confidence: 0.76,
+      bbox: [
+        scaledWidth * 0.6,   // 左上X (60%)
+        scaledHeight * 0.2,  // 左上Y (20%)
+        scaledWidth * 0.8,   // 右下X (80%)
+        scaledHeight * 0.5   // 右下Y (50%)
+      ],
+      timestamp: new Date()
+    }
+  ]
+  
+  console.log('测试检测框参数:', {
+    videoSize: [videoWidth, videoHeight],
+    scaledSize: [scaledWidth, scaledHeight],
+    currentImageScale,
+    testResults
+  })
+  
+  drawDetectionResults(testResults)
+  updateDetectionResults(testResults)
+  
+  ElMessage.success('测试检测框已显示')
+}
+
+// 清除检测框
+const clearDetectionBoxes = () => {
+  if (!canvasContext || !overlayCanvas.value) return
+  
+  canvasContext.clearRect(0, 0, overlayCanvas.value.width, overlayCanvas.value.height)
+  detectionResults.value = []
+  console.log('已清除所有检测框')
+  ElMessage.info('检测框已清除')
 }
 
 // 获取检测类型对应的颜色
@@ -606,11 +1144,26 @@ const getDetectionIcon = (type) => {
   return icons[type] || '🔍'
 }
 
-// 添加告警
+// 添加告警（带去重机制）
 const addAlert = (alert) => {
+  const now = Date.now()
+  const alertKey = `${alert.type}_${alert.title}` // 基于类型和标题创建唯一key
+  
+  // 检查是否在冷却期内
+  if (alertCooldowns.has(alertKey)) {
+    const lastTime = alertCooldowns.get(alertKey)
+    if (now - lastTime < ALERT_COOLDOWN) {
+      return // 在冷却期内，跳过此次告警
+    }
+  }
+  
+  // 更新冷却时间
+  alertCooldowns.set(alertKey, now)
+  
+  // 添加到告警列表
   realtimeAlerts.value.unshift({
     ...alert,
-    id: Date.now()
+    id: now
   })
   
   // 限制告警数量
@@ -618,18 +1171,46 @@ const addAlert = (alert) => {
     realtimeAlerts.value = realtimeAlerts.value.slice(0, 10)
   }
   
-  // 显示桌面通知
-  ElNotification({
-    title: alert.title,
-    message: alert.description,
-    type: alert.type,
-    duration: 3000
-  })
+  // 显示桌面通知（仅重要告警）
+  if (alert.type === 'warning' || alert.type === 'error') {
+    ElNotification({
+      title: alert.title,
+      message: alert.description,
+      type: alert.type,
+      duration: 4000,
+      showClose: true
+    })
+  }
 }
 
 // 移除告警
 const removeAlert = (index) => {
   realtimeAlerts.value.splice(index, 1)
+}
+
+// 发送音频告警到AI服务
+const sendAudioAlertToAI = async (audioLevel, eventType) => {
+  try {
+    const response = await fetch('http://localhost:8001/audio/frontend/alert/', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        camera_id: cameraId,
+        audio_level: audioLevel,
+        event_type: eventType,
+        timestamp: new Date().toISOString()
+      })
+    })
+    
+    const result = await response.json()
+    if (result.status !== 'success') {
+      console.error('发送音频告警失败:', result.message)
+    }
+  } catch (error) {
+    console.error('发送音频告警到AI服务失败:', error)
+  }
 }
 
 // 切换AI分析
@@ -660,21 +1241,114 @@ const updateAnalysisInterval = () => {
   }
 }
 
+// 性能优化建议
+const getPerformanceAdvice = () => {
+  const delay = performanceStats.avgProcessTime
+  if (delay > 500) {
+    return {
+      level: 'error',
+      title: '延迟过高',
+      advice: '建议降低检测频率或关闭人脸识别功能'
+    }
+  } else if (delay > 300) {
+    return {
+      level: 'warning', 
+      title: '延迟较高',
+      advice: '系统已自动降低画质和分辨率'
+    }
+  } else if (delay > 150) {
+    return {
+      level: 'info',
+      title: '性能良好',
+      advice: '系统运行正常，已启用智能优化'
+    }
+  } else {
+    return {
+      level: 'success',
+      title: '性能优秀',
+      advice: '系统响应迅速，可适当提高检测频率'
+    }
+  }
+}
+
 // 视频加载完成
 const onVideoLoaded = () => {
   nextTick(() => {
     if (overlayCanvas.value && videoElement.value) {
-      overlayCanvas.value.width = videoElement.value.videoWidth
-      overlayCanvas.value.height = videoElement.value.videoHeight
+      // 获取视频元素的实际显示尺寸
+      const rect = videoElement.value.getBoundingClientRect()
+      overlayCanvas.value.width = rect.width
+      overlayCanvas.value.height = rect.height
       canvasContext = overlayCanvas.value.getContext('2d')
+      
+      // 监听窗口大小变化，动态调整canvas尺寸
+      window.addEventListener('resize', resizeCanvas)
     }
   })
+}
+
+// 调整Canvas尺寸以匹配视频显示尺寸
+const resizeCanvas = () => {
+  if (overlayCanvas.value && videoElement.value) {
+    const rect = videoElement.value.getBoundingClientRect()
+    overlayCanvas.value.width = rect.width
+    overlayCanvas.value.height = rect.height
+  }
 }
 
 // 格式化时间
 const formatTime = (date) => {
   return new Date(date).toLocaleTimeString()
 }
+
+// 动态调整检测间隔以优化性能（全局函数）
+const getDynamicInterval = () => {
+  // 实时模式优先级更高
+  if (aiSettings.realtimeMode) {
+    if (performanceStats.avgProcessTime > 500) {
+      return 150  // 实时模式下即使高延迟也保持较高频率
+    } else if (performanceStats.avgProcessTime > 300) {
+      return 100  // 实时模式中延迟
+    } else {
+      return 66   // 实时模式正常情况，约15fps
+    }
+  }
+  
+  // 非实时模式（原有逻辑，但略微优化）
+  if (performanceStats.avgProcessTime > 400) {
+    return 800   // 高延迟时降低频率（从1000ms优化到800ms）
+  } else if (performanceStats.avgProcessTime > 300) {
+    return 600   // 中高延迟
+  } else if (performanceStats.avgProcessTime > 200) {
+    return 400   // 中延迟（从600ms优化到400ms）
+  } else {
+    return Math.max(analysisInterval.value, 200)  // 正常情况使用用户设置或最小200ms
+  }
+}
+
+// 实时模式状态监控
+const logRealtimeStatus = () => {
+  if (aiSettings.realtimeMode) {
+    console.log(`🚀 实时模式状态:`, {
+      interval: getDynamicInterval(),
+      avgProcessTime: performanceStats.avgProcessTime,
+      fps: performanceStats.fps,
+      motionSkippedFrames: performanceStats.motionSkippedFrames,
+      realtimeMode: aiSettings.realtimeMode
+    })
+  }
+}
+
+// 监听实时模式变化
+watch(() => aiSettings.realtimeMode, (newVal) => {
+  console.log(`实时模式${newVal ? '开启' : '关闭'}`)
+  if (newVal) {
+    ElMessage.success('🚀 实时模式已开启，检测频率提升至~15FPS')
+    setInterval(logRealtimeStatus, 3000) // 每3秒打印一次状态
+  } else {
+    ElMessage.info('💡 已切换至节能模式，智能调频优化')
+  }
+})
 
 // 生命周期
 onMounted(async () => {
@@ -683,6 +1357,8 @@ onMounted(async () => {
 
 onUnmounted(() => {
   stopCamera()
+  // 移除窗口大小变化监听器
+  window.removeEventListener('resize', resizeCanvas)
 })
 </script>
 
@@ -754,6 +1430,7 @@ onUnmounted(() => {
 
 .control-panel,
 .results-panel,
+.performance-panel,
 .alerts-panel {
   margin-bottom: 20px;
 }
@@ -766,6 +1443,41 @@ onUnmounted(() => {
 
 .analysis-settings {
   padding: 10px 0;
+}
+
+.frequency-hint {
+  margin-top: 5px;
+  text-align: center;
+}
+
+.frequency-hint small {
+  color: #909399;
+  font-size: 11px;
+}
+
+.performance-stats {
+  display: flex;
+  justify-content: space-between;
+  gap: 15px;
+}
+
+.stat-item {
+  text-align: center;
+  flex: 1;
+}
+
+.stat-label {
+  display: block;
+  font-size: 12px;
+  color: #909399;
+  margin-bottom: 5px;
+}
+
+.stat-value {
+  display: block;
+  font-size: 18px;
+  font-weight: 600;
+  color: #409EFF;
 }
 
 .detection-list,
@@ -835,5 +1547,115 @@ onUnmounted(() => {
 
 .badge {
   margin-left: 10px;
+}
+
+/* 性能优化状态显示 */
+.optimization-status {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.opt-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #67c23a;
+}
+
+.opt-item .el-icon {
+  color: #67c23a;
+}
+
+/* 音频监控显示 */
+.audio-monitor {
+  width: 100%;
+}
+
+.audio-level-display {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.audio-text {
+  font-size: 13px;
+  color: #606266;
+}
+
+.audio-bar {
+  width: 100%;
+  height: 8px;
+  background-color: #e4e7ed;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.audio-level {
+  height: 100%;
+  border-radius: 4px;
+  transition: all 0.3s ease;
+  min-width: 2px;
+}
+
+/* 性能监控面板增强 */
+.performance-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
+  gap: 15px;
+}
+
+.stat-item {
+  background-color: #f8f9fa;
+  padding: 10px 8px;
+  border-radius: 6px;
+  text-align: center;
+  border: 1px solid #e4e7ed;
+}
+
+.stat-item:hover {
+  border-color: #409eff;
+  box-shadow: 0 2px 8px rgba(64, 158, 255, 0.1);
+}
+
+/* 性能建议样式 */
+.performance-advice {
+  margin-top: 10px;
+}
+
+.performance-advice .el-alert {
+  border-radius: 6px;
+}
+
+/* 优化状态动画 */
+.opt-item {
+  transition: all 0.3s ease;
+}
+
+.opt-item:hover {
+  transform: translateX(2px);
+}
+
+/* 延迟状态颜色指示 */
+.el-text {
+  font-weight: 500;
+}
+
+/* 测试控制面板 */
+.test-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.test-controls .el-button {
+  width: 100%;
+}
+
+.test-controls .el-text {
+  font-size: 11px;
+  color: #909399;
 }
 </style> 
