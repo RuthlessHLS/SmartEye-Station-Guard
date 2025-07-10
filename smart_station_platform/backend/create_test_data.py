@@ -9,10 +9,10 @@ import django
 from datetime import datetime, timedelta
 
 # 设置Django环境
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'smart_station.test_settings')
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'smart_station.settings')
 django.setup()
 
-from django.contrib.auth.models import User
+from users.models import UserProfile
 from camera_management.models import Camera
 from alerts.models import Alert
 
@@ -21,17 +21,18 @@ def create_test_data():
     print("🚀 开始创建测试数据...")
     
     # 1. 创建测试用户
-    if not User.objects.filter(username='testuser').exists():
-        user = User.objects.create_user(
+    if not UserProfile.objects.filter(username='testuser').exists():
+        user = UserProfile.objects.create_user(
             username='testuser',
             email='test@example.com',
             password='testpass123',
-            first_name='测试',
-            last_name='用户'
+            nickname='测试用户',
+            phone_number='13800138000',
+            gender=1
         )
         print(f"✅ 创建测试用户: {user.username}")
     else:
-        user = User.objects.get(username='testuser')
+        user = UserProfile.objects.get(username='testuser')
         print(f"✅ 使用现有用户: {user.username}")
     
     # 2. 创建测试摄像头
@@ -47,6 +48,12 @@ def create_test_data():
             'location_desc': '大厅入口监控点',
             'is_active': True,
             'rtsp_url': 'rtsp://192.168.1.101:554/stream1'
+        },
+        {
+            'name': 'hall_camera',
+            'location_desc': '大厅中央监控点',
+            'is_active': True,
+            'rtsp_url': 'rtsp://192.168.1.102:554/stream1'
         }
     ]
     
@@ -94,6 +101,16 @@ def create_test_data():
             'status': 'resolved',
             'handler': user,
             'processing_notes': '已确认为误报，行李箱掉落'
+        },
+        {
+            'camera': Camera.objects.get(name='hall_camera'),
+            'event_type': 'abnormal_sound_scream',
+            'timestamp': datetime.now() - timedelta(minutes=15),
+            'location': {'zone': 'hall', 'coordinates': [300, 400]},
+            'confidence': 0.89,
+            'image_snapshot_url': 'http://example.com/test_image4.jpg',
+            'video_clip_url': 'http://example.com/test_video4.mp4',
+            'status': 'pending'
         }
     ]
     
