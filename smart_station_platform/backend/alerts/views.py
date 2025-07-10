@@ -8,6 +8,7 @@ from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from django.db.models import Q  # 用于复杂查询
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.pagination import PageNumberPagination
+from django.contrib.auth import get_user_model
 
 from .models import Alert
 from .serializers import (
@@ -22,6 +23,8 @@ from asgiref.sync import async_to_sync
 import json
 from datetime import datetime, timedelta
 from drf_yasg.utils import swagger_auto_schema
+import logging
+logger = logging.getLogger(__name__)
 
 
 class AlertPagination(PageNumberPagination):
@@ -44,7 +47,7 @@ class AlertListView(generics.ListAPIView):
     
     # 支持的筛选字段
     filterset_fields = {
-        'event_type': ['exact', 'in'],
+        # 'event_type': ['exact', 'in'],  # 移除或注释掉
         'status': ['exact', 'in'],
         'camera': ['exact'],
         'confidence': ['gte', 'lte'],
@@ -60,25 +63,24 @@ class AlertListView(generics.ListAPIView):
 
     def get_queryset(self):
         queryset = super().get_queryset()
-        
+        event_type = self.request.query_params.get('event_type')
+        if event_type:
+            queryset = queryset.filter(event_type=event_type)
         # 自定义时间范围筛选
         start_time_str = self.request.query_params.get('start_time')
         end_time_str = self.request.query_params.get('end_time')
-        
         if start_time_str:
             try:
                 start_time = datetime.fromisoformat(start_time_str.replace('Z', '+00:00'))
                 queryset = queryset.filter(timestamp__gte=start_time)
             except ValueError:
                 pass
-                
         if end_time_str:
             try:
                 end_time = datetime.fromisoformat(end_time_str.replace('Z', '+00:00'))
                 queryset = queryset.filter(timestamp__lte=end_time)
             except ValueError:
                 pass
-        
         return queryset.select_related('camera', 'handler')
 
 
@@ -108,7 +110,7 @@ class AlertHandleView(generics.RetrieveUpdateAPIView):
         return super().get_queryset().select_related('camera', 'handler')
 
     def perform_update(self, serializer):
-        # 自动设置处理人为当前用户
+        print("=== perform_update called ===")
         alert = serializer.save(handler=self.request.user)
         
         # 发送WebSocket通知告警状态更新
@@ -199,6 +201,7 @@ class AIResultReceiveView(APIView):
 
     @swagger_auto_schema(request_body=AIResultReceiveSerializer)
     def post(self, request, *args, **kwargs):
+        logger.info(f"收到告警数据: {request.data}")
         serializer = AIResultReceiveSerializer(data=request.data)
         if serializer.is_valid():
             try:

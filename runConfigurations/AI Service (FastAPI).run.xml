@@ -8,8 +8,8 @@
       <env name="PYTHONUNBUFFERED" value="1" />
     </envs>
     <option name="SDK_HOME" value="" />
-    <option name="SDK_NAME" value="G:\anaconda\envs\smart_station_ai" />
-    <option name="WORKING_DIRECTORY" value="G:\Web\SmartEye-Station-Guard\smart_station_platform\ai_service" />
+    <option name="SDK_NAME" value="D:\ANACONDA\envs\smart_station_ai" />
+    <option name="WORKING_DIRECTORY" value="D:\SmartEye-Station-Guard\smart_station_platform\ai_service" />
     <option name="IS_MODULE_SDK" value="false" />
     <option name="ADD_CONTENT_ROOTS" value="true" />
     <option name="ADD_SOURCE_ROOTS" value="true" />
