@@ -88,9 +88,45 @@ class FaceRecognizer:
         """
         results = []
 
-        # 检测人脸位置
-        face_locations = face_recognition.face_locations(frame)
+        # 🎯 优化人脸检测：提高检测灵敏度和小人脸检测能力
+        # 尝试不同的检测模型和参数组合
+        face_locations = []
+        
+        # 方法1：使用CNN模型 (更准确但较慢)
+        try:
+            face_locations = face_recognition.face_locations(frame, model="cnn", number_of_times_to_upsample=1)
+            if face_locations:
+                print(f"🎯 CNN模型检测到 {len(face_locations)} 个人脸")
+        except:
+            pass
+        
+        # 方法2：如果CNN没检测到，使用HOG模型 (更快但可能漏检)
         if not face_locations:
+            face_locations = face_recognition.face_locations(frame, model="hog", number_of_times_to_upsample=2)
+            if face_locations:
+                print(f"🎯 HOG模型检测到 {len(face_locations)} 个人脸")
+        
+        # 方法3：如果还是没有，尝试缩放图像再检测
+        if not face_locations and frame.shape[0] > 480:
+            # 对于大图像，先缩小再检测可能更有效
+            scale_factor = 480 / frame.shape[0]
+            small_frame = cv2.resize(frame, None, fx=scale_factor, fy=scale_factor)
+            small_face_locations = face_recognition.face_locations(small_frame, model="hog")
+            
+            # 将小图上的坐标转换回原图
+            face_locations = []
+            for (top, right, bottom, left) in small_face_locations:
+                face_locations.append((
+                    int(top / scale_factor),
+                    int(right / scale_factor), 
+                    int(bottom / scale_factor),
+                    int(left / scale_factor)
+                ))
+            if face_locations:
+                print(f"🎯 缩放检测到 {len(face_locations)} 个人脸")
+        
+        if not face_locations:
+            print("⚠️ 未检测到任何人脸")
             return results
             
         # 提取人脸特征
@@ -132,61 +168,49 @@ class FaceRecognizer:
                 # 选择最佳匹配作为识别结果
                 best_name, best_distance, avg_distance = best_matches[0]
                 
-                # 使用更严格的多重判断标准来确定是否为已知人员：
+                # 🎯 优化后的识别判断：更灵敏但仍准确
                 
                 # 1. 基础阈值检查：最佳匹配必须小于基础阈值
                 passes_base_threshold = best_distance <= tolerance
                 
-                # 2. 平均距离检查：平均距离不能太高，说明整体相似度要足够
-                passes_avg_threshold = avg_distance <= tolerance * 1.15
-                
-                # 3. 差异度检查：如果有其他候选人，必须与第二候选人有显著差距
+                # 2. 简化的差异度检查：如果有其他候选人，确保有一定差距
                 if len(best_matches) > 1:
                     second_best_distance = best_matches[1][1]
                     distance_gap = (second_best_distance - best_distance) / best_distance
-                    passes_distinction = distance_gap > 0.2  # 要求至少20%的差距
+                    passes_distinction = distance_gap > 0.15  # 降低差距要求从20%到15%
                 else:
                     passes_distinction = True
                 
-                # 4. 稳定性检查：最佳匹配与平均值不能差太多
-                stability_ratio = best_distance / avg_distance
-                passes_stability = stability_ratio > 0.7  # 最佳值不能比平均值好太多
+                # 3. 适中的绝对阈值检查：放宽硬性上限
+                passes_absolute = best_distance <= 0.65  # 放宽从0.5到0.65
                 
-                # 5. 绝对阈值检查：即使通过了相对比较，也不能超过最大允许阈值
-                passes_absolute = best_distance <= 0.5  # 硬性上限
+                # 🔥 新增：高置信度快速通道 - 如果距离很小，直接通过
+                is_high_confidence = best_distance <= 0.35
                 
-                # 综合所有判断条件
+                # 综合判断：高置信度直接通过，否则需要通过基础检查
                 is_confident = (
-                    passes_base_threshold and
-                    passes_avg_threshold and
-                    passes_distinction and
-                    passes_stability and
-                    passes_absolute
+                    is_high_confidence or  # 高置信度快速通道
+                    (passes_base_threshold and passes_distinction and passes_absolute)
                 )
                 
                 if is_confident:
                     identity = {"name": best_name, "known": True}
                     print(f"  ✅ 识别为: {best_name}")
-                    print(f"    置信度检查:")
-                    print(f"    - 基础阈值: {'通过' if passes_base_threshold else '未通过'}")
-                    print(f"    - 平均距离: {'通过' if passes_avg_threshold else '未通过'}")
-                    print(f"    - 差异程度: {'通过' if passes_distinction else '未通过'}")
-                    print(f"    - 匹配稳定性: {'通过' if passes_stability else '未通过'}")
-                    print(f"    - 绝对阈值: {'通过' if passes_absolute else '未通过'}")
+                    if is_high_confidence:
+                        print(f"    🚀 高置信度快速通道: {best_distance:.3f} ≤ 0.35")
+                    else:
+                        print(f"    📊 标准检查通过:")
+                        print(f"    - 基础阈值: {'✓' if passes_base_threshold else '✗'} ({best_distance:.3f} vs {tolerance})")
+                        print(f"    - 差异程度: {'✓' if passes_distinction else '✗'}")
+                        print(f"    - 绝对阈值: {'✓' if passes_absolute else '✗'} ({best_distance:.3f} vs 0.65)")
                 else:
                     identity = {"name": "unknown", "known": False}
-                    print(f"  ❌ 未知人员")
-                    print(f"    未通过项:")
-                    if not passes_base_threshold:
-                        print(f"    - 基础阈值检查未通过 ({best_distance:.3f} > {tolerance})")
-                    if not passes_avg_threshold:
-                        print(f"    - 平均距离检查未通过 ({avg_distance:.3f} > {tolerance * 1.15:.3f})")
-                    if not passes_distinction and len(best_matches) > 1:
-                        print(f"    - 与其他候选人差异不够明显 (差距率: {distance_gap:.1%})")
-                    if not passes_stability:
-                        print(f"    - 匹配稳定性检查未通过 (稳定率: {stability_ratio:.1%})")
-                    if not passes_absolute:
-                        print(f"    - 超出绝对阈值限制 ({best_distance:.3f} > 0.5)")
+                    print(f"  ❌ 未知人员 (距离: {best_distance:.3f})")
+                    print(f"    🔍 检查结果:")
+                    print(f"    - 高置信度: {'✗' if not is_high_confidence else '✓'} ({best_distance:.3f} > 0.35)")
+                    print(f"    - 基础阈值: {'✗' if not passes_base_threshold else '✓'} ({best_distance:.3f} vs {tolerance})")
+                    print(f"    - 差异程度: {'✗' if not passes_distinction else '✓'}")
+                    print(f"    - 绝对阈值: {'✗' if not passes_absolute else '✓'} ({best_distance:.3f} vs 0.65)")
             else:
                 identity = {"name": "unknown", "known": False}
                 print(f"  ❌ 未知人员")
