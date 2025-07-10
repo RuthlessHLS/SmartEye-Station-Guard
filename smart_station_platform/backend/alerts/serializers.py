@@ -70,9 +70,9 @@ class AlertCreateSerializer(serializers.ModelSerializer):
 class AlertHandleSerializer(serializers.ModelSerializer):
     class Meta:
         model = Alert
-        # 只允许更新处理相关的字段
-        fields = ['status', 'processing_notes']
-        
+        # 允许更新处理相关的字段
+        fields = ['status', 'processing_notes', 'handler']  # 加上 handler
+    
     def validate_status(self, value):
         """验证状态值是否有效"""
         valid_statuses = [choice[0] for choice in Alert.STATUS_CHOICES]
