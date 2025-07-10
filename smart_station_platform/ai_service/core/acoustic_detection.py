@@ -1,176 +1,173 @@
 # 文件: ai_service/core/acoustic_detection.py
 # 描述: 声学事件检测器，用于分析音频流中的异常声音。
-from typing import Optional, Dict
-import sounddevice as sd
 import numpy as np
-import queue
-from typing import Callable, Optional
-from moviepy.editor import VideoFileClip
-from pydub import AudioSegment
-import io
-import wave
-import threading
-import time
+import librosa
+import soundfile as sf
+import logging
+from datetime import datetime, timedelta
+import asyncio
+from typing import Optional, Dict, List
 
+logger = logging.getLogger(__name__)
 
-class AcousticDetector:
-    def __init__(self, device_index: Optional[int] = None, sample_rate: int = 44100, block_size: int = 1024):
-        """
-        初始化声学事件检测器。
-
-        Args:
-            device_index (Optional[int]): 要使用的麦克风设备索引。如果为None，则使用默认输入设备。
-            sample_rate (int): 采样率 (Hz)。
-            block_size (int): 每次读取的音频帧大小。
-        """
-        print("正在初始化声学事件检测器...")
-        self.device_index = device_index
-        self.sample_rate = sample_rate
-        self.block_size = block_size
-        self.stream = None
+class AcousticEventDetector:
+    def __init__(self, 
+                 confidence_threshold: float = 0.75,  # 置信度阈值
+                 detection_interval: float = 5.0,     # 检测间隔（秒）
+                 event_cooldown: float = 30.0):       # 同类事件冷却时间（秒）
         self.is_running = False
-        self.video_audio_thread = None
-        self.stop_video_processing = False
-
-        # 创建一个队列来在线程间传递音频数据
-        self.audio_queue = queue.Queue()
-
-    def process_video_audio(self, video_path: str):
-        """
-        处理视频文件的音频。
-
-        Args:
-            video_path (str): 视频文件路径
-        """
-        try:
-            print(f"开始处理视频音频: {video_path}")
-            video = VideoFileClip(video_path)
-            audio = video.audio
+        self.current_audio_file = None
+        self.processing_task = None
+        
+        # 配置参数
+        self.confidence_threshold = confidence_threshold
+        self.detection_interval = detection_interval
+        self.event_cooldown = event_cooldown
+        
+        # 防重复播报机制
+        self.last_events = {}  # 记录每种类型事件的最后发生时间
+        
+        # 调整检测敏感度 - 降低误报率
+        self.volume_multiplier = 3.0      # 从2.0提高到3.0，降低敏感度
+        self.frequency_multiplier = 2.0   # 从1.5提高到2.0，降低敏感度  
+        self.noise_multiplier = 3.0       # 从2.0提高到3.0，降低敏感度
+        
+    def _should_report_event(self, event_type: str, confidence: float) -> bool:
+        """判断是否应该报告该事件"""
+        now = datetime.now()
+        
+        # 1. 置信度过滤
+        if confidence < self.confidence_threshold:
+            return False
             
-            if audio is None:
-                print(f"警告: 视频 {video_path} 没有音频轨道")
-                return
-            
-            # 获取音频数据
-            audio_frames = audio.to_soundarray(fps=self.sample_rate)
-            
-            # 如果是立体声，转换为单声道
-            if len(audio_frames.shape) > 1 and audio_frames.shape[1] > 1:
-                audio_frames = np.mean(audio_frames, axis=1)
-            
-            # 将音频数据分块处理
-            chunk_size = self.block_size
-            for i in range(0, len(audio_frames), chunk_size):
-                if self.stop_video_processing:
-                    break
-                    
-                chunk = audio_frames[i:i + chunk_size]
-                if len(chunk) < chunk_size:
-                    # 对于最后一个不完整的块，补零
-                    chunk = np.pad(chunk, (0, chunk_size - len(chunk)))
+        # 2. 防重复机制 - 检查冷却时间
+        if event_type in self.last_events:
+            time_since_last = (now - self.last_events[event_type]).total_seconds()
+            if time_since_last < self.event_cooldown:
+                return False
                 
-                self.audio_queue.put(chunk)
-                time.sleep(chunk_size / self.sample_rate)  # 模拟实时播放速度
+        # 更新最后事件时间
+        self.last_events[event_type] = now
+        return True
+        
+    async def process_audio_file(self, audio_file: str) -> List[Dict]:
+        """处理音频文件并返回检测结果"""
+        try:
+            # 加载音频文件
+            audio_data, sr = librosa.load(audio_file, sr=None)
             
-            video.close()
-            print(f"视频音频处理完成: {video_path}")
+            # 计算音频特征
+            # 1. 音量检测
+            rms = librosa.feature.rms(y=audio_data)[0]
+            # 2. 频谱质心 - 用于识别声音的"明亮度"
+            spectral_centroid = librosa.feature.spectral_centroid(y=audio_data, sr=sr)[0]
+            # 3. 过零率 - 用于识别噪声类型
+            zero_crossing_rate = librosa.feature.zero_crossing_rate(audio_data)[0]
+            
+            events = []
+            # 分析音频特征
+            for i in range(len(rms)):
+                timestamp = librosa.samples_to_time(i * len(audio_data) // len(rms), sr=sr)
+                
+                # 检测异常声音 - 提高阈值，降低敏感度
+                if rms[i] > np.mean(rms) * self.volume_multiplier:  # 从2倍提高到3倍
+                    confidence = float(rms[i] / np.max(rms))
+                    if self._should_report_event("volume_anomaly", confidence):
+                        events.append({
+                            "type": "volume_anomaly",
+                            "timestamp": timestamp,
+                            "confidence": confidence,
+                            "description": "检测到异常音量"
+                        })
+                
+                # 检测高频噪声 - 提高阈值
+                if spectral_centroid[i] > np.mean(spectral_centroid) * self.frequency_multiplier:  # 从1.5倍提高到2倍
+                    confidence = float(spectral_centroid[i] / np.max(spectral_centroid))
+                    if self._should_report_event("high_frequency_noise", confidence):
+                        events.append({
+                            "type": "high_frequency_noise",
+                            "timestamp": timestamp,
+                            "confidence": confidence,
+                            "description": "检测到高频噪声"
+                        })
+                
+                # 检测突发性噪声 - 提高阈值
+                if zero_crossing_rate[i] > np.mean(zero_crossing_rate) * self.noise_multiplier:  # 从2倍提高到3倍
+                    confidence = float(zero_crossing_rate[i] / np.max(zero_crossing_rate))
+                    if self._should_report_event("sudden_noise", confidence):
+                        events.append({
+                            "type": "sudden_noise",
+                            "timestamp": timestamp,
+                            "confidence": confidence,
+                            "description": "检测到突发性噪声"
+                        })
+            
+            return events
             
         except Exception as e:
-            print(f"处理视频音频时出错: {e}")
-
-    def start_video_audio_processing(self, video_path: str):
-        """
-        开始处理视频音频。
-
-        Args:
-            video_path (str): 视频文件路径
-        """
-        if self.video_audio_thread and self.video_audio_thread.is_alive():
-            print("已有视频音频正在处理中")
-            return
-
-        self.stop_video_processing = False
-        self.video_audio_thread = threading.Thread(
-            target=self.process_video_audio,
-            args=(video_path,)
-        )
-        self.video_audio_thread.start()
+            logger.error(f"处理音频文件时发生错误: {str(e)}")
+            return []
+    
+    def update_settings(self, 
+                       confidence_threshold: Optional[float] = None,
+                       detection_interval: Optional[float] = None,
+                       event_cooldown: Optional[float] = None,
+                       sensitivity: Optional[str] = None):
+        """更新检测设置"""
+        if confidence_threshold is not None:
+            self.confidence_threshold = confidence_threshold
+            
+        if detection_interval is not None:
+            self.detection_interval = detection_interval
+            
+        if event_cooldown is not None:
+            self.event_cooldown = event_cooldown
+            
+        if sensitivity is not None:
+            # 根据敏感度级别调整检测阈值
+            if sensitivity == "low":
+                self.volume_multiplier = 4.0
+                self.frequency_multiplier = 3.0
+                self.noise_multiplier = 4.0
+            elif sensitivity == "medium":
+                self.volume_multiplier = 3.0
+                self.frequency_multiplier = 2.0
+                self.noise_multiplier = 3.0
+            elif sensitivity == "high":
+                self.volume_multiplier = 2.0
+                self.frequency_multiplier = 1.5
+                self.noise_multiplier = 2.0
+                
+        logger.info(f"音频检测设置已更新: 置信度阈值={self.confidence_threshold}, "
+                   f"检测间隔={self.detection_interval}s, 冷却时间={self.event_cooldown}s")
+            
+    async def start_monitoring(self, audio_file: str):
+        """开始监控音频文件"""
         self.is_running = True
-        print(f"开始处理视频音频: {video_path}")
-
-    def stop_video_audio_processing(self):
-        """停止视频音频处理。"""
-        self.stop_video_processing = True
-        if self.video_audio_thread:
-            self.video_audio_thread.join()
+        self.current_audio_file = audio_file
+        
+        while self.is_running:
+            try:
+                events = await self.process_audio_file(self.current_audio_file)
+                if events:
+                    logger.info(f"检测到 {len(events)} 个声音事件")
+                    for event in events:
+                        logger.info(f"声音事件: {event}")
+                
+                # 使用可配置的检测间隔
+                await asyncio.sleep(self.detection_interval)
+                
+            except Exception as e:
+                logger.error(f"音频监控过程中发生错误: {str(e)}")
+                await asyncio.sleep(10)  # 发生错误时等待较长时间
+                
+    def stop_monitoring(self):
+        """停止音频监控"""
         self.is_running = False
-        print("视频音频处理已停止")
-
-    def _audio_callback(self, indata, frames, time, status):
-        """这是音频流的回调函数，当有新的音频数据时，sounddevice会自动调用它。"""
-        if status:
-            print(f"音频流状态警告: {status}")
-        # 将获取到的音频数据放入队列
-        self.audio_queue.put(indata.copy())
-
-    def start_listening(self):
-        """启动音频监听流。"""
-        if self.is_running:
-            print("音频监听已在运行中。")
-            return
-
-        try:
-            # 创建并启动一个非阻塞的音频输入流
-            self.stream = sd.InputStream(
-                samplerate=self.sample_rate,
-                blocksize=self.block_size,
-                device=self.device_index,
-                channels=1,  # 单声道
-                callback=self._audio_callback
-            )
-            self.stream.start()
-            self.is_running = True
-            print("音频监听已启动。")
-        except Exception as e:
-            print(f"启动音频监听失败: {e}")
-            self.is_running = False
-
-    def stop_listening(self):
-        """停止音频监听流。"""
-        if self.stream:
-            self.stream.stop()
-            self.stream.close()
-            self.is_running = False
-            print("音频监听已停止。")
-
-    def analyze_audio_chunk(self, volume_threshold: float = 0.1) -> Optional[Dict]:
-        """
-        从队列中取出一块音频数据进行分析。
-
-        Args:
-            volume_threshold (float): 音量阈值，超过此值则判定为异常。范围 0.0 - 1.0。
-
-        Returns:
-            Optional[Dict]: 如果检测到异常，返回一个包含事件信息的字典，否则返回None。
-        """
-        try:
-            # 从队列中获取音频数据，非阻塞
-            audio_chunk = self.audio_queue.get_nowait()
-
-            # 计算音量 (均方根 RMS)
-            volume = np.sqrt(np.mean(audio_chunk ** 2))
-
-            if volume > volume_threshold:
-                return {
-                    "event_type": "abnormal_sound_detected",
-                    "is_abnormal": True,
-                    "need_alert": True,
-                    "details": {
-                        "volume": round(volume, 3)
-                    },
-                    "confidence": min(1.0, volume / volume_threshold * 0.5)  # 模拟置信度
-                }
-        except queue.Empty:
-            # 队列为空是正常情况，表示没有新的音频数据
-            return None
-        return None
+        self.current_audio_file = None
+        logger.info("音频监控已停止")
+        
+    def reset_event_history(self):
+        """重置事件历史（用于测试或手动重置）"""
+        self.last_events.clear()
+        logger.info("音频事件历史已重置")
