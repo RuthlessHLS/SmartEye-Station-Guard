@@ -122,14 +122,21 @@ def _advanced_face_tracking(camera_id: str, face_detections: List[Dict], cache: 
     # 🔧 获取动态配置参数（默认启用抗抖动）
     config = getattr(configure_stabilization, 'config', {}).get(camera_id, {})
     
-    # 人脸跟踪参数（默认使用抗抖动配置）
-    FACE_MATCH_THRESHOLD = config.get('face_match_threshold', 100)  # 更严格匹配
-    FACE_SMOOTH_FACTOR = config.get('face_smooth_factor', 0.95)     # 强抗抖动平滑
-    JITTER_THRESHOLD = config.get('jitter_detection_threshold', 20)  # 更敏感的抖动检测
-    SIZE_CHANGE_RATIO = config.get('max_size_change_ratio', 0.15)   # 更严格的尺寸限制
-    FACE_KEEP_TIME = 1.5           # 适中的保持时间
-    FACE_MIN_CONFIDENCE = 0.4       # 更低的置信度要求
-    FACE_STABLE_THRESHOLD = 2       # 需要2次检测才认为稳定
+    # 人脸跟踪参数（超强抗闪烁配置）
+    FACE_MATCH_THRESHOLD = config.get('face_match_threshold', 150)  # 放宽匹配，避免跟丢
+    FACE_SMOOTH_FACTOR = config.get('face_smooth_factor', 0.97)     # 超强平滑
+    JITTER_THRESHOLD = config.get('jitter_detection_threshold', 15)  # 更敏感闪烁检测
+    SIZE_CHANGE_RATIO = config.get('max_size_change_ratio', 0.1)    # 极严格尺寸限制
+    FACE_KEEP_TIME = 2.5           # 更长保持时间，减少闪烁
+    FACE_MIN_CONFIDENCE = 0.3       # 更低置信度，提高检测率
+    FACE_STABLE_THRESHOLD = 1       # 1次检测即稳定，减少闪烁
+    CONFIDENCE_SMOOTH_FACTOR = 0.8  # 置信度平滑因子，避免置信度跳动
+    
+    # 🎯 人脸身份稳定化参数
+    IDENTITY_HISTORY_SIZE = 10      # 保持最近10次识别记录
+    IDENTITY_CHANGE_THRESHOLD = 0.7 # 需要70%的投票才能改变身份
+    IDENTITY_CONFIDENCE_DIFF = 0.15 # 新身份必须比当前身份置信度高15%才切换
+    MIN_STABLE_FRAMES = 3          # 至少3帧稳定才确认身份切换
     
     # 预测丢失人脸的位置
     _predict_missing_faces(cache, face_history, current_time)
@@ -172,15 +179,25 @@ def _advanced_face_tracking(camera_id: str, face_detections: List[Dict], cache: 
             # 📏 尺寸稳定化：限制框尺寸变化
             smoothed_bbox = _stabilize_bbox_size(smoothed_bbox, old_obj["bbox"], max_change_ratio=SIZE_CHANGE_RATIO)
             
+            # 🎯 置信度平滑处理，避免闪烁
+            old_confidence = old_obj.get("confidence", face_det["confidence"])
+            smoothed_confidence = old_confidence * (1 - CONFIDENCE_SMOOTH_FACTOR) + face_det["confidence"] * CONFIDENCE_SMOOTH_FACTOR
+            
+            # 🛡️ 防闪烁保护：确保置信度不会突然掉落太多
+            if smoothed_confidence < old_confidence * 0.7:  # 如果置信度掉落超过30%
+                smoothed_confidence = old_confidence * 0.8  # 限制掉落幅度
+                print(f"🛡️ 防止人脸置信度突降 ID={best_match_id}, 保护后={smoothed_confidence:.2f}")
+            
             # 更新缓存和历史
             cache[best_match_id].update({
                 "bbox": smoothed_bbox,
-                "confidence": face_det["confidence"],
+                "confidence": max(FACE_MIN_CONFIDENCE, smoothed_confidence),  # 确保不低于最小置信度
                 "last_seen": current_time,
                 "stable_count": min(old_obj.get("stable_count", 0) + 1, 10),
                 "consecutive_detections": old_obj.get("consecutive_detections", 0) + 1,
                 "last_detection": current_time,
-                "is_jittery": is_jittery
+                "is_jittery": is_jittery,
+                "flicker_protection": True
             })
             
             # 记录运动历史
@@ -196,6 +213,30 @@ def _advanced_face_tracking(camera_id: str, face_detections: List[Dict], cache: 
                 history["positions"] = history["positions"][-5:]
                 history["timestamps"] = history["timestamps"][-5:]
             
+            # 🎯 人脸身份稳定化处理
+            if "identity" in face_det:
+                # 为身份信息添加置信度（如果没有的话）
+                new_identity = face_det["identity"].copy()
+                if "confidence" not in new_identity:
+                    new_identity["confidence"] = face_det.get("confidence", 0.5)
+                
+                # 应用身份稳定化
+                stable_identity = _stabilize_face_identity(
+                    best_match_id, 
+                    new_identity, 
+                    face_history,
+                    IDENTITY_HISTORY_SIZE,
+                    IDENTITY_CHANGE_THRESHOLD,
+                    IDENTITY_CONFIDENCE_DIFF,
+                    MIN_STABLE_FRAMES
+                )
+                
+                # 更新检测结果的身份信息
+                face_det["identity"] = stable_identity
+                
+                # 更新缓存中的身份信息
+                cache[best_match_id]["identity"] = stable_identity
+            
             matched_ids.add(best_match_id)
             
             # 生成结果
@@ -206,7 +247,7 @@ def _advanced_face_tracking(camera_id: str, face_detections: List[Dict], cache: 
             result_det["consecutive_detections"] = cache[best_match_id]["consecutive_detections"]
             results.append(result_det)
             
-            print(f"👤 人脸匹配: ID={best_match_id}, 分数={best_score:.1f}, 连续={cache[best_match_id]['consecutive_detections']}")
+            print(f"👤 人脸匹配: ID={best_match_id}, 分数={best_score:.1f}, 连续={cache[best_match_id]['consecutive_detections']}, 身份={face_det.get('identity', {}).get('name', 'unknown')}")
             
         else:
             # 新人脸
@@ -435,10 +476,11 @@ def _standard_object_tracking(detections: List[Dict], cache: Dict, current_time:
     # 🔧 获取动态配置参数（默认启用抗抖动）
     config = getattr(configure_stabilization, 'config', {}).get(camera_id, {})
     
-    # 目标检测稳定化参数（默认使用抗抖动配置）
-    OBJECT_MATCH_THRESHOLD = config.get('object_match_threshold', 50)   # 更严格匹配
-    OBJECT_SMOOTH_FACTOR = config.get('object_smooth_factor', 0.92)     # 强抗抖动平滑
-    SIZE_CHANGE_RATIO = config.get('max_size_change_ratio', 0.15)       # 更严格的尺寸限制
+    # 目标检测稳定化参数（超强抗闪烁配置）
+    OBJECT_MATCH_THRESHOLD = config.get('object_match_threshold', 80)   # 放宽匹配，避免跟丢
+    OBJECT_SMOOTH_FACTOR = config.get('object_smooth_factor', 0.95)     # 超强平滑
+    SIZE_CHANGE_RATIO = config.get('max_size_change_ratio', 0.1)        # 极严格尺寸限制
+    CONFIDENCE_SMOOTH_FACTOR = 0.8  # 置信度平滑，避免闪烁
     
     for det in detections:
         bbox = det["bbox"]
@@ -487,12 +529,22 @@ def _standard_object_tracking(detections: List[Dict], cache: Dict, current_time:
             # 📏 限制尺寸变化
             smoothed_bbox = _stabilize_bbox_size(smoothed_bbox, old_bbox, max_change_ratio=SIZE_CHANGE_RATIO)
             
+            # 🎯 置信度平滑处理，避免闪烁
+            old_confidence = old_obj.get("confidence", det["confidence"])
+            smoothed_confidence = old_confidence * (1 - CONFIDENCE_SMOOTH_FACTOR) + det["confidence"] * CONFIDENCE_SMOOTH_FACTOR
+            
+            # 🛡️ 防闪烁保护：确保置信度不会突然掉落太多
+            if smoothed_confidence < old_confidence * 0.6:  # 目标检测允许更大的置信度变化
+                smoothed_confidence = old_confidence * 0.7
+                print(f"🛡️ 防止目标置信度突降 ID={best_match_id}, 保护后={smoothed_confidence:.2f}")
+            
             cache[best_match_id].update({
                 "bbox": smoothed_bbox,
-                "confidence": det["confidence"],
+                "confidence": max(0.3, smoothed_confidence),  # 确保不低于最小置信度
                 "last_seen": current_time,
                 "stable_count": min(old_obj.get("stable_count", 0) + 1, 8),
-                "consecutive_detections": old_obj.get("consecutive_detections", 0) + 1
+                "consecutive_detections": old_obj.get("consecutive_detections", 0) + 1,
+                "flicker_protection": True
             })
             
             matched_ids.add(best_match_id)
@@ -598,30 +650,241 @@ def _stabilize_bbox_size(new_bbox: List[int], old_bbox: List[int], max_change_ra
     
     return new_bbox
 
+def _process_face_recognition_with_stabilization(camera_id: str, frame: np.ndarray) -> List[Dict]:
+    """
+    🎯 集成的人脸识别和稳定化处理：解决检测框闪烁和身份变化问题
+    
+    Args:
+        camera_id: 摄像头ID
+        frame: 视频帧
+    
+    Returns:
+        稳定化后的人脸检测和识别结果
+    """
+    try:
+        # 第一步：原始人脸识别
+        recognized_faces = detectors["face"].detect_and_recognize(frame, tolerance=0.4)  # 更严格的识别阈值
+        
+        # 第二步：转换为标准检测格式
+        face_detections = []
+        for face in recognized_faces:
+            location = face["location"]
+            # 转换位置格式：从 {top, right, bottom, left} 到 [x1, y1, x2, y2]
+            bbox = [
+                location["left"],     # x1
+                location["top"],      # y1  
+                location["right"],    # x2
+                location["bottom"]    # y2
+            ]
+            
+            detection = {
+                "type": "face",
+                "bbox": bbox,
+                "confidence": face.get("confidence", 0.5),
+                "timestamp": datetime.datetime.now().isoformat(),
+                "identity": face["identity"]  # 包含 name, known, confidence
+            }
+            face_detections.append(detection)
+        
+        print(f"🔍 原始人脸识别结果: {len(face_detections)} 个人脸")
+        for i, det in enumerate(face_detections):
+            identity = det["identity"]
+            print(f"  人脸 #{i+1}: {identity['name']} (known={identity['known']}, conf={identity.get('confidence', 0):.2f})")
+        
+        # 第三步：通过稳定化系统处理
+        if face_detections:
+            stabilized_faces = stabilize_detections(camera_id, face_detections)
+            
+            print(f"✅ 稳定化后人脸结果: {len(stabilized_faces)} 个人脸")
+            for face in stabilized_faces:
+                identity = face.get("identity", {})
+                print(f"  稳定人脸 ID={face.get('tracking_id', 'N/A')}: {identity.get('name', 'unknown')} (conf={identity.get('confidence', 0):.2f})")
+            
+            return stabilized_faces
+        else:
+            return []
+            
+    except Exception as e:
+        print(f"❌ 人脸识别稳定化处理错误: {e}")
+        import traceback
+        traceback.print_exc()
+        return []
+
+def _stabilize_face_identity(face_id: str, new_identity: Dict, face_history: Dict, 
+                           history_size: int = 10, change_threshold: float = 0.7,
+                           confidence_diff: float = 0.15, min_stable_frames: int = 3) -> Dict:
+    """
+    🎯 人脸身份稳定化：防止同一人脸的识别结果频繁变化
+    
+    Args:
+        face_id: 人脸跟踪ID
+        new_identity: 新的识别结果 {"name": str, "known": bool, "confidence": float}
+        face_history: 人脸历史记录缓存
+        history_size: 保持的历史记录数量
+        change_threshold: 身份改变需要的投票比例
+        confidence_diff: 新身份必须比当前身份高出的置信度差值
+        min_stable_frames: 最少稳定帧数才确认切换
+    
+    Returns:
+        稳定化后的身份信息
+    """
+    # 初始化身份历史记录
+    if face_id not in face_history:
+        face_history[face_id] = {
+            "identity_history": [],
+            "current_identity": new_identity,
+            "stable_count": 0,
+            "last_change_time": time.time()
+        }
+        print(f"🆕 新人脸 {face_id} 初始身份: {new_identity.get('name', 'unknown')}")
+        return new_identity
+    
+    history_data = face_history[face_id]
+    current_identity = history_data["current_identity"]
+    identity_history = history_data["identity_history"]
+    
+    # 添加新的识别结果到历史记录
+    identity_history.append({
+        "name": new_identity.get("name", "unknown"),
+        "confidence": new_identity.get("confidence", 0),
+        "timestamp": time.time()
+    })
+    
+    # 限制历史记录大小
+    if len(identity_history) > history_size:
+        identity_history.pop(0)
+    
+    # 🗳️ 统计最近的身份投票（置信度加权）
+    name_votes = {}
+    total_weight = 0
+    
+    for record in identity_history:
+        name = record["name"]
+        confidence = record["confidence"]
+        # 置信度加权投票：高置信度的结果权重更高
+        weight = max(0.1, confidence)  # 最小权重0.1
+        name_votes[name] = name_votes.get(name, 0) + weight
+        total_weight += weight
+    
+    # 找到得票最高的身份
+    if name_votes and total_weight > 0:
+        most_voted_name = max(name_votes.items(), key=lambda x: x[1])
+        vote_ratio = most_voted_name[1] / total_weight
+        winning_name = most_voted_name[0]
+    else:
+        winning_name = "unknown"
+        vote_ratio = 0
+    
+    current_name = current_identity.get("name", "unknown")
+    new_name = new_identity.get("name", "unknown")
+    
+    # 🛡️ 身份稳定性检查
+    should_change_identity = False
+    change_reason = ""
+    
+    if current_name == winning_name:
+        # 当前身份与投票结果一致，保持稳定
+        history_data["stable_count"] += 1
+        should_change_identity = False
+        change_reason = "身份一致，保持稳定"
+        
+    elif vote_ratio >= change_threshold:
+        # 投票支持率达到阈值
+        current_confidence = current_identity.get("confidence", 0)
+        new_confidence = new_identity.get("confidence", 0)
+        
+        # 检查置信度差异
+        if new_confidence > current_confidence + confidence_diff:
+            # 新身份置信度明显更高
+            should_change_identity = True
+            change_reason = f"投票支持率{vote_ratio:.1%}，置信度提升{new_confidence-current_confidence:.2f}"
+        elif history_data["stable_count"] >= min_stable_frames:
+            # 当前身份已经稳定足够久，可以切换
+            should_change_identity = True
+            change_reason = f"投票支持率{vote_ratio:.1%}，已稳定{history_data['stable_count']}帧"
+        else:
+            should_change_identity = False
+            change_reason = f"投票支持率{vote_ratio:.1%}，但稳定帧数不足({history_data['stable_count']}<{min_stable_frames})"
+    else:
+        should_change_identity = False
+        change_reason = f"投票支持率不足({vote_ratio:.1%}<{change_threshold:.1%})"
+    
+    # 🔄 执行身份切换或保持
+    if should_change_identity:
+        # 找到投票最高身份的最高置信度记录
+        best_confidence = 0
+        for record in identity_history:
+            if record["name"] == winning_name:
+                best_confidence = max(best_confidence, record["confidence"])
+        
+        history_data["current_identity"] = {
+            "name": winning_name,
+            "known": winning_name != "unknown",
+            "confidence": best_confidence
+        }
+        history_data["stable_count"] = 0  # 重置稳定计数
+        history_data["last_change_time"] = time.time()
+        
+        print(f"🔄 人脸 {face_id} 身份切换: {current_name} → {winning_name} ({change_reason})")
+        
+    else:
+        # 保持当前身份，但可能更新置信度
+        if new_name == current_name and new_identity.get("confidence", 0) > current_identity.get("confidence", 0):
+            history_data["current_identity"]["confidence"] = new_identity["confidence"]
+            print(f"📈 人脸 {face_id} 置信度提升: {new_identity['confidence']:.2f}")
+        
+        print(f"🛡️ 人脸 {face_id} 身份保持: {current_name} ({change_reason})")
+    
+    # 📊 定期输出身份统计
+    if len(identity_history) % 5 == 0:  # 每5次记录输出一次统计
+        print(f"📊 人脸 {face_id} 身份统计:")
+        for name, votes in sorted(name_votes.items(), key=lambda x: x[1], reverse=True):
+            vote_pct = votes / total_weight * 100 if total_weight > 0 else 0
+            print(f"  - {name}: {vote_pct:.1f}%")
+        print(f"  当前身份: {history_data['current_identity']['name']}")
+        print(f"  稳定程度: {history_data['stable_count']} 帧")
+    
+    return history_data["current_identity"]
+
 def _cleanup_expired_cache(cache: Dict, face_history: Dict, current_time: float):
-    """清理过期缓存"""
+    """防闪烁清理策略 - 逐渐降低置信度而非立即删除"""
     to_remove = []
     
     for obj_id, obj_data in cache.items():
+        time_since_seen = current_time - obj_data["last_seen"]
+        
         if obj_data["type"] == "face":
-            # 人脸清理策略
-            if current_time - obj_data["last_seen"] > 3.0:  # 3秒后清理
+            # 🎯 人脸防闪烁策略：更长的保持时间 + 置信度渐变
+            if time_since_seen > 6.0:  # 6秒后彻底删除（原来3秒）
                 to_remove.append(obj_id)
+                print(f"🗑️ 最终移除人脸 {obj_id} (丢失{time_since_seen:.1f}s)")
+            elif time_since_seen > 3.0:  # 3-6秒之间逐渐淡出
+                current_confidence = obj_data.get("confidence", 1.0)
+                fade_factor = max(0.15, 1 - (time_since_seen - 3.0) / 3.0)  # 3秒内淡到15%
+                obj_data["confidence"] = max(0.15, current_confidence * fade_factor)
+                obj_data["fading"] = True
+                print(f"🌫️ 人脸淡出 {obj_id}, 置信度={obj_data['confidence']:.2f}")
         else:
-            # 其他目标清理策略
-            if current_time - obj_data["last_seen"] > 1.5:
+            # 🎯 目标防闪烁策略：延长保持时间
+            if time_since_seen > 3.0:  # 3秒后彻底删除（原来1.5秒）
                 to_remove.append(obj_id)
+                print(f"🗑️ 最终移除目标 {obj_id} (丢失{time_since_seen:.1f}s)")
+            elif time_since_seen > 1.5:  # 1.5-3秒之间逐渐淡出
+                current_confidence = obj_data.get("confidence", 1.0)
+                fade_factor = max(0.2, 1 - (time_since_seen - 1.5) / 1.5)
+                obj_data["confidence"] = max(0.2, current_confidence * fade_factor)
+                obj_data["fading"] = True
+                print(f"🌫️ 目标淡出 {obj_id}, 置信度={obj_data['confidence']:.2f}")
     
     for obj_id in to_remove:
         del cache[obj_id]
         if obj_id in face_history:
             del face_history[obj_id]
-        print(f"🧹 清理过期: {obj_id}")
     
-    # 限制缓存大小
-    if len(cache) > 15:
+    # 🚀 防闪烁缓存管理：更大的缓存容量
+    if len(cache) > 25:  # 增加缓存容量从15到25
         sorted_items = sorted(cache.items(), key=lambda x: x[1]["last_seen"])
-        for obj_id, _ in sorted_items[:-10]:
+        for obj_id, _ in sorted_items[:-20]:  # 保留20个最新的
             del cache[obj_id]
             if obj_id in face_history:
                 del face_history[obj_id]
@@ -905,26 +1168,28 @@ def create_master_processor(camera_id: str, config: StreamConfig):
                             send_result_to_backend(alert)
 
             if config.enable_face_recognition:
-                recognized_faces = detectors["face"].detect_and_recognize(frame)
-                for face in recognized_faces:
-                    if not face["identity"]["known"]:  # 修改这里，使用新的判断逻辑
-                        print(f"🚨 [{camera_id}] 检测到未知人员!")
+                # 🎯 使用集成的人脸识别和稳定化处理
+                stabilized_faces = _process_face_recognition_with_stabilization(camera_id, frame)
+                for face in stabilized_faces:
+                    identity = face.get("identity", {})
+                    if not identity.get("known", False):  # 未知人员
+                        print(f"🚨 [{camera_id}] 检测到未知人员! (跟踪ID: {face.get('tracking_id', 'N/A')})")
+                        
+                        # 转换bbox格式用于警报
+                        bbox = face.get("bbox", [0, 0, 0, 0])
+                        location_box = [bbox[0], bbox[1], bbox[2], bbox[3]]  # [x1, y1, x2, y2]
+                        
                         alert = AIAnalysisResult(
                             camera_id=camera_id,
                             event_type="unknown_face_detected",
-                            location={
-                                "box": [
-                                    face["location"]["left"],
-                                    face["location"]["top"],
-                                    face["location"]["right"],
-                                    face["location"]["bottom"]
-                                ]
-                            },
-                            confidence=face.get("confidence", 0.9),
+                            location={"box": location_box},
+                            confidence=identity.get("confidence", 0.5),
                             timestamp=datetime.datetime.now().isoformat(),
                             details={
-                                "face_location": face["location"],
-                                "best_match": face.get("best_match")
+                                "tracking_id": face.get("tracking_id"),
+                                "is_stable": face.get("is_stable", False),
+                                "consecutive_detections": face.get("consecutive_detections", 1),
+                                "identity_stability": identity
                             }
                         )
                         send_result_to_backend(alert)
@@ -977,7 +1242,24 @@ async def start_stream(
             # 人脸识别（提前进行，以便与人物检测结果关联）
             recognized_faces = []
             if enable_face_recognition:
-                recognized_faces = detectors["face"].detect_and_recognize(frame)
+                # 🎯 使用稳定化的人脸识别处理
+                stabilized_faces = _process_face_recognition_with_stabilization(camera_id, frame)
+                # 转换为兼容格式
+                for face in stabilized_faces:
+                    bbox = face.get("bbox", [0, 0, 0, 0])
+                    identity = face.get("identity", {})
+                    recognized_faces.append({
+                        "location": {
+                            "left": bbox[0],
+                            "top": bbox[1],
+                            "right": bbox[2],
+                            "bottom": bbox[3]
+                        },
+                        "identity": identity,
+                        "confidence": identity.get("confidence", 0.5),
+                        "tracking_id": face.get("tracking_id"),
+                        "is_stable": face.get("is_stable", False)
+                    })
 
             # 处理检测到的目标
             for obj in filtered_objects:
@@ -1045,15 +1327,26 @@ async def start_stream(
 
             # 人脸识别
             if enable_face_recognition:
-                recognized_faces = detectors["face"].detect_and_recognize(frame)
-                for face in recognized_faces:
-                    if not face["identity"]["known"]:
-                        print(f"🚨 [{camera_id}] 检测到未知人脸!")
+                # 🎯 使用集成的稳定化人脸识别（避免重复处理）
+                stabilized_faces = _process_face_recognition_with_stabilization(camera_id, frame)
+                for face in stabilized_faces:
+                    identity = face.get("identity", {})
+                    if not identity.get("known", False):
+                        print(f"🚨 [{camera_id}] 检测到未知人脸! (稳定跟踪ID: {face.get('tracking_id', 'N/A')})")
+                        
+                        bbox = face.get("bbox", [0, 0, 0, 0])
+                        location_dict = {
+                            "left": bbox[0],
+                            "top": bbox[1], 
+                            "right": bbox[2],
+                            "bottom": bbox[3]
+                        }
+                        
                         alert = AIAnalysisResult(
                             camera_id=camera_id,
                             event_type="unknown_face_detected",
-                            location=face["location"],
-                            confidence=face.get("identity", {}).get("confidence", 0.5),  # 使用 get 方法安全获取值
+                            location=location_dict,
+                            confidence=identity.get("confidence", 0.5),
                             timestamp=datetime.datetime.now().isoformat(),
                         )
                         send_result_to_backend(alert)
@@ -1420,7 +1713,24 @@ async def analyze_frame(
                 face_height, face_width = int(height * face_scale), int(width * face_scale)
                 face_image = cv2.resize(image, (face_width, face_height))
                 
-                recognized_faces = detectors["face"].detect_and_recognize(face_image)
+                # 🎯 对于单帧分析，使用稳定化处理（但历史信息较少）
+                temp_camera_id = f"single_frame_{camera_id}_{int(time.time())}"
+                stabilized_faces = _process_face_recognition_with_stabilization(temp_camera_id, face_image)
+                # 转换为兼容格式
+                recognized_faces = []
+                for face in stabilized_faces:
+                    bbox = face.get("bbox", [0, 0, 0, 0])
+                    identity = face.get("identity", {})
+                    recognized_faces.append({
+                        "location": {
+                            "left": bbox[0],
+                            "top": bbox[1],
+                            "right": bbox[2],
+                            "bottom": bbox[3]
+                        },
+                        "identity": identity,
+                        "confidence": identity.get("confidence", 0.5)
+                    })
                 
                 scale_back_x = width / face_width
                 scale_back_y = height / face_height
@@ -2122,6 +2432,18 @@ async def apply_stabilization_preset(
     """应用预设的稳定化配置 - 快速解决抖动问题"""
     
     presets = {
+        "anti_flicker": {
+            "name": "🚨 超强防闪烁模式",
+            "description": "专门解决框一闪一闪问题的超强配置",
+            "config": {
+                "face_smooth_factor": 0.97,
+                "object_smooth_factor": 0.95,
+                "face_match_threshold": 150,
+                "object_match_threshold": 80,
+                "jitter_detection_threshold": 15,
+                "max_size_change_ratio": 0.1
+            }
+        },
         "anti_jitter": {
             "name": "抗抖动模式",
             "description": "针对严重抖动问题的强化配置",
@@ -2230,6 +2552,12 @@ async def list_stabilization_presets():
     """获取所有可用的稳定化预设"""
     
     presets = {
+        "anti_flicker": {
+            "name": "🚨 超强防闪烁模式",
+            "description": "专门解决框一闪一闪问题的超强配置",
+            "best_for": ["检测框闪烁", "出现消失频繁", "置信度不稳定"],
+            "trade_offs": "最强稳定性，轻微延迟增加"
+        },
         "anti_jitter": {
             "name": "抗抖动模式",
             "description": "针对严重抖动问题的强化配置",
@@ -2270,10 +2598,129 @@ async def list_stabilization_presets():
             "body": {"camera_id": "camera_01"}
         },
         "recommendations": {
+            "框一闪一闪": "anti_flicker",
             "严重抖动": "anti_jitter",
             "偶尔抖动": "balanced", 
             "追求稳定": "ultra_stable",
             "追求速度": "responsive"
+        }
+    }
+
+@app.post("/detection/anti_flicker/apply/")
+async def apply_anti_flicker_all_cameras():
+    """🚨 一键应用防闪烁配置到所有摄像头"""
+    applied_cameras = []
+    
+    # 获取所有活跃的摄像头
+    active_cameras = list(video_streams.keys())
+    if not active_cameras:
+        active_cameras = ["default"]  # 如果没有活跃摄像头，应用到默认配置
+    
+    # 为每个摄像头应用防闪烁配置
+    for camera_id in active_cameras:
+        if not hasattr(configure_stabilization, 'config'):
+            configure_stabilization.config = {}
+        
+        # 应用超强防闪烁配置
+        anti_flicker_config = {
+            "face_smooth_factor": 0.97,
+            "object_smooth_factor": 0.95,
+            "face_match_threshold": 150,
+            "object_match_threshold": 80,
+            "jitter_detection_threshold": 15,
+            "max_size_change_ratio": 0.1,
+            "updated_at": datetime.datetime.now().isoformat(),
+            "preset_name": "anti_flicker"
+        }
+        
+        configure_stabilization.config[camera_id] = anti_flicker_config
+        
+        # 清理缓存让配置立即生效
+        if camera_id in detection_cache:
+            detection_cache[camera_id] = {"objects": {}, "face_history": {}}
+        
+        applied_cameras.append(camera_id)
+    
+    return {
+        "status": "success",
+        "message": "🚨 已对所有摄像头应用超强防闪烁配置！",
+        "applied_cameras": applied_cameras,
+        "config_applied": anti_flicker_config,
+        "immediate_effects": [
+            "✅ 检测框闪烁问题将显著减少",
+            "✅ 置信度平滑处理已启用",
+            "✅ 防闪烁保护机制已激活",
+            "✅ 扩展保持时间已设置",
+            "✅ 超强平滑处理已启用(97%)"
+        ],
+        "monitoring": [
+            "观察10-20秒，闪烁应该明显减少",
+            "终端会显示防闪烁保护日志",
+            "如仍有问题，请检查摄像头硬件"
+        ]
+    }
+
+@app.post("/detection/identity_stabilization/status/")
+async def check_identity_stabilization_status():
+    """🎯 检查人脸身份稳定化系统状态"""
+    total_cameras = len(detection_cache)
+    active_streams = len(video_streams)
+    
+    # 统计身份稳定化信息
+    total_faces = 0
+    stable_identities = 0
+    identity_changes = 0
+    
+    for camera_id, cache_data in detection_cache.items():
+        face_history = cache_data.get("face_history", {})
+        
+        for face_id, history_data in face_history.items():
+            total_faces += 1
+            identity_history = history_data.get("identity_history", [])
+            
+            if len(identity_history) >= 3:  # 有足够历史记录
+                stable_identities += 1
+                
+            # 统计身份变化次数
+            last_change_time = history_data.get("last_change_time", 0)
+            if time.time() - last_change_time < 10:  # 10秒内有变化
+                identity_changes += 1
+    
+    return {
+        "status": "active",
+        "message": "🎯 人脸身份稳定化系统运行正常",
+        
+        "system_stats": {
+            "监控摄像头数量": total_cameras,
+            "活跃视频流": active_streams,
+            "跟踪人脸总数": total_faces,
+            "稳定身份数": stable_identities,
+            "近期身份变化": identity_changes
+        },
+        
+        "stabilization_features": {
+            "✅ 检测框防闪烁": "97% 超强平滑处理",
+            "✅ 身份投票机制": "70% 投票阈值，防止误切换",
+            "✅ 置信度保护": "防止置信度突然掉落",
+            "✅ 多帧验证": "至少3帧稳定才确认身份切换",
+            "✅ 历史记录": "保持最近10次识别记录",
+            "✅ 逐渐淡出": "人脸消失时逐渐降低置信度",
+            "✅ 智能缓存": "25个对象缓存，防止频繁删除"
+        },
+        
+        "current_settings": {
+            "身份变化阈值": "70%",
+            "置信度差异要求": "15%",
+            "最小稳定帧数": "3帧", 
+            "历史记录长度": "10次",
+            "检测框平滑": "97%",
+            "闪烁检测阈值": "15像素"
+        },
+        
+        "quick_actions": {
+            "应用超强防闪烁": "POST /detection/anti_flicker/apply/",
+            "查看调试信息": "GET /debug/face_tracking/{camera_id}",
+            "清除所有缓存": "POST /detection/cache/clear/all"
         }
     }
 
