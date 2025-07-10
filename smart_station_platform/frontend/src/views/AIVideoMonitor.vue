@@ -128,6 +128,18 @@
                       @change="updateAISettings"
                     />
                   </el-form-item>
+                  <el-form-item label="火焰检测">
+                    <el-switch 
+                      v-model="aiSettings.fireDetection"
+                      :disabled="!isStreaming"
+                      @change="updateAISettings"
+                    />
+                    <div class="frequency-hint">
+                      <small style="color: #f56c6c;">
+                        🔥 检测火焰及相关危险
+                      </small>
+                    </div>
+                  </el-form-item>
                   <el-form-item label="实时模式">
                     <el-switch 
                       v-model="aiSettings.realtimeMode"
@@ -374,7 +386,8 @@ const aiSettings = reactive({
   objectDetection: true,
   behaviorAnalysis: true,
   soundDetection: true,
-  realtimeMode: false  // 实时模式：更高的检测频率
+  fireDetection: true,    // 火焰检测
+  realtimeMode: false     // 实时模式：更高的检测频率
 })
 
 // 检测结果和告警
@@ -399,7 +412,6 @@ let audioContext = null // 音频上下文，用于音量检测
 let audioAnalyser = null // 音频分析器
 let audioDataArray = null // 音频数据数组
 const MOTION_THRESHOLD = 0.015 // 帧差阈值，更敏感的检测
-const MAX_ACCEPTABLE_DELAY = 300 // 最大可接受延迟（毫秒）
 let consecutiveSlowFrames = 0 // 连续慢帧计数
 let currentImageScale = 1 // 当前图像缩放比例，用于坐标转换
 
@@ -604,7 +616,8 @@ const stopCamera = async () => {
 // 启动AI分析流
 const startAIStream = async () => {
   try {
-    const response = await fetch(`http://localhost:8001/stream/webcam/start/${cameraId}`, {
+    // 包含火焰检测设置
+    const response = await fetch(`http://localhost:8001/stream/webcam/start/${cameraId}?enable_fire_detection=${aiSettings.fireDetection}`, {
       method: 'GET'
     })
 
@@ -778,6 +791,7 @@ const sendFrameToAI = async (frameBlob) => {
     formData.append('enable_face_recognition', aiSettings.faceRecognition)
     formData.append('enable_object_detection', aiSettings.objectDetection)
     formData.append('enable_behavior_detection', aiSettings.behaviorAnalysis)
+    formData.append('enable_fire_detection', aiSettings.fireDetection)
 
     // 创建AbortController来控制请求超时
     const controller = new AbortController()
@@ -886,6 +900,10 @@ const getDetectionLabel = (detection) => {
     return detection.class_name
   } else if (detection.type === 'face') {
     return detection.known ? detection.name : '未知人脸'
+  } else if (detection.type === 'fire_detection') {
+    return detection.detection_type === 'fire' ? '火焰' : 
+           detection.detection_type === 'smoke' ? '烟雾' : 
+           detection.class_name || '火灾风险'
   }
   return '未知'
 }
@@ -895,7 +913,15 @@ const getAlertTitle = (alertType) => {
   const titles = {
     person_detected: '🚨 检测到人员',
     unknown_face: '⚠️ 发现未知人脸',
-    behavior_anomaly: '🔥 异常行为检测'
+    behavior_anomaly: '🔥 异常行为检测',
+    fire_fire: '🔥 火焰检测告警',
+    fire_smoke: '💨 烟雾检测告警',
+    fire_related: '⚠️ 火灾风险检测'
+  }
+  // 处理以fire_detection_开头的告警类型
+  if (alertType && alertType.startsWith('fire_detection_')) {
+    const subType = alertType.replace('fire_detection_', '')
+    return titles[`fire_${subType}`] || '🔥 火灾风险检测'
   }
   return titles[alertType] || '🔔 检测告警'
 }
@@ -905,55 +931,25 @@ const getAlertType = (alertType) => {
   const types = {
     person_detected: 'info',
     unknown_face: 'warning',
-    behavior_anomaly: 'error'
+    behavior_anomaly: 'error',
+    fire_fire: 'error',        // 火焰告警为错误级别（最高）
+    fire_smoke: 'error',       // 烟雾告警为错误级别（最高）
+    fire_related: 'warning'    // 火灾风险为警告级别
   }
+  
+  // 处理以fire_detection_开头的告警类型
+  if (alertType && alertType.startsWith('fire_detection_')) {
+    const subType = alertType.replace('fire_detection_', '')
+    return types[`fire_${subType}`] || 'error' // 默认火灾相关告警为错误级别
+  }
+  
   return types[alertType] || 'info'
 }
 
-// 模拟AI分析结果（备用方案）
-const simulateAIResults = () => {
-  // 模拟检测结果
-  if (Math.random() > 0.7) {
-    const mockResults = [
-      {
-        type: 'person',
-        label: '人员',
-        confidence: 0.85 + Math.random() * 0.15,
-        bbox: [
-          Math.random() * 200,
-          Math.random() * 200,
-          200 + Math.random() * 300,
-          200 + Math.random() * 400
-        ],
-        timestamp: new Date()
-      }
-    ]
-    
-    if (Math.random() > 0.8) {
-      mockResults.push({
-        type: 'face',
-        label: '未知人脸',
-        confidence: 0.75 + Math.random() * 0.25,
-        bbox: [
-          mockResults[0].bbox[0] + 50,
-          mockResults[0].bbox[1] + 20,
-          mockResults[0].bbox[0] + 150,
-          mockResults[0].bbox[1] + 120
-        ],
-        timestamp: new Date()
-      })
-      
-      // 生成告警
-      addAlert({
-        title: '⚠️ 检测到未知人员',
-        description: `置信度: ${(mockResults[1].confidence * 100).toFixed(1)}%`,
-        type: 'warning'
-      })
-    }
-    
-    updateDetectionResults(mockResults)
-    drawDetectionResults(mockResults)
-  }
+// 备用功能（已弃用，可用testDetectionBoxes代替）
+// eslint-disable-next-line
+function unusedFunction() {
+  // 此函数被移除
 }
 
 // 计算两个检测框的距离（用于匹配）
@@ -1202,6 +1198,18 @@ const testDetectionBoxes = () => {
         scaledHeight * 0.5   // 右下Y (50%)
       ],
       timestamp: new Date()
+    },
+    {
+      type: 'fire_detection',
+      label: '火焰',
+      confidence: 0.92,
+      bbox: [
+        scaledWidth * 0.7,    // 左上X (70%)
+        scaledHeight * 0.6,   // 左上Y (60%)
+        scaledWidth * 0.9,    // 右下X (90%)
+        scaledHeight * 0.8    // 右下Y (80%)
+      ],
+      timestamp: new Date()
     }
   ]
   
@@ -1262,7 +1270,9 @@ const getDetectionColor = (type) => {
     person: '#409EFF',
     face: '#67C23A',
     unknown_face: '#F56C6C',
-    object: '#E6A23C'
+    object: '#E6A23C',
+    fire_detection: '#F56C6C',  // 火焰检测使用红色
+    fire: '#F56C6C'             // 火焰也使用红色
   }
   return colors[type] || '#909399'
 }
@@ -1273,7 +1283,9 @@ const getDetectionIcon = (type) => {
     person: '👤',
     face: '😊',
     unknown_face: '❓',
-    object: '📦'
+    object: '📦',
+    fire_detection: '🔥',  // 火焰检测图标
+    fire: '🔥'             // 火焰图标
   }
   return icons[type] || '🔍'
 }
