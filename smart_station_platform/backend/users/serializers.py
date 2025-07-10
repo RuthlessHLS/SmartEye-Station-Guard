@@ -162,7 +162,7 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
 
 
 # ==========================================================
-# 类: MyTokenObtainPairSerializer
+# 类6: MyTokenObtainPairSerializer
 # ==========================================================
 class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
     """
@@ -182,3 +182,87 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
         # 调用父类验证逻辑 (验证用户名密码，生成tokens)
         data = super().validate(attrs)
         return data
+
+
+# ==========================================================
+# 类 7: UserAdminSerializer
+# ==========================================================
+class UserAdminSerializer(serializers.ModelSerializer):
+    """
+    管理员用于管理用户的序列化器。
+    - 创建用户时，密码是必填的。
+    - 更新用户时，密码是可选的（留空则不修改）。
+    - 密码字段只写不读，不会在 API 响应中返回。
+    """
+    password = serializers.CharField(
+        write_only=True,
+        required=False,  # 更新时不是必填项
+        allow_blank=True,
+        style={'input_type': 'password'},
+        min_length=8,
+        help_text="仅在创建用户或重置密码时填写。更新用户信息时若留空，则不修改密码。"
+    )
+
+    class Meta:
+        model = UserProfile
+        # 定义管理员可以查看和修改的字段
+        fields = (
+            'id', 'username', 'email', 'nickname', 'phone_number',
+            'is_staff', 'is_active', 'password'
+        )
+        # 定义只读字段，防止在列表视图中被意外修改
+        read_only_fields = ('id',)
+
+    def validate_password(self, value):
+        # 即使密码字段 allow_blank=True，我们也不希望存入一个空字符串
+        if value == '':
+            return None
+        return value
+
+    def create(self, validated_data):
+        """
+        创建用户时，必须提供密码，并对其进行哈希处理。
+        """
+        # 从验证数据中提取密码
+        password = validated_data.pop('password', None)
+        if not password:
+            raise serializers.ValidationError({'password': '创建用户时必须提供密码。'})
+
+        # 使用 make_password 对密码进行哈希
+        validated_data['password'] = make_password(password)
+        user = super().create(validated_data)
+        return user
+
+    def update(self, instance, validated_data):
+        """
+        更新用户时，如果提供了密码，则更新密码，否则保持原样。
+        """
+        # 弹出密码字段，单独处理
+        password = validated_data.pop('password', None)
+
+        if password:
+            # 如果提供了新密码，则设置新密码
+            instance.set_password(password)
+
+        # 调用父类的 update 方法更新其他字段
+        # instance 会被传入，所以其他字段会更新到这个实例上
+        user = super().update(instance, validated_data)
+
+        # 如果密码被更新，需要保存实例
+        if password:
+            user.save()
+
+        return user
+
+# ==========================================================
+# 类 8: UserDirectorySerializer
+# ==========================================================
+class UserDirectorySerializer(serializers.ModelSerializer):
+    """
+    用于公开用户目录的序列化器。
+    - 只读。
+    - 只暴露 id, username, phone_number, email。
+    """
+    class Meta:
+        model = UserProfile
+        fields = ('id', 'username', 'phone_number', 'email', 'nickname')
