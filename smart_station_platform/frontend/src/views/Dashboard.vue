@@ -11,7 +11,10 @@
           </template>
           <p>此处将展示当前实时告警数量、重点区域风险等级等。</p>
           <el-empty description="暂无数据"></el-empty>
-          <el-button type="primary" @click="router.push('/monitor')">进入智能监控中心</el-button>
+          <el-space>
+            <el-button type="primary" @click="router.push('/monitor')">智能监控中心</el-button>
+            <el-button type="success" @click="router.push('/ai-monitor')">🤖 AI实时分析</el-button>
+          </el-space>
         </el-card>
       </el-col>
       <el-col :span="12">

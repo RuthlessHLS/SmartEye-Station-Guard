@@ -15,6 +15,7 @@ import numpy as np
 import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Body, File, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 # 导入我们自定义的所有核心AI模块
@@ -145,6 +146,15 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# 添加CORS中间件以支持前端跨域请求
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],  # 允许前端域名
+    allow_credentials=True,
+    allow_methods=["*"],  # 允许所有HTTP方法
+    allow_headers=["*"],  # 允许所有头部
+)
+
 
 # --- 数据模型 (保持不变) ---
 
@@ -189,6 +199,11 @@ async def run_acoustic_analysis():
     while True:  # 持续运行，直到服务停止
         try:
             for stream in video_streams.values():
+                # 检查流对象是否支持音频文件处理
+                if not hasattr(stream, 'get_audio_file'):
+                    # 跳过不支持音频的流（如WebcamProcessor）
+                    continue
+                    
                 audio_file = stream.get_audio_file()
                 if audio_file and os.path.exists(audio_file):
                     events = await acoustic_detector.process_audio_file(audio_file)
@@ -218,6 +233,7 @@ async def run_acoustic_analysis():
                         )
                         send_result_to_backend(alert)
                 else:
+                    # 只对真正的视频流显示音频文件未找到的警告
                     print(f"⚠️ 未找到音频文件: {audio_file}")
         except Exception as e:
             print(f"声学分析过程中发生错误: {e}")
@@ -463,8 +479,8 @@ async def process_video_stream_async(stream: VideoStream, camera_id: str):
                     except Exception as e:
                         print(f"处理器执行错误: {e}")
             
-            # 控制帧率
-            await asyncio.sleep(0.033)  # 约30fps
+            # 控制帧率 (优化为更高频率)
+            await asyncio.sleep(0.02)  # 约50fps
             
         except Exception as e:
             print(f"视频流处理错误 [{camera_id}]: {e}")
@@ -611,6 +627,44 @@ async def reset_audio_history():
         return {"status": "error", "message": f"重置失败: {str(e)}"}
 
 
+@app.post("/audio/frontend/alert/")
+async def process_frontend_audio_alert(
+    camera_id: str = Body(...),
+    audio_level: float = Body(...),
+    event_type: str = Body(default="high_volume"),
+    timestamp: str = Body(default=None)
+):
+    """处理前端发送的音频告警事件"""
+    try:
+        if not timestamp:
+            timestamp = datetime.datetime.now().isoformat()
+            
+        # 创建音频告警结果
+        alert_result = AIAnalysisResult(
+            camera_id=camera_id,
+            event_type=f"frontend_{event_type}",
+            location={"audio_level": audio_level},
+            confidence=min(audio_level / 100.0, 1.0),  # 将音量级别转换为置信度
+            timestamp=timestamp,
+            details={
+                "source": "frontend_audio_detection",
+                "audio_level": audio_level,
+                "event_type": event_type
+            }
+        )
+        
+        # 发送到后端
+        send_result_to_backend(alert_result)
+        
+        return {
+            "status": "success", 
+            "message": f"音频告警已处理: {event_type}, 音量级别: {audio_level}%"
+        }
+        
+    except Exception as e:
+        return {"status": "error", "message": f"处理音频告警失败: {str(e)}"}
+
+
 @app.post("/frame/analyze/")
 async def analyze_frame(
     frame: UploadFile = File(...),
@@ -619,7 +673,7 @@ async def analyze_frame(
     enable_object_detection: bool = Body(default=True),
     enable_behavior_detection: bool = Body(default=False)
 ):
-    """分析单帧图像并返回检测结果"""
+    """高性能单帧图像分析"""
     try:
         # 读取图像数据
         image_data = await frame.read()
@@ -629,6 +683,10 @@ async def analyze_frame(
         if image is None:
             return {"status": "error", "message": "无效的图像数据"}
         
+        # 获取图像尺寸，如果图像太小，跳过某些检测以提高性能
+        height, width = image.shape[:2]
+        is_low_res = width < 300 or height < 300
+        
         results = {
             "camera_id": camera_id,
             "timestamp": datetime.datetime.now().isoformat(),
@@ -636,68 +694,101 @@ async def analyze_frame(
             "alerts": []
         }
         
-        # 目标检测
+        # 高性能目标检测
         if enable_object_detection:
-            detected_objects = detectors["object"].predict(image, confidence_threshold=0.7)
-            for obj in detected_objects:
-                detection = {
-                    "type": "object",
-                    "class_name": obj["class_name"],
-                    "confidence": float(obj["confidence"]),
-                    "bbox": [int(coord) for coord in obj["coordinates"]],
-                    "timestamp": datetime.datetime.now().isoformat()
-                }
-                results["detections"].append(detection)
+            # 根据图像质量调整检测策略
+            confidence_threshold = 0.8 if is_low_res else 0.7  # 低分辨率时提高阈值减少误检
+            
+            try:
+                detected_objects = detectors["object"].predict(image, confidence_threshold=confidence_threshold)
                 
-                # 如果检测到人员，生成告警
-                if obj["class_name"] == "person" and obj["confidence"] > 0.8:
-                    alert = {
-                        "type": "person_detected",
-                        "message": f"检测到人员 (置信度: {obj['confidence']:.2f})",
+                # 限制检测结果数量以提高处理速度
+                detected_objects = detected_objects[:5] if is_low_res else detected_objects[:10]
+                
+                for obj in detected_objects:
+                    # 确保坐标转换为Python原生int类型
+                    bbox = [int(float(coord)) for coord in obj["coordinates"]]
+                    detection = {
+                        "type": "object",
+                        "class_name": obj["class_name"],
                         "confidence": float(obj["confidence"]),
-                        "location": obj["coordinates"]
+                        "bbox": bbox,
+                        "timestamp": datetime.datetime.now().isoformat()
                     }
-                    results["alerts"].append(alert)
-        
-        # 人脸识别
-        if enable_face_recognition:
-            recognized_faces = detectors["face"].detect_and_recognize(image)
-            for face in recognized_faces:
-                detection = {
-                    "type": "face",
-                    "known": face["identity"]["known"],
-                    "name": face["identity"].get("name", "未知"),
-                    "confidence": float(face.get("confidence", 0.5)),
-                    "bbox": [
-                        int(face["location"]["left"]),
-                        int(face["location"]["top"]),
-                        int(face["location"]["right"]),
-                        int(face["location"]["bottom"])
-                    ],
-                    "timestamp": datetime.datetime.now().isoformat()
-                }
-                results["detections"].append(detection)
-                
-                # 如果是未知人脸，生成告警
-                if not face["identity"]["known"]:
-                    alert = {
-                        "type": "unknown_face",
-                        "message": "检测到未知人脸",
-                        "confidence": float(face.get("confidence", 0.5)),
-                        "location": face["location"]
-                    }
-                    results["alerts"].append(alert)
+                    results["detections"].append(detection)
                     
-                    # 发送到后端
-                    backend_alert = AIAnalysisResult(
-                        camera_id=camera_id,
-                        event_type="unknown_face_detected",
-                        location=face["location"],
-                        confidence=float(face.get("confidence", 0.5)),
-                        timestamp=datetime.datetime.now().isoformat(),
-                        details={"realtime_detection": True}
-                    )
-                    send_result_to_backend(backend_alert)
+                    # 如果检测到人员，生成告警
+                    if obj["class_name"] == "person" and obj["confidence"] > 0.8:
+                        alert = {
+                            "type": "person_detected",
+                            "message": f"检测到人员 (置信度: {obj['confidence']:.2f})",
+                            "confidence": float(obj["confidence"]),
+                            "location": bbox  # 使用已转换的bbox
+                        }
+                        results["alerts"].append(alert)
+            except Exception as e:
+                print(f"目标检测失败: {e}")
+                # 目标检测失败时不影响其他功能继续运行
+        
+        # 优化的人脸识别
+        if enable_face_recognition and not is_low_res:  # 低分辨率时跳过人脸识别以提高性能
+            try:
+                recognized_faces = detectors["face"].detect_and_recognize(image)
+                
+                # 限制人脸检测结果数量
+                recognized_faces = recognized_faces[:3]  # 最多处理3个人脸
+                
+                for face in recognized_faces:
+                    # 确保人脸坐标转换为Python原生类型
+                    face_bbox = [
+                        int(float(face["location"]["left"])),
+                        int(float(face["location"]["top"])),
+                        int(float(face["location"]["right"])),
+                        int(float(face["location"]["bottom"]))
+                    ]
+                    # 创建一个干净的location字典
+                    clean_location = {
+                        "left": int(float(face["location"]["left"])),
+                        "top": int(float(face["location"]["top"])),
+                        "right": int(float(face["location"]["right"])),
+                        "bottom": int(float(face["location"]["bottom"]))
+                    }
+                    
+                    detection = {
+                        "type": "face",
+                        "known": face["identity"]["known"],
+                        "name": face["identity"].get("name", "未知"),
+                        "confidence": float(face.get("confidence", 0.5)),
+                        "bbox": face_bbox,
+                        "timestamp": datetime.datetime.now().isoformat()
+                    }
+                    results["detections"].append(detection)
+                    
+                    # 如果是未知人脸，生成告警
+                    if not face["identity"]["known"]:
+                        alert = {
+                            "type": "unknown_face",
+                            "message": "检测到未知人脸",
+                            "confidence": float(face.get("confidence", 0.5)),
+                            "location": clean_location  # 使用已清理的location
+                        }
+                        results["alerts"].append(alert)
+                        
+                        # 异步发送到后端（不阻塞当前处理）
+                        backend_alert = AIAnalysisResult(
+                            camera_id=camera_id,
+                            event_type="unknown_face_detected",
+                            location=clean_location,  # 使用已清理的location
+                            confidence=float(face.get("confidence", 0.5)),
+                            timestamp=datetime.datetime.now().isoformat(),
+                            details={"realtime_detection": True}
+                        )
+                        # 使用线程池异步处理，不阻塞响应
+                        import threading
+                        threading.Thread(target=lambda: send_result_to_backend(backend_alert), daemon=True).start()
+            except Exception as e:
+                print(f"人脸识别失败: {e}")
+                # 人脸识别失败时不影响其他功能继续运行
         
         return {"status": "success", "results": results}
         
@@ -758,6 +849,57 @@ async def stop_webcam_stream(camera_id: str):
             
     except Exception as e:
         return {"status": "error", "message": f"停止失败: {str(e)}"}
+
+
+@app.get("/performance/optimize/")
+async def get_performance_tips():
+    """获取性能优化建议"""
+    try:
+        tips = []
+        
+        # 检查检测器状态
+        if "object" in detectors:
+            tips.append({
+                "type": "info",
+                "title": "目标检测优化",
+                "description": "已启用智能检测阈值调整和结果数量限制"
+            })
+        
+        if "face" in detectors:
+            tips.append({
+                "type": "info", 
+                "title": "人脸识别优化",
+                "description": "低分辨率图像自动跳过人脸识别，最多处理3个人脸"
+            })
+            
+        tips.extend([
+            {
+                "type": "success",
+                "title": "性能模式已激活",
+                "description": "AI服务已启用高性能处理模式，包括异步后端通信和错误容错机制"
+            },
+            {
+                "type": "warning",
+                "title": "网络优化建议",
+                "description": "前端已启用帧差检测、动态画质调整和智能跳帧机制"
+            }
+        ])
+        
+        return {
+            "status": "success",
+            "tips": tips,
+            "performance_mode": "high_performance",
+            "optimizations": [
+                "动态检测阈值",
+                "结果数量限制", 
+                "低分辨率跳过",
+                "异步后端通信",
+                "错误容错机制"
+            ]
+        }
+        
+    except Exception as e:
+        return {"status": "error", "message": f"获取性能信息失败: {str(e)}"}
 
 
 if __name__ == "__main__":
