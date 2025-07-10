@@ -40,12 +40,18 @@
 <script setup>
 import { ref, reactive } from 'vue';
 import axios from 'axios';
-// 1. 导入 SliderCaptcha 组件 (请确保路径正确)
-import SliderCaptcha from './SliderCaptcha.vue'; // 假设 SliderCaptcha.vue 在同级目录
+import SliderCaptcha from './SliderCaptcha.vue'; // 假设滑动验证码组件在同级目录
+
+// 1. 【核心修改】从 vue-router 导入 useRouter
+import { useRouter } from 'vue-router';
+
+// 2. 【核心修改】初始化 router 实例
+const router = useRouter();
 
 // 状态控制
 const loading = ref(false);
 const showCaptcha = ref(false);
+const errorMessage = ref(''); // 用来在模板中显示错误信息，比 alert() 体验好
 
 // 登录表单数据
 const form = reactive({
@@ -60,62 +66,57 @@ const captchaResult = reactive({
   captcha_position: 0,
 });
 
-// 2. 用户点击 "登录" 按钮，触发此方法
+// 用户点击 "登录" 按钮，触发此方法
 const handleLoginAttempt = () => {
-  // 前端基础校验
+  errorMessage.value = ''; // 先清空之前的错误
   if (!form.username || !form.password) {
-    alert('请输入用户名和密码');
+    errorMessage.value = '请输入用户名和密码';
     return;
   }
-  // 显示验证码模态框，而不是直接提交
   showCaptcha.value = true;
 };
 
-// 3. 监听验证码组件的 `success` 事件
+// 监听验证码组件的 `success` 事件
 const onCaptchaSuccess = (result) => {
-  // 保存验证码结果
   captchaResult.captcha_key = result.captcha_key;
   captchaResult.captcha_position = result.captcha_position;
-
-  // 隐藏验证码模态框
   showCaptcha.value = false;
-
-  // 立即执行真正的登录提交
   submitLogin();
 };
 
-// 4. 包含完整数据的最终提交函数
+// 包含完整数据的最终提交函数
 const submitLogin = async () => {
   loading.value = true;
+  errorMessage.value = '';
   try {
     const payload = {
       username: form.username,
       password: form.password,
       captcha_key: captchaResult.captcha_key,
-      captcha_position: captchaResult.captcha_position.toString(), // 确保是字符串
+      captcha_position: captchaResult.captcha_position.toString(),
     };
 
-    // 【重要】请将 URL 替换为你的后端 API 地址
     const response = await axios.post('http://127.0.0.1:8000/api/users/token/', payload);
 
-    alert('登录成功！');
-    console.log('Token:', response.data);
+    // 3. 【核心修改】处理登录成功后的逻辑
+    // 保存 token 到 localStorage，这是导航守卫判断登录状态的依据
+    localStorage.setItem('access_token', response.data.access);
+    if (response.data.refresh) {
+      localStorage.setItem('refresh_token', response.data.refresh);
+    }
 
-    //在此处理登录成功后的逻辑，例如保存 token、跳转到主页等
-     localStorage.setItem('access_token', response.data.access);
-     localStorage.setItem('refresh_token', response.data.refresh);
-     window.location.href = '/dashboard';
+    // 使用 router.push() 进行页面跳转，实现无刷新导航
+    // push到 '/dashboard' 后，导航守卫会检测到你已登录，然后放行
+    router.push('/dashboard');
 
   } catch (error) {
-    // 从后端响应中提取更具体的错误信息
     const errorData = error.response?.data;
-    let errorMessage = '登录失败，请重试。';
+    let msg = '登录失败，请重试。';
     if (errorData) {
-        // 覆盖默认错误信息
-        errorMessage = errorData.detail || errorData.captcha || (errorData.username && `用户名: ${errorData.username[0]}`) || (errorData.password && `密码: ${errorData.password[0]}`) || JSON.stringify(errorData);
+        msg = errorData.detail || errorData.captcha || (errorData.username && `用户名: ${errorData.username[0]}`) || (errorData.password && `密码: ${errorData.password[0]}`) || JSON.stringify(errorData);
     }
-    alert(errorMessage);
-    console.error('登录失败:', errorData);
+    errorMessage.value = msg;
+    console.error('登录失败:', errorData || error);
   } finally {
     loading.value = false;
   }

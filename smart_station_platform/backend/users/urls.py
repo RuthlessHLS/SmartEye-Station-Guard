@@ -1,12 +1,18 @@
 # G:\Web\smart_station_platform\backend\users\urls.py
 
-from django.urls import path
+from django.urls import path, include
 from . import views
 from rest_framework_simplejwt.views import TokenRefreshView
+from rest_framework.routers import DefaultRouter
 
-
+router = DefaultRouter()
+router.register(r'admin/users', views.UserAdminViewSet, basename='admin-user')
+router.register(r'directory', views.UserDirectoryViewSet, basename='user-directory')
 
 urlpatterns = [
+    # 将路由器生成的 URL 添加到 urlpatterns
+    path('', include(router.urls)),
+
     # 生成验证码的路由
     path('captcha/generate/', views.GenerateCaptchaView.as_view(), name='captcha_generate'),
 

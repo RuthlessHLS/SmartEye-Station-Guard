@@ -1,9 +1,10 @@
 import { createRouter, createWebHistory } from 'vue-router'
-// 导入视图组件，这些文件你稍后会创建
+// 导入视图组件
 import Login from '../views/Login.vue'
 import Register from '../views/Register.vue'
 import Dashboard from '../views/Dashboard.vue'
 import MonitorCenter from '../views/MonitorCenter.vue'
+import AIVideoMonitor from '../views/AIVideoMonitor.vue'
 import AlertManagement from '../views/AlertManagement.vue'
 import DailyReport from '../views/DailyReport.vue'
 import DataScreen from '../views/DataScreen.vue'
@@ -16,15 +17,24 @@ const router = createRouter({
     {
       path: '/login',
       name: 'Login',
-      component: Login
+      component: Login,
+      // [改进 2] 为公共路由添加 meta 字段，让逻辑更清晰
+      meta: { requiresAuth: false }
     },
     {
       path: '/register',
       name: 'Register',
-      component: Register
+      component: Register,
+      // [改进 2]
+      meta: { requiresAuth: false }
     },
     {
+      // [改进 3] 将根路径重定向放到路由列表的开头，更清晰
       path: '/',
+      redirect: '/dashboard'
+    },
+    {
+      path: '/dashboard', // 将 Dashboard 作为一个具体的路径
       name: 'Dashboard',
       component: Dashboard,
       meta: { requiresAuth: true } // 需要认证
@@ -33,6 +43,12 @@ const router = createRouter({
       path: '/monitor',
       name: 'MonitorCenter',
       component: MonitorCenter,
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/ai-monitor',
+      name: 'AIVideoMonitor',
+      component: AIVideoMonitor,
       meta: { requiresAuth: true }
     },
     {
@@ -59,20 +75,27 @@ const router = createRouter({
       component: UserManagement,
       meta: { requiresAuth: true }
     },
-    // 添加一个 catch-all 路由进行重定向或 404
     {
+      // 捕获所有未匹配的路由
       path: '/:catchAll(.*)',
-      redirect: '/' // 默认重定向到主页
+      redirect: '/dashboard' // 重定向到主仪表盘
     }
   ]
 })
 
-// 导航守卫，用于验证用户是否已登录 (简化版)
+// [改进 1 & 2] 优化后的导航守卫
 router.beforeEach((to, from, next) => {
-  const loggedIn = localStorage.getItem('access_token'); // 假设Token存储在localStorage
-  if (to.meta.requiresAuth && !loggedIn && to.path !== '/login' && to.path !== '/register') {
+  const loggedIn = localStorage.getItem('access_token');
+  const requiresAuth = to.meta.requiresAuth;
+
+  if (requiresAuth && !loggedIn) {
+    // 情况 1: 访问受保护的页面，但未登录 -> 跳转到登录页
     next('/login');
+  } else if (!requiresAuth && loggedIn && (to.name === 'Login' || to.name === 'Register')) {
+    // 情况 2: 已登录，但试图访问登录/注册页 -> 跳转到主仪表盘
+    next({ name: 'Dashboard' });
   } else {
+    // 情况 3: 其他所有情况 (已登录访问受保护页，未登录访问公共页) -> 正常放行
     next();
   }
 });
