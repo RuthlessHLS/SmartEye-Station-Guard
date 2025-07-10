@@ -13,6 +13,7 @@ from .views import (
 
 urlpatterns = [
     # 图片中显示的API接口
+    path('', AlertListView.as_view(), name='alerts-list-root'),
     path('ai-results/', AIResultReceiveView.as_view(), name='alerts_ai_results_create'),  # POST
     path('list/', AlertListView.as_view(), name='alerts_list_list'),  # GET
     path('<int:pk>/handle/', AlertHandleView.as_view(), name='alerts_handle_update'),  # PUT/PATCH
