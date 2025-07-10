@@ -207,8 +207,16 @@
                       >
                         清除检测框
                       </el-button>
+                      <el-button 
+                        type="danger" 
+                        size="small" 
+                        @click="resetDetectionCache"
+                        :icon="Refresh"
+                      >
+                        重置跟踪
+                      </el-button>
                       <el-text type="info" size="small">
-                        测试检测框是否正常显示和清除
+                        如果检测框异常，可尝试重置跟踪缓存
                       </el-text>
                     </div>
                   </el-form-item>
@@ -346,7 +354,8 @@ import {
   Close,
   Cpu,
   Search,
-  SuccessFilled
+  SuccessFilled,
+  Refresh
 } from '@element-plus/icons-vue'
 
 // 响应式数据
@@ -371,6 +380,7 @@ const aiSettings = reactive({
 // 检测结果和告警
 const detectionResults = ref([])
 const realtimeAlerts = ref([])
+const lastFrameDetections = ref([]) // 缓存上一帧的检测结果用于平滑
 
 // 内部变量
 let mediaStream = null
@@ -555,6 +565,7 @@ const stopCamera = async () => {
     aiAnalysisEnabled.value = false
     detectionResults.value = []
     realtimeAlerts.value = []
+    lastFrameDetections.value = [] // 清除检测缓存
     
     // 重置性能统计
     performanceStats.fps = 0
@@ -945,10 +956,86 @@ const simulateAIResults = () => {
   }
 }
 
-// 更新检测结果列表 - 实时替换而非累积
+// 计算两个检测框的距离（用于匹配）
+const calculateDistance = (bbox1, bbox2) => {
+  const center1 = [(bbox1[0] + bbox1[2]) / 2, (bbox1[1] + bbox1[3]) / 2]
+  const center2 = [(bbox2[0] + bbox2[2]) / 2, (bbox2[1] + bbox2[3]) / 2]
+  return Math.sqrt(Math.pow(center1[0] - center2[0], 2) + Math.pow(center1[1] - center2[1], 2))
+}
+
+// 优化的平滑检测框位置（配合AI端稳定化）
+const smoothDetections = (newDetections, lastDetections) => {
+  if (!lastDetections || lastDetections.length === 0) {
+    return newDetections.map(det => ({
+      ...det,
+      isStable: det.is_stable || false
+    }))
+  }
+
+  const smoothedResults = []
+  const MATCH_THRESHOLD = 100 // 降低匹配阈值，AI端已做稳定化
+  
+  // 根据AI端的稳定性标记调整平滑因子
+  const getSmoothFactor = (detection) => {
+    if (detection.is_stable) {
+      return aiSettings.realtimeMode ? 0.8 : 0.6 // 稳定目标更平滑
+    } else {
+      return aiSettings.realtimeMode ? 0.9 : 0.8 // 新目标响应更快
+    }
+  }
+
+  newDetections.forEach(newDet => {
+    let bestMatch = null
+    let minDistance = Infinity
+
+    // 寻找最佳匹配
+    lastDetections.forEach(lastDet => {
+      if (newDet.type === lastDet.type) {
+        const distance = calculateDistance(newDet.bbox, lastDet.bbox)
+        if (distance < MATCH_THRESHOLD && distance < minDistance) {
+          minDistance = distance
+          bestMatch = lastDet
+        }
+      }
+    })
+
+    if (bestMatch && !newDet.is_kept) { // 如果不是AI保留的对象才前端平滑
+      const smoothFactor = getSmoothFactor(newDet)
+      
+      const smoothedBbox = [
+        bestMatch.bbox[0] + (newDet.bbox[0] - bestMatch.bbox[0]) * smoothFactor,
+        bestMatch.bbox[1] + (newDet.bbox[1] - bestMatch.bbox[1]) * smoothFactor,
+        bestMatch.bbox[2] + (newDet.bbox[2] - bestMatch.bbox[2]) * smoothFactor,
+        bestMatch.bbox[3] + (newDet.bbox[3] - bestMatch.bbox[3]) * smoothFactor
+      ]
+      
+      smoothedResults.push({
+        ...newDet,
+        bbox: smoothedBbox,
+        isStable: newDet.is_stable || true // 继承AI端的稳定性标记
+      })
+    } else {
+      // AI端已处理或新目标，直接使用
+      smoothedResults.push({
+        ...newDet,
+        isStable: newDet.is_stable || false
+      })
+    }
+  })
+
+  return smoothedResults
+}
+
+// 更新检测结果列表 - 带平滑处理
 const updateDetectionResults = (results) => {
-  // 只保留当前帧的检测结果，确保实时性
-  detectionResults.value = results.slice(0, 20) // 仅显示最新的20个检测结果
+  // 对检测结果进行平滑处理
+  const smoothedResults = smoothDetections(results, lastFrameDetections.value)
+  
+  // 更新当前帧结果
+  detectionResults.value = smoothedResults.slice(0, 20) // 仅显示最新的20个检测结果
+  
+  // 缓存当前帧结果供下一帧使用
+  lastFrameDetections.value = smoothedResults.slice()
 }
 
 // 在视频上绘制检测结果
@@ -967,17 +1054,15 @@ const drawDetectionResults = (results) => {
   const videoWidth = videoElement.value.videoWidth || canvasWidth
   const videoHeight = videoElement.value.videoHeight || canvasHeight
   
-  console.log('绘制参数:', { 
-    canvasWidth, canvasHeight, 
-    videoWidth, videoHeight, 
-    currentImageScale, 
-    resultCount: results.length 
-  })
+  // 检测状态日志
+  if (results.length > 0) {
+    const stableCount = results.filter(r => r.isStable || r.is_stable).length
+    const keptCount = results.filter(r => r.is_kept).length
+    console.log(`🎯 检测: ${results.length}个目标 (稳定:${stableCount}, 保留:${keptCount})`)
+  }
 
   results.forEach((result, index) => {
     if (result.bbox && result.bbox.length === 4) {
-      console.log(`绘制检测框 ${index}:`, result)
-      
       // AI返回的坐标是基于缩放后图像的，需要直接转换到Canvas显示坐标
       const [x1, y1, x2, y2] = result.bbox
       
@@ -998,24 +1083,51 @@ const drawDetectionResults = (results) => {
       const width = displayX2 - displayX1
       const height = displayY2 - displayY1
 
-      console.log('坐标转换:', {
-        aiCoords: [x1, y1, x2, y2],
-        scaledVideoSize: [scaledVideoWidth, scaledVideoHeight],
-        canvasSize: [canvasWidth, canvasHeight],
-        scaleRatio: [scaleX, scaleY],
-        displayCoords: [displayX1, displayY1, displayX2, displayY2],
-        boxSize: [width, height],
-        currentImageScale: currentImageScale
-      })
-
-      // 绘制检测框
-      canvasContext.strokeStyle = getDetectionColor(result.type)
-      canvasContext.lineWidth = 3 // 加粗线条，更容易看见
+      // 根据目标状态绘制不同样式的检测框
+      const color = getDetectionColor(result.type)
+      canvasContext.strokeStyle = color
+      
+      // 根据目标状态设置线条样式
+      if (result.is_kept) {
+        // AI保留的对象：虚线框表示预测保持
+        canvasContext.setLineDash([8, 4])
+        canvasContext.lineWidth = 3
+        canvasContext.globalAlpha = 0.8
+      } else if (result.isStable || result.is_stable) {
+        // 稳定目标：粗实线
+        canvasContext.setLineDash([])
+        canvasContext.lineWidth = 4
+        canvasContext.globalAlpha = 1.0
+      } else {
+        // 新目标：细实线
+        canvasContext.setLineDash([])
+        canvasContext.lineWidth = 2
+        canvasContext.globalAlpha = 0.9
+      }
+      
       canvasContext.strokeRect(displayX1, displayY1, width, height)
+      
+      // 重置绘制状态
+      canvasContext.setLineDash([])
+      canvasContext.globalAlpha = 1.0
+      
+      // 稳定目标添加角标提示
+      if (result.isStable || result.is_stable) {
+        canvasContext.fillStyle = color
+        canvasContext.fillRect(displayX1 - 2, displayY1 - 2, 8, 8)
+      }
 
       // 绘制标签背景
-      const label = `${result.label} ${(result.confidence * 100).toFixed(1)}%`
-      canvasContext.font = 'bold 14px Arial' // 加粗字体
+      let label = `${result.label || getDetectionLabel(result)} ${(result.confidence * 100).toFixed(1)}%`
+      
+      // 为不同状态的目标添加状态标识
+      if (result.is_kept) {
+        label += ' [保持]'
+      } else if (result.isStable || result.is_stable) {
+        label += ' [稳定]'
+      }
+      
+      canvasContext.font = 'bold 14px Arial'
       const textMetrics = canvasContext.measureText(label)
       const textWidth = textMetrics.width
       const textHeight = 18
@@ -1024,22 +1136,16 @@ const drawDetectionResults = (results) => {
       const labelX = Math.max(0, Math.min(displayX1, canvasWidth - textWidth - 10))
       const labelY = Math.max(textHeight, displayY1)
       
-      canvasContext.fillStyle = getDetectionColor(result.type)
+      canvasContext.fillStyle = color
       canvasContext.fillRect(labelX, labelY - textHeight, textWidth + 8, textHeight)
 
       // 绘制标签文字
       canvasContext.fillStyle = 'white'
       canvasContext.fillText(label, labelX + 4, labelY - 4)
-      
-      // 绘制中心点（调试用）
-      canvasContext.fillStyle = getDetectionColor(result.type)
-      canvasContext.fillRect(displayX1 + width/2 - 2, displayY1 + height/2 - 2, 4, 4)
-    } else {
-      console.log(`检测框 ${index} 数据无效:`, result.bbox)
     }
   })
   
-  console.log(`完成绘制 ${results.length} 个检测框`)
+  // 绘制完成
 }
 
 // 测试检测框显示
@@ -1118,8 +1224,36 @@ const clearDetectionBoxes = () => {
   
   canvasContext.clearRect(0, 0, overlayCanvas.value.width, overlayCanvas.value.height)
   detectionResults.value = []
-  console.log('已清除所有检测框')
+  lastFrameDetections.value = [] // 清除缓存
+  console.log('✅ 已清除所有检测框和缓存')
   ElMessage.info('检测框已清除')
+}
+
+// 重置AI检测缓存
+const resetDetectionCache = async () => {
+  try {
+    const response = await fetch(`http://localhost:8001/detection/cache/clear/${cameraId}`, {
+      method: 'POST'
+    })
+    
+    if (response.ok) {
+      const result = await response.json()
+      if (result.status === 'success') {
+        // 同时清除前端缓存
+        clearDetectionBoxes()
+        console.log('🔄 已重置AI检测缓存')
+        ElMessage.success('检测跟踪已重置')
+      } else {
+        console.error('重置缓存失败:', result.message)
+        ElMessage.error('重置失败: ' + result.message)
+      }
+    } else {
+      throw new Error('网络请求失败')
+    }
+  } catch (error) {
+    console.error('重置检测缓存失败:', error)
+    ElMessage.error('重置缓存失败，请检查网络连接')
+  }
 }
 
 // 获取检测类型对应的颜色
