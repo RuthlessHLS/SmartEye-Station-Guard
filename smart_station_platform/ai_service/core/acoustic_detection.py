@@ -5,6 +5,12 @@ import sounddevice as sd
 import numpy as np
 import queue
 from typing import Callable, Optional
+from moviepy.editor import VideoFileClip
+from pydub import AudioSegment
+import io
+import wave
+import threading
+import time
 
 
 class AcousticDetector:
@@ -23,16 +29,82 @@ class AcousticDetector:
         self.block_size = block_size
         self.stream = None
         self.is_running = False
+        self.video_audio_thread = None
+        self.stop_video_processing = False
 
         # 创建一个队列来在线程间传递音频数据
         self.audio_queue = queue.Queue()
 
-        # 检查是否有可用的麦克风设备
+    def process_video_audio(self, video_path: str):
+        """
+        处理视频文件的音频。
+
+        Args:
+            video_path (str): 视频文件路径
+        """
         try:
-            sd.query_devices(kind='input')
+            print(f"开始处理视频音频: {video_path}")
+            video = VideoFileClip(video_path)
+            audio = video.audio
+            
+            if audio is None:
+                print(f"警告: 视频 {video_path} 没有音频轨道")
+                return
+            
+            # 获取音频数据
+            audio_frames = audio.to_soundarray(fps=self.sample_rate)
+            
+            # 如果是立体声，转换为单声道
+            if len(audio_frames.shape) > 1 and audio_frames.shape[1] > 1:
+                audio_frames = np.mean(audio_frames, axis=1)
+            
+            # 将音频数据分块处理
+            chunk_size = self.block_size
+            for i in range(0, len(audio_frames), chunk_size):
+                if self.stop_video_processing:
+                    break
+                    
+                chunk = audio_frames[i:i + chunk_size]
+                if len(chunk) < chunk_size:
+                    # 对于最后一个不完整的块，补零
+                    chunk = np.pad(chunk, (0, chunk_size - len(chunk)))
+                
+                self.audio_queue.put(chunk)
+                time.sleep(chunk_size / self.sample_rate)  # 模拟实时播放速度
+            
+            video.close()
+            print(f"视频音频处理完成: {video_path}")
+            
         except Exception as e:
-            print(f"错误: 无法找到音频输入设备: {e}")
-            raise
+            print(f"处理视频音频时出错: {e}")
+
+    def start_video_audio_processing(self, video_path: str):
+        """
+        开始处理视频音频。
+
+        Args:
+            video_path (str): 视频文件路径
+        """
+        if self.video_audio_thread and self.video_audio_thread.is_alive():
+            print("已有视频音频正在处理中")
+            return
+
+        self.stop_video_processing = False
+        self.video_audio_thread = threading.Thread(
+            target=self.process_video_audio,
+            args=(video_path,)
+        )
+        self.video_audio_thread.start()
+        self.is_running = True
+        print(f"开始处理视频音频: {video_path}")
+
+    def stop_video_audio_processing(self):
+        """停止视频音频处理。"""
+        self.stop_video_processing = True
+        if self.video_audio_thread:
+            self.video_audio_thread.join()
+        self.is_running = False
+        print("视频音频处理已停止")
 
     def _audio_callback(self, indata, frames, time, status):
         """这是音频流的回调函数，当有新的音频数据时，sounddevice会自动调用它。"""

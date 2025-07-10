@@ -36,7 +36,7 @@ class AIAnalysisResult(BaseModel):
     
     camera_id: str = Field(..., description="摄像头ID或传感器ID")
     event_type: str = Field(..., description="事件类型，如 'person_fall', 'stranger_intrusion' 等")
-    timestamp: float = Field(..., description="事件发生的时间戳")
+    timestamp: str = Field(..., description="事件发生的时间戳")
     location: Dict[str, Any] = Field(default_factory=dict, description="事件位置信息")
     confidence: float = Field(default=0.0, ge=0.0, le=1.0, description="AI检测的置信度，0-1之间")
     

@@ -3,7 +3,10 @@ import cv2
 import time
 import threading
 import numpy as np
-from typing import List, Callable, Optional
+from typing import List, Callable, Optional, Dict
+from datetime import datetime
+import traceback
+from models.alert_models import AIAnalysisResult  # 修改为绝对导入
 
 
 def process_video_stream(video_url: str):
@@ -39,12 +42,13 @@ class VideoStream:
     视频流处理类，负责管理视频流的捕获和AI处理
     """
     
-    def __init__(self, stream_url: str):
+    def __init__(self, stream_url: str, acoustic_detector=None):
         """
         初始化视频流
         
         Args:
             stream_url (str): 视频流URL
+            acoustic_detector: 声音检测器实例
         """
         self.stream_url = stream_url
         self.cap: Optional[cv2.VideoCapture] = None
@@ -52,6 +56,7 @@ class VideoStream:
         self.is_running = False
         self.thread: Optional[threading.Thread] = None
         self.lock = threading.Lock()
+        self.acoustic_detector = acoustic_detector
     
     def add_processor(self, processor: Callable[[np.ndarray], None]):
         """
@@ -80,6 +85,11 @@ class VideoStream:
             print(f"错误: 无法打开视频流 {self.stream_url}")
             return False
         
+        # 如果是本地视频文件且有声音检测器，启动音频处理
+        if self.acoustic_detector and self.stream_url.startswith(('G:/', 'C:/', 'D:/', 'E:/', 'F:/')):
+            print("检测到本地视频文件，启动音频处理...")
+            self.acoustic_detector.start_video_audio_processing(self.stream_url)
+        
         # 启动处理线程
         self.is_running = True
         self.thread = threading.Thread(target=self._process_loop, daemon=True)
@@ -93,6 +103,10 @@ class VideoStream:
         停止视频流处理
         """
         self.is_running = False
+        
+        # 停止音频处理
+        if self.acoustic_detector:
+            self.acoustic_detector.stop_video_audio_processing()
         
         if self.thread and self.thread.is_alive():
             self.thread.join(timeout=5)
@@ -155,7 +169,8 @@ class VideoStream:
         info = {
             "stream_url": self.stream_url,
             "is_running": self.is_running,
-            "processors_count": len(self.processors)
+            "processors_count": len(self.processors),
+            "has_audio_processing": self.acoustic_detector is not None
         }
         
         if self.cap and self.cap.isOpened():
@@ -166,3 +181,65 @@ class VideoStream:
             })
         
         return info
+
+    def process_frame(self, frame: np.ndarray) -> Dict:
+        """处理单帧图像。"""
+        results = {
+            "faces": [],
+            "objects": [],
+            "behaviors": [],
+            "alerts": []
+        }
+        
+        try:
+            # 1. 人脸检测和识别
+            if self.face_recognizer:
+                face_results = self.face_recognizer.detect_and_recognize(frame)
+                results["faces"] = face_results
+                
+                # 检查每个未知人脸并生成告警
+                for face in face_results:
+                    if face["alert_needed"]:
+                        alert = AIAnalysisResult(
+                            camera_id=self.camera_id,
+                            event_type="unknown_face_detected",
+                            timestamp=face["detection_time"],
+                            location={
+                                "box": [
+                                    face["location"]["left"],
+                                    face["location"]["top"],
+                                    face["location"]["right"],
+                                    face["location"]["bottom"]
+                                ],
+                                "description": "摄像头视野内"
+                            },
+                            confidence=face["confidence"],
+                            details={
+                                "best_match_info": face["best_match"] if face["best_match"] else None,
+                                "face_location": face["location"]
+                            }
+                        )
+                        
+                        # 发送报警到后端
+                        try:
+                            self.alert_sender.send_alert(alert)
+                            print(f"🚨 未知人员报警已发送! 位置: {face['location']}")
+                        except Exception as e:
+                            print(f"发送未知人员报警失败: {str(e)}")
+                            traceback.print_exc()
+            
+            # 2. 行为检测（如果需要）
+            if self.behavior_detector:
+                behavior_results = self.behavior_detector.detect(frame)
+                results["behaviors"] = behavior_results
+            
+            # 3. 目标检测（如果需要）
+            if self.object_detector:
+                object_results = self.object_detector.detect(frame)
+                results["objects"] = object_results
+                
+        except Exception as e:
+            print(f"处理帧时发生错误: {str(e)}")
+            traceback.print_exc()
+        
+        return results
