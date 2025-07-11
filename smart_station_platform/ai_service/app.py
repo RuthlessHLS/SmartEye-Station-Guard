@@ -736,8 +736,9 @@ def _stabilize_face_identity(face_id: str, new_identity: Dict, face_history: Dic
     Returns:
         稳定化后的身份信息
     """
-    # 初始化身份历史记录
+    # 🔧 兼容性检查：处理不同的 face_history 数据结构
     if face_id not in face_history:
+        # 创建新的身份历史记录
         face_history[face_id] = {
             "identity_history": [],
             "current_identity": new_identity,
@@ -748,8 +749,38 @@ def _stabilize_face_identity(face_id: str, new_identity: Dict, face_history: Dic
         return new_identity
     
     history_data = face_history[face_id]
+    
+    # 🔧 数据结构兼容性处理：检查是否是位置跟踪数据结构
+    if "positions" in history_data and "current_identity" not in history_data:
+        # 这是位置跟踪数据结构，需要扩展为身份稳定化数据结构
+        print(f"🔄 升级人脸 {face_id} 数据结构：位置跟踪 → 身份稳定化")
+        history_data.update({
+            "identity_history": [],
+            "current_identity": new_identity,
+            "stable_count": 0,
+            "last_change_time": time.time()
+        })
+        return new_identity
+    
+    # 🔧 安全访问：确保必要字段存在
+    if "current_identity" not in history_data:
+        print(f"⚠️ 人脸 {face_id} 缺少身份数据，重新初始化")
+        history_data["current_identity"] = new_identity
+        history_data["identity_history"] = []
+        history_data["stable_count"] = 0
+        history_data["last_change_time"] = time.time()
+        return new_identity
+    
     current_identity = history_data["current_identity"]
+    
+    # 确保 identity_history 存在
+    if "identity_history" not in history_data:
+        history_data["identity_history"] = []
     identity_history = history_data["identity_history"]
+    
+    # 确保 stable_count 存在
+    if "stable_count" not in history_data:
+        history_data["stable_count"] = 0
     
     # 添加新的识别结果到历史记录
     identity_history.append({
@@ -792,7 +823,7 @@ def _stabilize_face_identity(face_id: str, new_identity: Dict, face_history: Dic
     
     if current_name == winning_name:
         # 当前身份与投票结果一致，保持稳定
-        history_data["stable_count"] += 1
+        history_data["stable_count"] = history_data.get("stable_count", 0) + 1
         should_change_identity = False
         change_reason = "身份一致，保持稳定"
         
@@ -806,13 +837,13 @@ def _stabilize_face_identity(face_id: str, new_identity: Dict, face_history: Dic
             # 新身份置信度明显更高
             should_change_identity = True
             change_reason = f"投票支持率{vote_ratio:.1%}，置信度提升{new_confidence-current_confidence:.2f}"
-        elif history_data["stable_count"] >= min_stable_frames:
+        elif history_data.get("stable_count", 0) >= min_stable_frames:
             # 当前身份已经稳定足够久，可以切换
             should_change_identity = True
             change_reason = f"投票支持率{vote_ratio:.1%}，已稳定{history_data['stable_count']}帧"
         else:
             should_change_identity = False
-            change_reason = f"投票支持率{vote_ratio:.1%}，但稳定帧数不足({history_data['stable_count']}<{min_stable_frames})"
+            change_reason = f"投票支持率{vote_ratio:.1%}，但稳定帧数不足({history_data.get('stable_count', 0)}<{min_stable_frames})"
     else:
         should_change_identity = False
         change_reason = f"投票支持率不足({vote_ratio:.1%}<{change_threshold:.1%})"
@@ -850,7 +881,7 @@ def _stabilize_face_identity(face_id: str, new_identity: Dict, face_history: Dic
             vote_pct = votes / total_weight * 100 if total_weight > 0 else 0
             print(f"  - {name}: {vote_pct:.1f}%")
         print(f"  当前身份: {history_data['current_identity']['name']}")
-        print(f"  稳定程度: {history_data['stable_count']} 帧")
+        print(f"  稳定程度: {history_data.get('stable_count', 0)} 帧")
     
     return history_data["current_identity"]
 
