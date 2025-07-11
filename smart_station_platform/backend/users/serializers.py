@@ -95,18 +95,25 @@ class UserRegisterSerializer(serializers.ModelSerializer):
 # ==========================================================
 class UserProfileSerializer(serializers.ModelSerializer):
     """
-    用户个人资料序列化器
+    用户个人资料序列化器 (读写)
     """
+    # gender现在只读，我们通过 gender_code 来写入
     gender = serializers.CharField(source='get_gender_display', read_only=True)
-    # avatar = serializers.ImageField(read_only=True)
+    # 添加一个可写的字段用于接收前端传来的整数值
+    gender_code = serializers.IntegerField(source='gender', write_only=True, required=False)
 
     class Meta:
         model = UserProfile
         fields = (
             'id', 'username', 'email', 'nickname', 'phone_number',
-            'gender', 'avatar', 'bio', 'date_joined'
+            'gender', 'gender_code', 'avatar', 'bio', 'date_joined'
         )
-        read_only_fields = ('username', 'date_joined')
+        # username 和 date_joined 在任何情况下都只读
+        read_only_fields = ('username', 'date_joined', 'email')
+        # 定义 write_only 字段
+        extra_kwargs = {
+            'gender_code': {'write_only': True},
+        }
 
 # ==========================================================
 # 类 3: AvatarUpdateSerializer (顶层类)
@@ -270,6 +277,7 @@ class UserDirectorySerializer(serializers.ModelSerializer):
         model = UserProfile
         fields = ('id', 'username', 'phone_number', 'email', 'nickname')
 
+
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
@@ -328,3 +336,20 @@ class RegisteredFaceSerializer(serializers.ModelSerializer):
     def get_category_display(self, obj):
         """获取类别显示名"""
         return obj.get_category_display()
+
+# ==========================================================
+#  类 9: PasswordChangeSerializer
+# ==========================================================
+class PasswordChangeSerializer(serializers.Serializer):
+    """
+    修改密码序列化器
+    """
+    current_password = serializers.CharField(style={"input_type": "password"}, required=True)
+    new_password = serializers.CharField(style={"input_type": "password"}, required=True, min_length=8)
+
+    def validate_current_password(self, value):
+        user = self.context['request'].user
+        if not user.check_password(value):
+            raise serializers.ValidationError("当前密码不正确。")
+        return value
+

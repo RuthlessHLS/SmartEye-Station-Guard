@@ -14,7 +14,7 @@
             <el-option label="异常声音: 高频" value="acoustic_high_frequency"></el-option>
             <el-option label="异常声音: 突发噪声" value="acoustic_sudden_noise"></el-option>
             <el-option label="未知人脸检测" value="unknown_face_detected"></el-option>
-          </el-select>
+            </el-select>
         </el-form-item>
         <el-form-item label="处理状态">
           <el-select v-model="filterForm.status" placeholder="选择状态" clearable>
@@ -227,22 +227,26 @@ const fetchAlerts = async () => {
     const params = {
       page: pagination.currentPage,
       page_size: pagination.pageSize,
-      event_type: filterForm.type || undefined,
-      status: filterForm.status || undefined,
-      start_time: filterForm.dateRange?.[0] || undefined,
-      end_time: filterForm.dateRange?.[1] || undefined,
+      event_type: filterForm.type, // 修改参数名为 event_type
+      status: filterForm.status,
+      start_time: filterForm.dateRange && filterForm.dateRange[0] ? filterForm.dateRange[0] : '',
+      end_time: filterForm.dateRange && filterForm.dateRange[1] ? filterForm.dateRange[1] : '',
     };
-    
+    // 修正API路径，添加/api前缀
     const response = await api.alerts.getList(params);
-    alerts.value = response.results.map(alert => ({
+    alerts.value = response.results.map(alert => {
+      return {
       ...alert,
+        alert_time: alert.timestamp.replace('T', ' ').slice(0, 19), // 保证与数据库一致
       event_type_display: alertTypeMap[alert.event_type] || alert.event_type,
-      status_display: alertStatusMap[alert.status] || alert.status,
-    }));
+      status_display: alertStatusMap[alert.status],
+      location_desc: JSON.stringify(alert.location), // 简化位置描述
+      };
+    });
     pagination.total = response.count;
   } catch (error) {
-    console.error('获取告警列表失败:', error);
-    ElMessage.error('获取告警列表失败');
+    ElMessage.error('获取告警列表失败！');
+    console.error('Fetch alerts error:', error);
   } finally {
     loading.value = false;
   }
@@ -270,49 +274,52 @@ const viewDetails = (row) => {
   dialogVisible.value = true;
 };
 
-const handleAlert = async (alert) => {
-  try {
-    const response = await api.alerts.update(alert.id, {
-      status: 'in_progress',
-      handler: localStorage.getItem('username') || '未知用户'
+const handleAlert = (row) => {
+  ElMessageBox.prompt('请输入处理备注', '处理告警', {
+    confirmButtonText: '确定',
+    cancelButtonText: '取消',
+    inputPattern: /\S/, // 非空
+    inputErrorMessage: '备注不能为空',
+  })
+    .then(async ({ value }) => {
+      // 根据当前状态决定下一个状态
+      let nextStatus = 'in_progress';
+      if (row.status === 'in_progress') {
+        nextStatus = 'resolved';
+      }
+      try {
+        await api.alerts.handle(row.id, {
+          status: nextStatus,
+          processing_notes: value,
+        });
+        ElMessage.success(
+          nextStatus === 'resolved' ? '告警已标记为已解决！' : '告警已标记为处理中！'
+        );
+        fetchAlerts(); // 刷新列表
+      } catch (error) {
+        ElMessage.error('处理告警失败！');
+        console.error('Handle alert error:', error);
+      }
+    })
+    .catch(() => {
+      ElMessage.info('取消处理。');
     });
-    
-    Object.assign(alert, {
-      ...response,
-      event_type_display: alertTypeMap[response.event_type] || response.event_type,
-      status_display: alertStatusMap[response.status] || response.status,
-    });
-    
-    ElMessage.success('已开始处理告警');
-  } catch (error) {
-    console.error('更新告警状态失败:', error);
-    ElMessage.error('更新告警状态失败');
-  }
 };
 
 const updateAlertStatus = async () => {
   try {
-    const response = await api.alerts.update(currentAlert.id, {
-      status: 'resolved',
+    // 假设后端更新告警接口为 /api/alerts/{id}/update/
+    const newStatus = currentAlert.status === 'pending' ? 'in_progress' : 'resolved';
+    const response = await api.patch(`/api/alerts/${currentAlert.id}/update/`, {
+      status: newStatus,
       processing_notes: currentAlert.processing_notes,
-      handler: localStorage.getItem('username') || '未知用户'
     });
-    
-    // 更新列表中的对应项
-    const index = alerts.value.findIndex(a => a.id === currentAlert.id);
-    if (index !== -1) {
-      alerts.value[index] = {
-        ...response,
-        event_type_display: alertTypeMap[response.event_type] || response.event_type,
-        status_display: alertStatusMap[response.status] || response.status,
-      };
-    }
-    
+    ElMessage.success('告警状态更新成功！');
     dialogVisible.value = false;
-    ElMessage.success('告警已处理完成');
+    fetchAlerts(); // 刷新列表
   } catch (error) {
-    console.error('更新告警状态失败:', error);
-    ElMessage.error('更新告警状态失败');
+    ElMessage.error('更新告警状态失败！');
+    console.error('Update alert status error:', error);
   }
 };
 
