@@ -233,7 +233,7 @@ const fetchAlerts = async () => {
       end_time: filterForm.dateRange && filterForm.dateRange[1] ? filterForm.dateRange[1] : '',
     };
     // 修正API路径，添加/api前缀
-    const response = await api.get('/api/alerts/', { params });
+    const response = await api.alerts.getList(params);
     alerts.value = response.results.map(alert => {
       return {
       ...alert,
@@ -282,14 +282,19 @@ const handleAlert = (row) => {
     inputErrorMessage: '备注不能为空',
   })
     .then(async ({ value }) => {
-      // 假设后端处理告警接口为 /api/alerts/handle/
-      // 实际应根据告警ID更新状态和备注
+      // 根据当前状态决定下一个状态
+      let nextStatus = 'in_progress';
+      if (row.status === 'in_progress') {
+        nextStatus = 'resolved';
+      }
       try {
-        const response = await api.patch(`/api/alerts/${row.id}/handle/`, {
-          status: 'in_progress', // 或直接设置为 'resolved'
+        await api.alerts.handle(row.id, {
+          status: nextStatus,
           processing_notes: value,
         });
-        ElMessage.success('告警已标记为处理中！');
+        ElMessage.success(
+          nextStatus === 'resolved' ? '告警已标记为已解决！' : '告警已标记为处理中！'
+        );
         fetchAlerts(); // 刷新列表
       } catch (error) {
         ElMessage.error('处理告警失败！');

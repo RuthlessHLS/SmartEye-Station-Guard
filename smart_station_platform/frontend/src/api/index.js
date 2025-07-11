@@ -145,6 +145,7 @@ const api = {
     getDetail: (id) => backendService.get(`/api/alerts/${id}/`),
     update: (id, data) => backendService.patch(`/api/alerts/${id}/`, data),
     delete: (id) => backendService.delete(`/api/alerts/${id}/`),
+    handle: (id, data) => backendService.patch(`/api/alerts/${id}/handle/`, data), // 新增
   },
   // AI服务相关接口
   ai: {
