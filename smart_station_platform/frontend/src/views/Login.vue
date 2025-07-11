@@ -11,6 +11,11 @@
           <input type="password" v-model="form.password" placeholder="请输入密码" required>
         </div>
 
+        <!-- 显示错误信息 -->
+        <div v-if="errorMessage" class="error-message">
+          {{ errorMessage }}
+        </div>
+
         <div class="form-options">
           <label class="remember-me">
             <input type="checkbox" v-model="form.remember"> 记住密码
@@ -23,7 +28,7 @@
         </button>
 
         <div class="switch-link">
-          还没有账号？ <a href="/register">立即注册</a>
+          还没有账号？ <router-link to="/register">立即注册</router-link>
         </div>
       </form>
     </div>
@@ -33,25 +38,25 @@
       v-if="showCaptcha"
       v-model:visible="showCaptcha"
       @success="onCaptchaSuccess"
+      @close="loading = false"
     />
   </div>
 </template>
 
 <script setup>
 import { ref, reactive } from 'vue';
-import axios from 'axios';
 import SliderCaptcha from './SliderCaptcha.vue'; // 假设滑动验证码组件在同级目录
 
-// 1. 【核心修改】从 vue-router 导入 useRouter
-import { useRouter } from 'vue-router';
+// 1. 引入 useAuthStore，不再需要 axios 和 useRouter
+import { useAuthStore } from '@/stores/auth';
 
-// 2. 【核心修改】初始化 router 实例
-const router = useRouter();
+// 2. 初始化 Pinia store
+const authStore = useAuthStore();
 
 // 状态控制
 const loading = ref(false);
 const showCaptcha = ref(false);
-const errorMessage = ref(''); // 用来在模板中显示错误信息，比 alert() 体验好
+const errorMessage = ref('');
 
 // 登录表单数据
 const form = reactive({
@@ -73,6 +78,8 @@ const handleLoginAttempt = () => {
     errorMessage.value = '请输入用户名和密码';
     return;
   }
+  // 点击登录后立即进入 loading 状态
+  loading.value = true;
   showCaptcha.value = true;
 };
 
@@ -81,13 +88,15 @@ const onCaptchaSuccess = (result) => {
   captchaResult.captcha_key = result.captcha_key;
   captchaResult.captcha_position = result.captcha_position;
   showCaptcha.value = false;
+  // 验证码成功后，调用最终的提交函数
   submitLogin();
 };
 
-// 包含完整数据的最终提交函数
+// 3. 重写最终提交函数，使用 authStore
 const submitLogin = async () => {
-  loading.value = true;
+  // loading 状态已在 handleLoginAttempt 中设置为 true
   errorMessage.value = '';
+
   try {
     const payload = {
       username: form.username,
@@ -96,28 +105,22 @@ const submitLogin = async () => {
       captcha_position: captchaResult.captcha_position.toString(),
     };
 
-    const response = await axios.post('http://127.0.0.1:8000/api/users/token/', payload);
-
-    // 3. 【核心修改】处理登录成功后的逻辑
-    // 保存 token 到 localStorage，这是导航守卫判断登录状态的依据
-    localStorage.setItem('access_token', response.data.access);
-    if (response.data.refresh) {
-      localStorage.setItem('refresh_token', response.data.refresh);
-    }
-
-    // 使用 router.push() 进行页面跳转，实现无刷新导航
-    // push到 '/dashboard' 后，导航守卫会检测到你已登录，然后放行
-    router.push('/dashboard');
+    // 调用 authStore 中的 login action，并等待它完成
+    // authStore.login 内部已经处理了：存token, 获取用户信息, 更新state, 路由跳转
+    await authStore.login(payload);
 
   } catch (error) {
+    // 从 action 中抛出的错误会被这里捕获
     const errorData = error.response?.data;
     let msg = '登录失败，请重试。';
     if (errorData) {
+        // 提取后端返回的详细错误信息
         msg = errorData.detail || errorData.captcha || (errorData.username && `用户名: ${errorData.username[0]}`) || (errorData.password && `密码: ${errorData.password[0]}`) || JSON.stringify(errorData);
     }
     errorMessage.value = msg;
     console.error('登录失败:', errorData || error);
   } finally {
+    // 无论成功或失败，结束加载状态
     loading.value = false;
   }
 };
@@ -208,5 +211,12 @@ const submitLogin = async () => {
   text-align: center;
   font-size: 14px;
   color: #666;
+}
+/* 错误信息样式 */
+.error-message {
+  color: #f56c6c;
+  font-size: 14px;
+  margin-bottom: 15px;
+  text-align: center;
 }
 </style>
