@@ -1,10 +1,13 @@
 # G:\Web\smart_station_platform\backend\users\serializers.py (结构修正版)
 from .captcha_validator import validate_captcha
 from rest_framework import serializers
-from .models import UserProfile
+from .models import UserProfile, FaceData, RegisteredFace
 from django.contrib.auth.hashers import make_password
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 import re
+from django.contrib.auth import get_user_model
+
+User = get_user_model()
 
 # ==========================================================
 # 类 1: UserRegisterSerializer (顶层类)
@@ -266,3 +269,62 @@ class UserDirectorySerializer(serializers.ModelSerializer):
     class Meta:
         model = UserProfile
         fields = ('id', 'username', 'phone_number', 'email', 'nickname')
+
+class UserSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ['id', 'username', 'email', 'nickname', 'phone_number', 'gender', 'avatar', 'bio']
+        read_only_fields = ['id']
+
+class FaceDataSerializer(serializers.ModelSerializer):
+    """人脸数据序列化器"""
+    face_image_url = serializers.SerializerMethodField()
+    username = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = FaceData
+        fields = ['id', 'user', 'username', 'face_image', 'face_image_url', 'created_at', 'is_active', 'note']
+        read_only_fields = ['id', 'created_at', 'face_encoding', 'face_image_url']
+        extra_kwargs = {
+            'face_encoding': {'write_only': True}  # 不在API响应中返回人脸编码数据
+        }
+    
+    def get_face_image_url(self, obj):
+        """获取完整图片URL"""
+        if obj.face_image:
+            request = self.context.get('request')
+            if request is not None:
+                return request.build_absolute_uri(obj.face_image.url)
+            return obj.face_image.url
+        return None
+    
+    def get_username(self, obj):
+        """获取用户名"""
+        return obj.user.username
+
+class RegisteredFaceSerializer(serializers.ModelSerializer):
+    """已注册人脸序列化器"""
+    face_image_url = serializers.SerializerMethodField()
+    category_display = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = RegisteredFace
+        fields = ['id', 'name', 'face_image', 'face_image_url', 'category', 
+                  'category_display', 'created_at', 'is_active', 'note']
+        read_only_fields = ['id', 'created_at', 'face_encoding', 'face_image_url']
+        extra_kwargs = {
+            'face_encoding': {'write_only': True}  # 不在API响应中返回人脸编码数据
+        }
+    
+    def get_face_image_url(self, obj):
+        """获取完整图片URL"""
+        if obj.face_image:
+            request = self.context.get('request')
+            if request is not None:
+                return request.build_absolute_uri(obj.face_image.url)
+            return obj.face_image.url
+        return None
+    
+    def get_category_display(self, obj):
+        """获取类别显示名"""
+        return obj.get_category_display()

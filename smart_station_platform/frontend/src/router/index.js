@@ -9,6 +9,7 @@ import AlertManagement from '../views/AlertManagement.vue'
 import DailyReport from '../views/DailyReport.vue'
 import DataScreen from '../views/DataScreen.vue'
 import UserManagement from '../views/UserManagement.vue'
+import FaceRegistration from '../views/FaceRegistration.vue'
 
 
 const router = createRouter({
@@ -49,6 +50,12 @@ const router = createRouter({
       path: '/ai-monitor',
       name: 'AIVideoMonitor',
       component: AIVideoMonitor,
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/face-registration',
+      name: 'FaceRegistration',
+      component: FaceRegistration,
       meta: { requiresAuth: true }
     },
     {

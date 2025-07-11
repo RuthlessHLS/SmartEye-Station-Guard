@@ -28,15 +28,22 @@ export default defineConfig({
     }
   },
   server: {
+    // 添加HTTPS支持
+    https: false, // 如果需要HTTPS，设置为true
+    // 允许使用不安全的请求
+    cors: true,
+    // 允许在非HTTPS环境下使用摄像头
+    hmr: {
+      host: 'localhost',
+    },
     host: '0.0.0.0',
     port: 5174,
     strictPort: false,
-    cors: true,
     proxy: {
       '/api': {
         target: 'http://127.0.0.1:8000',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, '')
+        // 不要重写路径，保留/api前缀
       },
       '/ai': {
         target: 'http://127.0.0.1:8001',
