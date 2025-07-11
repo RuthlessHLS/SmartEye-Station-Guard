@@ -1,0 +1,136 @@
+<!-- src/layouts/MainLayout.vue -->
+<template>
+  <div class="main-layout">
+    <header class="main-header">
+      <div class="logo">
+        <img :src="logoUrl" alt="Logo" class="logo-img" />
+        <span class="logo-text">智慧车站监控平台</span>
+      </div>
+      <nav class="main-nav">
+        <router-link to="/dashboard">首页</router-link>
+        <router-link to="/monitor">智能监控</router-link>
+        <router-link to="/ai-monitor">AI监控</router-link>
+        <router-link to="/alerts">告警中心</router-link>
+        <router-link to="/reports">AI日报</router-link>
+        <router-link to="/data-screen">数据大屏</router-link>
+        <router-link to="/users">用户管理</router-link>
+      </nav>
+      <div class="user-profile-section">
+        <el-dropdown v-if="authStore.isAuthenticated" trigger="click">
+          <span class="el-dropdown-link">
+            <el-avatar v-if="authStore.user?.avatar" :src="authStore.user.avatar" size="small"></el-avatar>
+            <span v-else class="username">{{ authStore.user?.nickname || authStore.user?.username }}</span>
+            <el-icon class="el-icon--right"><arrow-down /></el-icon>
+          </span>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item @click="goToProfile">个人中心</el-dropdown-item>
+              <el-dropdown-item divided @click="handleLogout">退出登录</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+      </div>
+    </header>
+
+    <main class="main-content">
+      <router-view />
+    </main>
+
+    <footer class="main-footer">
+      <p>© 2025 智慧车站智能监控与大数据分析平台</p>
+    </footer>
+  </div>
+</template>
+
+<script setup>
+import { useAuthStore } from '@/stores/auth';
+import { useRouter } from 'vue-router';
+import { ArrowDown } from '@element-plus/icons-vue';
+import myLogo from '@/assets/my-logo.png';
+const authStore = useAuthStore();
+const router = useRouter();
+const logoUrl = myLogo;
+const goToProfile = () => {
+  router.push('/profile');
+};
+
+const handleLogout = () => {
+  authStore.logout();
+};
+</script>
+
+<style scoped>
+.main-layout {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  background-color: #f0f2f5;
+}
+
+/* --- 白色导航栏样式 --- */
+.main-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  height: 64px;
+  background-color: #ffffff; /* 改为白色 */
+  border-bottom: 1px solid #f0f0f0; /* 添加一条细线分隔 */
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06); /* 添加轻微阴影增加质感 */
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+}
+.logo-img {
+  height: 32px;
+  margin-right: 12px;
+}
+.logo-text {
+  font-size: 20px;
+  font-weight: 600;
+  color: #1f2d3d; /* 深色文字 */
+}
+
+.main-nav a {
+  color: #333; /* 导航链接文字颜色 */
+  text-decoration: none;
+  margin: 0 20px;
+  padding: 0 4px 8px 4px; /* 调整 padding 使下划线位置合适 */
+  border-bottom: 2px solid transparent;
+  transition: all 0.3s;
+  font-weight: 500;
+}
+.main-nav a:hover {
+  color: #409eff; /* 鼠标悬浮时颜色 */
+}
+.main-nav a.router-link-exact-active {
+  color: #409eff; /* 激活时颜色 */
+  border-bottom-color: #409eff; /* 激活时下划线 */
+}
+
+.user-profile-section .el-dropdown-link {
+  cursor: pointer;
+  color: #333; /* 用户名颜色 */
+  display: flex;
+  align-items: center;
+}
+.user-profile-section .username {
+  margin: 0 8px;
+}
+
+.main-content {
+  flex-grow: 1;
+  padding: 24px;
+}
+
+.main-footer {
+  text-align: center;
+  padding: 15px;
+  color: #888;
+}
+</style>

@@ -1,43 +1,52 @@
-import { createRouter, createWebHistory } from 'vue-router'
-// 导入视图组件
-import Login from '../views/Login.vue'
-import Register from '../views/Register.vue'
-import Dashboard from '../views/Dashboard.vue'
-import MonitorCenter from '../views/MonitorCenter.vue'
-import AIVideoMonitor from '../views/AIVideoMonitor.vue'
-import AlertManagement from '../views/AlertManagement.vue'
-import DailyReport from '../views/DailyReport.vue'
-import DataScreen from '../views/DataScreen.vue'
-import UserManagement from '../views/UserManagement.vue'
+import { createRouter, createWebHistory } from 'vue-router';
 
+// 导入所有需要的视图组件
+import Login from '../views/Login.vue';
+import Register from '../views/Register.vue';
+import Dashboard from '../views/Dashboard.vue';
+import MonitorCenter from '../views/MonitorCenter.vue';
+import AIVideoMonitor from '../views/AIVideoMonitor.vue';
+import AlertManagement from '../views/AlertManagement.vue';
+import DailyReport from '../views/DailyReport.vue';
+import DataScreen from '../views/DataScreen.vue';
+import UserManagement from '../views/UserManagement.vue';
+import UserProfile from '../views/UserProfile.vue';
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
+    // --- 根路径重定向 ---
+    {
+      path: '/',
+      redirect: '/dashboard'
+    },
+
+    // --- 认证相关路由 (使用 AuthLayout，无导航栏) ---
     {
       path: '/login',
       name: 'Login',
       component: Login,
-      // [改进 2] 为公共路由添加 meta 字段，让逻辑更清晰
-      meta: { requiresAuth: false }
+      meta: {
+        requiresAuth: false,
+        layout: 'auth' // 指定使用 auth 布局
+      }
     },
     {
       path: '/register',
       name: 'Register',
       component: Register,
-      // [改进 2]
-      meta: { requiresAuth: false }
+      meta: {
+        requiresAuth: false,
+        layout: 'auth' // 指定使用 auth 布局
+      }
     },
+
+    // --- 主应用路由 (使用默认的 MainLayout，有白色导航栏) ---
     {
-      // [改进 3] 将根路径重定向放到路由列表的开头，更清晰
-      path: '/',
-      redirect: '/dashboard'
-    },
-    {
-      path: '/dashboard', // 将 Dashboard 作为一个具体的路径
+      path: '/dashboard',
       name: 'Dashboard',
       component: Dashboard,
-      meta: { requiresAuth: true } // 需要认证
+      meta: { requiresAuth: true } // layout 未指定，将使用 'default' (MainLayout)
     },
     {
       path: '/monitor',
@@ -70,22 +79,31 @@ const router = createRouter({
       meta: { requiresAuth: true }
     },
     {
+      path: '/profile',
+      name: 'UserProfile',
+      component: UserProfile,
+      meta: { requiresAuth: true }
+    },
+    {
       path: '/users',
       name: 'UserManagement',
       component: UserManagement,
       meta: { requiresAuth: true }
     },
+
+    // --- 捕获所有未匹配的路由 ---
     {
-      // 捕获所有未匹配的路由
+      // 确保这个路由在列表的最后
       path: '/:catchAll(.*)',
-      redirect: '/dashboard' // 重定向到主仪表盘
+      redirect: '/dashboard'
     }
   ]
-})
+});
 
-// [改进 1 & 2] 优化后的导航守卫
+// 导航守卫保持不变，它的逻辑非常完善，无需修改
 router.beforeEach((to, from, next) => {
-  const loggedIn = localStorage.getItem('access_token');
+  // 使用 '!!' 将字符串转换为布尔值，更严谨
+  const loggedIn = !!localStorage.getItem('access_token');
   const requiresAuth = to.meta.requiresAuth;
 
   if (requiresAuth && !loggedIn) {
@@ -100,4 +118,4 @@ router.beforeEach((to, from, next) => {
   }
 });
 
-export default router
+export default router;
