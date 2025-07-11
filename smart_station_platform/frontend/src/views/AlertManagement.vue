@@ -14,7 +14,7 @@
             <el-option label="异常声音: 高频" value="acoustic_high_frequency"></el-option>
             <el-option label="异常声音: 突发噪声" value="acoustic_sudden_noise"></el-option>
             <el-option label="未知人脸检测" value="unknown_face_detected"></el-option>
-          </el-select>
+            </el-select>
         </el-form-item>
         <el-form-item label="处理状态">
           <el-select v-model="filterForm.status" placeholder="选择状态" clearable>
@@ -236,11 +236,11 @@ const fetchAlerts = async () => {
     const response = await api.get('/api/alerts/', { params });
     alerts.value = response.results.map(alert => {
       return {
-        ...alert,
+      ...alert,
         alert_time: alert.timestamp.replace('T', ' ').slice(0, 19), // 保证与数据库一致
-        event_type_display: alertTypeMap[alert.event_type] || alert.event_type,
-        status_display: alertStatusMap[alert.status],
-        location_desc: JSON.stringify(alert.location), // 简化位置描述
+      event_type_display: alertTypeMap[alert.event_type] || alert.event_type,
+      status_display: alertStatusMap[alert.status],
+      location_desc: JSON.stringify(alert.location), // 简化位置描述
       };
     });
     pagination.total = response.count;
