@@ -80,3 +80,8 @@ ultralytics==8.3.163
 ultralytics-thop==2.0.14
 urllib3==2.5.0
 uvicorn==0.35.0
+
+# Deep SORT 多目标追踪相关依赖
+deep_sort_pytorch>=1.0.1
+torchvision>=0.15.0  # Deep SORT的Re-ID模型需要
+scikit-learn>=1.0.0  # Deep SORT可能需要的机器学习库
