@@ -9,7 +9,8 @@ from .serializers import (
     AvatarUpdateSerializer,
     PasswordResetRequestSerializer,
     PasswordResetConfirmSerializer,
-    UserAdminSerializer
+    UserAdminSerializer,
+    PasswordChangeSerializer
 )
 from rest_framework import generics, permissions, status
 from rest_framework.parsers import MultiPartParser, FormParser
@@ -75,13 +76,16 @@ class UserRegisterAPIView(UserRegisterView):
 # ==========================================================
 class UserProfileView(generics.RetrieveUpdateAPIView):
     """
-    用户个人资料API视图
+    用户个人资料API视图 (支持 GET, PUT, PATCH)
+    GET: 获取当前登录用户的个人资料
+    PUT/PATCH: 更新当前登录用户的个人资料
     """
     queryset = UserProfile.objects.all()
     serializer_class = UserProfileSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_object(self):
+        # 始终返回当前请求的用户
         return self.request.user
 
 # ==========================================================
@@ -330,6 +334,7 @@ class UsersDirectoryViewSet(viewsets.ReadOnlyModelViewSet):
     filter_backends = [filters.SearchFilter]
     search_fields = ['username', 'nickname', 'phone_number', 'email']
 
+
 class FaceDataViewSet(viewsets.ModelViewSet):
     """人脸数据视图集"""
     serializer_class = FaceDataSerializer
@@ -533,3 +538,24 @@ class RegisteredFaceViewSet(viewsets.ModelViewSet):
         except Exception as e:
             return Response({"error": f"处理人脸数据时出错: {str(e)}"}, 
                           status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# ==========================================================
+#  视图 10: PasswordChangeView
+# ==========================================================
+class PasswordChangeView(generics.GenericAPIView):
+    """
+    修改密码的视图
+    """
+    serializer_class = PasswordChangeSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        user = request.user
+        user.set_password(serializer.validated_data['new_password'])
+        user.save()
+
+        return Response({"detail": "密码修改成功。"}, status=status.HTTP_200_OK)
