@@ -8,6 +8,7 @@
           <router-link to="/dashboard">首页</router-link>
           <router-link to="/monitor">智能监控</router-link>
           <router-link to="/ai-monitor">AI监控</router-link>
+          <router-link to="/face-registration">人脸录入</router-link>
           <router-link to="/alerts">告警中心</router-link>
           <router-link to="/reports">AI日报</router-link>
           <router-link to="/data-screen">数据大屏</router-link>

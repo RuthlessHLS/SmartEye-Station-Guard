@@ -21,7 +21,7 @@ export const useAuthStore = defineStore('auth', () => {
     if (!userStr) return null;
     try {
       return JSON.parse(userStr);
-    } catch (e) {
+    } catch (_) {
       // 如果解析失败，说明数据已损坏，清除它
       localStorage.removeItem(USER_KEY);
       return null;
@@ -34,6 +34,12 @@ export const useAuthStore = defineStore('auth', () => {
 
   // [修复] isAuthenticated 必须同时依赖 token 和 user
   const isAuthenticated = computed(() => !!token.value && !!user.value);
+  
+  // 添加isAdmin计算属性
+  const isAdmin = computed(() => user.value?.is_staff === true);
+  
+  // 添加userId计算属性
+  const userId = computed(() => user.value?.id);
 
   // Actions
   function setToken(accessToken) {
@@ -99,6 +105,8 @@ export const useAuthStore = defineStore('auth', () => {
     token,
     user,
     isAuthenticated,
+    isAdmin,
+    userId,
     login,
     logout,
     fetchUser,

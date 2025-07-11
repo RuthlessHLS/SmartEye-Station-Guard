@@ -3564,6 +3564,254 @@ async def remove_danger_zone(camera_id: str, zone_id: str):
     except Exception as e:
         return {"status": "error", "message": f"移除失败: {str(e)}"}
 
+# 添加人脸处理相关的API端点
+@app.post("/process_face")
+async def process_face(request_data: dict):
+    """
+    处理上传的人脸图像，检测人脸并提取特征
+    
+    请求体:
+    - image: base64编码的图像数据
+    
+    返回:
+    - success: 处理是否成功
+    - message: 处理结果信息
+    - face_encoding: 人脸特征编码（仅当成功时返回）
+    - face_location: 人脸位置（仅当成功时返回）
+    """
+    try:
+        # 解码base64图像
+        image_data = base64.b64decode(request_data.get("image", ""))
+        nparr = np.frombuffer(image_data, np.uint8)
+        image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        
+        if image is None:
+            return {"success": False, "message": "无法解码图像"}
+        
+        # 使用OpenCV的人脸检测作为备选方案
+        try:
+            import face_recognition
+            # 转换为RGB格式（face_recognition库要求）
+            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            
+            # 检测人脸
+            face_locations = face_recognition.face_locations(rgb_image, model="hog")
+            
+            if not face_locations:
+                return {"success": False, "message": "未检测到人脸"}
+            
+            if len(face_locations) > 1:
+                return {"success": False, "message": "检测到多个人脸，请确保图像中只有一个人脸"}
+            
+            # 提取人脸特征
+            face_encodings = face_recognition.face_encodings(rgb_image, face_locations)
+            
+            if not face_encodings:
+                return {"success": False, "message": "无法提取人脸特征"}
+            
+            # 返回处理结果
+            return {
+                "success": True,
+                "message": "人脸处理成功",
+                "face_encoding": face_encodings[0].tolist(),  # numpy数组转换为列表
+                "face_location": face_locations[0]
+            }
+        except (ImportError, NameError):
+            # 如果face_recognition不可用，使用OpenCV的人脸检测
+            face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            faces = face_cascade.detectMultiScale(gray, 1.1, 4)
+            
+            if len(faces) == 0:
+                return {"success": False, "message": "未检测到人脸"}
+            
+            if len(faces) > 1:
+                return {"success": False, "message": "检测到多个人脸，请确保图像中只有一个人脸"}
+            
+            # 使用OpenCV检测到的人脸坐标
+            x, y, w, h = faces[0]
+            face_location = (y, x+w, y+h, x)  # 转换为face_recognition格式 (top, right, bottom, left)
+            
+            # 提取人脸区域并创建简单的特征向量
+            face_roi = gray[y:y+h, x:x+w]
+            face_roi = cv2.resize(face_roi, (128, 128))
+            face_encoding = face_roi.flatten() / 255.0  # 简单归一化
+            
+            # 只保留128个特征点以模拟face_recognition的输出
+            if len(face_encoding) > 128:
+                face_encoding = face_encoding[:128]
+            
+            return {
+                "success": True,
+                "message": "人脸处理成功 (使用OpenCV备选方案)",
+                "face_encoding": face_encoding.tolist(),
+                "face_location": face_location
+            }
+            
+    except Exception as e:
+        return {"success": False, "message": f"处理人脸时出错: {str(e)}"}
+
+@app.post("/verify_face")
+async def verify_face(request_data: dict):
+    """
+    验证上传的人脸图像与特定用户的人脸是否匹配
+    
+    请求体:
+    - image: base64编码的图像数据
+    - user_id: 要验证的用户ID
+    
+    返回:
+    - success: 验证是否成功
+    - matched: 是否匹配
+    - confidence: 匹配的置信度（仅当匹配时返回）
+    - message: 验证结果信息
+    """
+    try:
+        # 解码base64图像
+        image_data = base64.b64decode(request_data.get("image", ""))
+        nparr = np.frombuffer(image_data, np.uint8)
+        image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        
+        if image is None:
+            return {"success": False, "message": "无法解码图像"}
+        
+        # 获取用户ID
+        user_id = request_data.get("user_id")
+        if not user_id:
+            return {"success": False, "message": "未提供用户ID"}
+        
+        # 使用OpenCV的人脸检测作为备选方案
+        try:
+            import face_recognition
+            # 转换为RGB格式
+            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            
+            # 检测人脸
+            face_locations = face_recognition.face_locations(rgb_image, model="hog")
+            
+            if not face_locations:
+                return {"success": False, "message": "未检测到人脸"}
+            
+            # 提取人脸特征
+            face_encodings = face_recognition.face_encodings(rgb_image, face_locations)
+            
+            if not face_encodings:
+                return {"success": False, "message": "无法提取人脸特征"}
+            
+            # 查询数据库获取该用户的所有人脸编码
+            api_url = f"http://localhost:8000/api/users/faces/user/{user_id}/encodings/"
+            
+            try:
+                response = requests.get(api_url)
+                if response.status_code != 200:
+                    return {"success": False, "message": "无法获取用户人脸数据"}
+                
+                stored_face_encodings = response.json().get("encodings", [])
+                
+                if not stored_face_encodings:
+                    return {"success": False, "message": "用户没有注册人脸数据"}
+                
+                # 比对人脸
+                best_match = 1.0  # 初始化为最大距离
+                for stored_encoding in stored_face_encodings:
+                    # 计算欧氏距离
+                    distance = face_recognition.face_distance(
+                        [np.array(stored_encoding)], 
+                        face_encodings[0]
+                    )[0]
+                    
+                    if distance < best_match:
+                        best_match = distance
+                
+                # 判断是否匹配（距离越小越匹配）
+                if best_match <= 0.6:  # 阈值可调整
+                    confidence = 1.0 - best_match
+                    return {
+                        "success": True,
+                        "matched": True,
+                        "confidence": round(confidence, 4),
+                        "message": "人脸验证成功"
+                    }
+                else:
+                    return {
+                        "success": True,
+                        "matched": False,
+                        "message": "人脸不匹配"
+                    }
+                    
+            except Exception as e:
+                return {"success": False, "message": f"验证过程中出错: {str(e)}"}
+                
+        except (ImportError, NameError):
+            # 如果face_recognition不可用，使用OpenCV的人脸检测
+            face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            faces = face_cascade.detectMultiScale(gray, 1.1, 4)
+            
+            if len(faces) == 0:
+                return {"success": False, "message": "未检测到人脸"}
+            
+            # 使用OpenCV检测到的人脸坐标
+            x, y, w, h = faces[0]
+            
+            # 提取人脸区域并创建简单的特征向量
+            face_roi = gray[y:y+h, x:x+w]
+            face_roi = cv2.resize(face_roi, (128, 128))
+            face_encoding = face_roi.flatten() / 255.0  # 简单归一化
+            
+            # 只保留128个特征点以模拟face_recognition的输出
+            if len(face_encoding) > 128:
+                face_encoding = face_encoding[:128]
+            
+            # 查询数据库获取该用户的所有人脸编码
+            api_url = f"http://localhost:8000/api/users/faces/user/{user_id}/encodings/"
+            
+            try:
+                response = requests.get(api_url)
+                if response.status_code != 200:
+                    return {"success": False, "message": "无法获取用户人脸数据"}
+                
+                stored_face_encodings = response.json().get("encodings", [])
+                
+                if not stored_face_encodings:
+                    return {"success": False, "message": "用户没有注册人脸数据"}
+                
+                # 使用简单的欧氏距离进行比较
+                best_match = 1.0
+                for stored_encoding in stored_face_encodings:
+                    stored_array = np.array(stored_encoding)
+                    if len(stored_array) != len(face_encoding):
+                        continue
+                    
+                    # 计算欧氏距离
+                    distance = np.linalg.norm(stored_array - face_encoding)
+                    distance = distance / np.sqrt(len(face_encoding))  # 归一化
+                    
+                    if distance < best_match:
+                        best_match = distance
+                
+                # 判断是否匹配（距离越小越匹配）
+                threshold = 0.4  # OpenCV特征向量的阈值需要调整
+                if best_match <= threshold:
+                    confidence = 1.0 - best_match
+                    return {
+                        "success": True,
+                        "matched": True,
+                        "confidence": round(confidence, 4),
+                        "message": "人脸验证成功 (使用OpenCV备选方案)"
+                    }
+                else:
+                    return {
+                        "success": True,
+                        "matched": False,
+                        "message": "人脸不匹配 (使用OpenCV备选方案)"
+                    }
+                    
+            except Exception as e:
+                return {"success": False, "message": f"验证过程中出错: {str(e)}"}
+            
+    except Exception as e:
+        return {"success": False, "message": f"处理人脸时出错: {str(e)}"}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8001)

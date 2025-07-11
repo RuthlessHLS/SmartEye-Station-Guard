@@ -117,6 +117,9 @@ const submitLogin = async () => {
     }
     errorMessage.value = msg;
     console.error('登录失败:', errorData || error);
+    // 添加更详细的错误信息输出
+    console.log('请求数据:', payload);
+    console.log('错误响应:', error.response);
   } finally {
     loading.value = false;
   }
