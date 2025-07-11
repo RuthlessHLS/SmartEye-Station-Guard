@@ -1,30 +1,64 @@
 import axios from 'axios';
-import router from '../router'; // 引入Vue Router实例
+import router from '../router';
 
-const service = axios.create({
-  baseURL: import.meta.env.VITE_APP_API_BASE_URL || 'http://127.0.0.1:8000', // 基础URL，不包含/api
-  timeout: 10000, // 请求超时时间
+// 后端API服务实例
+const backendService = axios.create({
+  baseURL: import.meta.env.VITE_APP_API_BASE_URL || 'http://127.0.0.1:8000',
+  timeout: 10000,
 });
 
-// 请求拦截器
-service.interceptors.request.use(
+// AI服务实例
+const aiService = axios.create({
+  baseURL: import.meta.env.VITE_APP_AI_SERVICE_URL || 'http://127.0.0.1:8001', // 修改为8001端口
+  timeout: 30000, // AI服务可能需要更长的处理时间
+});
+
+// 请求重试配置
+const retryConfig = {
+  retries: 3,
+  retryDelay: (retryCount) => {
+    return retryCount * 1000; // 1s, 2s, 3s
+  },
+  retryCondition: (error) => {
+    // 只在网络错误或特定HTTP状态码时重试
+    return axios.isAxiosError(error) && (
+      !error.response ||
+      [408, 500, 502, 503, 504].includes(error.response.status)
+    );
+  }
+};
+
+// 请求拦截器 - 后端服务
+backendService.interceptors.request.use(
   config => {
     const token = localStorage.getItem('access_token');
     if (token) {
-      config.headers['Authorization'] = 'Bearer ' + token; // 让每个请求携带JWT Token
+      config.headers['Authorization'] = 'Bearer ' + token;
     }
     return config;
   },
   error => {
-    console.log(error); // for debug
+    console.error('Request error:', error);
     return Promise.reject(error);
   }
 );
 
-// 响应拦截器
-service.interceptors.response.use(
+// 请求拦截器 - AI服务
+aiService.interceptors.request.use(
+  config => {
+    // 添加API密钥
+    config.headers['X-API-Key'] = import.meta.env.VITE_APP_AI_SERVICE_API_KEY;
+    return config;
+  },
+  error => {
+    console.error('AI service request error:', error);
+    return Promise.reject(error);
+  }
+);
+
+// 响应拦截器 - 后端服务
+backendService.interceptors.response.use(
   response => {
-    // 如果是登录或刷新token的响应，直接返回完整的response
     if (response.config.url.includes('/token/')) {
       return response;
     }
@@ -32,37 +66,93 @@ service.interceptors.response.use(
   },
   async error => {
     const originalRequest = error.config;
-    // 检查是否有响应，如果没有响应（如连接被拒绝），直接拒绝
+    
+    // 网络错误处理
     if (!error.response) {
-      console.error('Network error or server is not running:', error.message);
+      console.error('Network error:', error.message);
       return Promise.reject(error);
     }
-    // 如果是 401 (未授权) 并且不是刷新 token 的请求，尝试刷新 token
+
+    // Token过期处理
     if (error.response.status === 401 && !originalRequest._retry) {
       originalRequest._retry = true;
       try {
         const refreshToken = localStorage.getItem('refresh_token');
         if (refreshToken) {
-          // 尝试向后端刷新 Token 的接口发送请求
-          const res = await service.post('/api/token/refresh/', { refresh: refreshToken });
+          const res = await backendService.post('/api/token/refresh/', { refresh: refreshToken });
           const newAccessToken = res.data.access;
-          localStorage.setItem('access_token', newAccessToken); // 更新存储的 access_token
-          // 重新设置授权头，然后重新发送原始请求
+          localStorage.setItem('access_token', newAccessToken);
           originalRequest.headers['Authorization'] = 'Bearer ' + newAccessToken;
-          return service(originalRequest); // 重新发送原始请求
+          return backendService(originalRequest);
         }
       } catch (refreshError) {
-        console.error('Refresh token failed:', refreshError);
-        // 刷新 token 失败，清除旧 token 并跳转到登录页
+        console.error('Token refresh failed:', refreshError);
         localStorage.removeItem('access_token');
         localStorage.removeItem('refresh_token');
-        router.push('/login'); // 使用导入的router实例跳转到登录页
+        router.push('/login');
         return Promise.reject(refreshError);
       }
     }
-    console.log('err' + error); // for debug
+
+    // 其他错误处理
+    if (error.response.status >= 500) {
+      console.error('Server error:', error.response.data);
+    }
     return Promise.reject(error);
   }
 );
 
-export default service;
+// 响应拦截器 - AI服务
+aiService.interceptors.response.use(
+  response => response.data,
+  async error => {
+    // 处理AI服务特定错误
+    if (!error.response) {
+      console.error('AI service connection error:', error.message);
+    } else if (error.response.status === 401) {
+      console.error('AI service authentication failed');
+    } else if (error.response.status >= 500) {
+      console.error('AI service error:', error.response.data);
+    }
+    return Promise.reject(error);
+  }
+);
+
+// 工具函数：带重试的请求
+const requestWithRetry = async (service, config) => {
+  let retries = retryConfig.retries;
+  
+  while (retries > 0) {
+    try {
+      return await service(config);
+    } catch (error) {
+      retries--;
+      if (retries === 0 || !retryConfig.retryCondition(error)) {
+        throw error;
+      }
+      await new Promise(resolve => 
+        setTimeout(resolve, retryConfig.retryDelay(retryConfig.retries - retries))
+      );
+    }
+  }
+};
+
+// 默认导出API服务对象
+const api = {
+  // 告警相关接口
+  alerts: {
+    getList: (params) => backendService.get('/api/alerts/', { params }),
+    getDetail: (id) => backendService.get(`/api/alerts/${id}/`),
+    update: (id, data) => backendService.patch(`/api/alerts/${id}/`, data),
+    delete: (id) => backendService.delete(`/api/alerts/${id}/`),
+  },
+  // AI服务相关接口
+  ai: {
+    startStream: (data) => aiService.post('/stream/start/', data),
+    stopStream: (cameraId) => aiService.post(`/stream/stop/${cameraId}`),
+    analyzeFrame: (data) => aiService.post('/frame/analyze/', data),
+  }
+};
+
+export { backendService, aiService, requestWithRetry };
+export default api;

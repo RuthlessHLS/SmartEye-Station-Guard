@@ -8,7 +8,6 @@ from datetime import datetime
 import traceback
 from models.alert_models import AIAnalysisResult  # 修改为绝对导入
 import logging
-from datetime import datetime
 import ffmpeg
 import tempfile
 import os
@@ -23,7 +22,16 @@ def process_video_stream(video_url: str):
     连接到视频流并逐帧产生图像。
     这是一个生成器函数，可以被循环调用。
     """
-    cap = cv2.VideoCapture(video_url)
+    # 如果是webcam字符串，转换为默认摄像头索引
+    if video_url.lower() == 'webcam':
+        video_url = 0
+    
+    # 对于本地摄像头，使用DirectShow后端以避免MSMF问题
+    if isinstance(video_url, int):
+        cap = cv2.VideoCapture(video_url, cv2.CAP_DSHOW)
+    else:
+        cap = cv2.VideoCapture(video_url)
+        
     if not cap.isOpened():
         print(f"错误: 无法打开视频流 {video_url}")
         return  # 如果打不开，就结束
@@ -90,10 +98,19 @@ class VideoStream:
             print(f"视频流 {self.stream_url} 已在运行中")
             return True
         
-        # 尝试连接视频流
-        self.cap = cv2.VideoCapture(self.stream_url)
+        # 如果是webcam字符串，转换为默认摄像头索引
+        stream_url = self.stream_url
+        if isinstance(stream_url, str) and stream_url.lower() == 'webcam':
+            stream_url = 0
+        
+        # 尝试连接视频流，对于本地摄像头使用DirectShow后端
+        if isinstance(stream_url, int):
+            self.cap = cv2.VideoCapture(stream_url, cv2.CAP_DSHOW)
+        else:
+            self.cap = cv2.VideoCapture(stream_url)
+            
         if not self.cap.isOpened():
-            print(f"错误: 无法打开视频流 {self.stream_url}")
+            print(f"错误: 无法打开视频流 {stream_url}")
             return False
         
         # 如果是本地视频文件且有声音检测器，启动音频处理
@@ -112,9 +129,12 @@ class VideoStream:
     async def start_audio_extraction(self):
         """启动音频提取过程"""
         try:
-            # 创建临时文件来存储音频
-            temp_dir = tempfile.gettempdir()
-            self.temp_audio_file = os.path.join(temp_dir, f"audio_{self.camera_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.wav")
+            # 创建项目内的音频临时目录
+            current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 获取ai_service目录
+            audio_temp_dir = os.path.join(current_dir, "audio_temp")
+            os.makedirs(audio_temp_dir, exist_ok=True)
+            
+            self.temp_audio_file = os.path.join(audio_temp_dir, f"audio_{self.camera_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.wav")
             
             # 检查是否是本地文件
             is_local_file = self.stream_url.startswith(('file:///', 'G:/', 'C:/', 'D:/', 'E:/', 'F:/'))
@@ -204,7 +224,17 @@ class VideoStream:
                     if retry_count >= max_retries:
                         print("达到最大重试次数，尝试重新连接...")
                         self.cap.release()
-                        self.cap = cv2.VideoCapture(self.stream_url)
+                        
+                        # 如果是webcam字符串，转换为默认摄像头索引
+                        stream_url = self.stream_url
+                        if isinstance(stream_url, str) and stream_url.lower() == 'webcam':
+                            stream_url = 0
+                        
+                        # 重新连接，对于本地摄像头使用DirectShow后端
+                        if isinstance(stream_url, int):
+                            self.cap = cv2.VideoCapture(stream_url, cv2.CAP_DSHOW)
+                        else:
+                            self.cap = cv2.VideoCapture(stream_url)
                         retry_count = 0
                     
                     time.sleep(1)
