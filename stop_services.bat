@@ -1,0 +1,13 @@
+@echo off
+echo 停止所有服务...
+
+echo 停止 Nginx...
+taskkill /F /IM nginx.exe
+
+echo 停止 Python 服务...
+taskkill /F /IM python.exe
+
+echo 停止 Node 服务...
+taskkill /F /IM node.exe
+
+echo 所有服务已停止！ 

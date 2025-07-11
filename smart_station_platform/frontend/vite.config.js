@@ -52,11 +52,15 @@ export default defineConfig({
       }
     }
   },
-  optimizeDeps: { // 确保这里添加了
+  optimizeDeps: {
     include: [
       'echarts',
       'mapbox-gl',
       'element-plus',
     ],
+    exclude: [
+      'element-plus/es/components/collapse/style/css',
+      'element-plus/es/components/collapse-item/style/css'
+    ]
   },
 })

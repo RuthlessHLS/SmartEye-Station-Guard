@@ -2,6 +2,7 @@
 
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
+import { backendService as apiClient } from '@/api';
 import { useAuthStore } from './auth';
 
 export const useUserManagementStore = defineStore('userManagement', () => {
@@ -10,20 +11,23 @@ export const useUserManagementStore = defineStore('userManagement', () => {
   const error = ref(null);
 
   async function fetchUsers(query = '') {
-    // 1. 获取 auth store 实例
-    const authStore = useAuthStore();
-    // 2. 从 auth store 中获取 request 函数
-    const request = authStore.request;
-
     loading.value = true;
     error.value = null;
     try {
-      const url = query ? `/users/directory/?search=${query}` : '/users/directory/';
+      const url = query ? `/api/users/directory/?search=${query}` : '/api/users/directory/';
 
-      // 3. 使用 request 函数发送请求
-      const response = await request({ method: 'get', url: url });
-
-      users.value = response.data.results || response.data;
+      // 使用 apiClient 发送请求
+      const response = await apiClient.get(url);
+      
+      // 检查响应数据结构
+      if (Array.isArray(response)) {
+        users.value = response;
+      } else if (response.results) {
+        users.value = response.results;
+      } else {
+        console.error('Unexpected response format:', response);
+        error.value = '服务器返回的数据格式不正确';
+      }
 
     } catch (err) {
       console.error('获取用户列表失败:', err);

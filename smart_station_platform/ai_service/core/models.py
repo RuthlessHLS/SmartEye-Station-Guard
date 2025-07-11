@@ -1,14 +1,21 @@
-# 文件: ai_service/core/models.py (修复后)
-from pydantic import BaseModel, Field, ConfigDict # 新增导入 ConfigDict
+# 文件: ai_service/core/models.py
+import os
+
+# 模型路径配置 - 使用相对路径
+MODEL_BASE_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "models")
+YOLO_MODEL_PATH = os.path.join(MODEL_BASE_PATH, "yolov8n.pt")
+FASTER_RCNN_MODEL_PATH = os.path.join(MODEL_BASE_PATH, "fasterrcnn_resnet50_fpn_coco-258fb6c6.pth")
+COCO_NAMES_PATH = os.path.join(MODEL_BASE_PATH, "coco.names")
+
+# 其他配置保持不变
+from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, Any
 from datetime import datetime
 
 # 这个模型需要严格对应后端 Django 的 Alert 模型字段
-# 它定义了发送给后端的数据应该长什么样
 class AlertPayload(BaseModel):
-    # 使用 model_config 来替代旧的 Config 类
-    model_config = ConfigDict( # 使用 ConfigDict 来定义模型配置
-        json_schema_extra={ # 将 schema_extra 更名为 json_schema_extra
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "camera_id": 1,
                 "event_type": "fall_down",
