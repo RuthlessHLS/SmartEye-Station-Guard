@@ -3,345 +3,256 @@ import cv2
 import time
 import threading
 import numpy as np
-from typing import List, Callable, Optional, Dict
+from typing import List, Callable, Optional, Dict, Tuple
 from datetime import datetime
 import traceback
-from models.alert_models import AIAnalysisResult  # 修改为绝对导入
 import logging
 import ffmpeg
 import tempfile
 import os
 import asyncio
-from typing import Optional, Tuple, Dict
+import subprocess
+from models.alert_models import AIAnalysisResult
 
 logger = logging.getLogger(__name__)
 
-
-def process_video_stream(video_url: str):
-    """
-    连接到视频流并逐帧产生图像。
-    这是一个生成器函数，可以被循环调用。
-    """
-    # 如果是webcam字符串，转换为默认摄像头索引
-    if video_url.lower() == 'webcam':
-        video_url = 0
+class RTMPServer:
+    """RTMP服务器类，用于接收和发送RTMP流"""
     
-    # 对于本地摄像头，使用DirectShow后端以避免MSMF问题
-    if isinstance(video_url, int):
-        cap = cv2.VideoCapture(video_url, cv2.CAP_DSHOW)
-    else:
-        cap = cv2.VideoCapture(video_url)
-        
-    if not cap.isOpened():
-        print(f"错误: 无法打开视频流 {video_url}")
-        return  # 如果打不开，就结束
-
-    print(f"成功连接到视频流: {video_url}")
-    while True:
-        ret, frame = cap.read()
-        # 如果读取失败 (ret is False)
-        if not ret:
-            print("视频流结束或发生错误，5秒后尝试重连...")
-            time.sleep(5)
-            cap.release()  # 释放旧的连接
-            cap = cv2.VideoCapture(video_url)  # 尝试重新连接
-            continue  # 继续下一次循环
-
-        # 如果读取成功，使用 yield 将这一帧图像"生产"出去
-        yield frame
-
-    # 循环结束后（理论上对于实时流不会结束），释放资源
-    cap.release()
-
-
-class VideoStream:
-    """
-    视频流处理类，负责管理视频流的捕获和AI处理
-    """
-    
-    def __init__(self, stream_url: str, camera_id: str):
-        """
-        初始化视频流
-        
-        Args:
-            stream_url (str): 视频流URL
-            acoustic_detector: 声音检测器实例
-        """
-        self.stream_url = stream_url
-        self.camera_id = camera_id
-        self.cap = None
+    def __init__(self, input_url: str, output_url: str):
+        self.input_url = input_url
+        self.output_url = output_url
+        self.process = None
         self.is_running = False
-        self.temp_audio_file = None
-        self.audio_process = None
-        self.processors: List[Callable[[np.ndarray], None]] = []
-        self.lock = threading.Lock()
-        self.acoustic_detector = None # This attribute is no longer used for audio processing
-    
-    def add_processor(self, processor: Callable[[np.ndarray], None]):
-        """
-        添加帧处理器
+        self.frame_processors = []
         
-        Args:
-            processor: 接受frame作为参数的处理函数
-        """
-        with self.lock:
-            self.processors.append(processor)
-    
-    async def start(self) -> bool:
-        """
-        启动视频流处理
+    def add_frame_processor(self, processor: Callable):
+        """添加帧处理器"""
+        self.frame_processors.append(processor)
         
-        Returns:
-            bool: 是否成功启动
-        """
+    async def start(self):
+        """启动RTMP服务器"""
         if self.is_running:
-            print(f"视频流 {self.stream_url} 已在运行中")
-            return True
-        
-        # 如果是webcam字符串，转换为默认摄像头索引
-        stream_url = self.stream_url
-        if isinstance(stream_url, str) and stream_url.lower() == 'webcam':
-            stream_url = 0
-        
-        # 尝试连接视频流，对于本地摄像头使用DirectShow后端
-        if isinstance(stream_url, int):
-            self.cap = cv2.VideoCapture(stream_url, cv2.CAP_DSHOW)
-        else:
-            self.cap = cv2.VideoCapture(stream_url)
+            return
             
-        if not self.cap.isOpened():
-            print(f"错误: 无法打开视频流 {stream_url}")
-            return False
-        
-        # 如果是本地视频文件且有声音检测器，启动音频处理
-        # if self.acoustic_detector and self.stream_url.startswith(('G:/', 'C:/', 'D:/', 'E:/', 'F:/')):
-        #     print("检测到本地视频文件，启动音频处理...")
-        #     self.acoustic_detector.start_video_audio_processing(self.stream_url)
-        
-        # 启动处理线程
-        self.is_running = True
-        # self.thread = threading.Thread(target=self._process_loop, daemon=True) # This line is removed
-        # self.thread.start() # This line is removed
-        
-        print(f"成功启动视频流: {self.stream_url}")
-        return True
-    
-    async def start_audio_extraction(self):
-        """启动音频提取过程"""
         try:
-            # 创建项目内的音频临时目录
-            current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 获取ai_service目录
-            audio_temp_dir = os.path.join(current_dir, "audio_temp")
-            os.makedirs(audio_temp_dir, exist_ok=True)
+            # 使用ffmpeg创建RTMP服务器
+            command = [
+                'ffmpeg',
+                '-i', self.input_url,
+                '-c:v', 'libx264',
+                '-preset', 'ultrafast',
+                '-tune', 'zerolatency',
+                '-c:a', 'aac',
+                '-f', 'flv',
+                self.output_url
+            ]
             
-            self.temp_audio_file = os.path.join(audio_temp_dir, f"audio_{self.camera_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.wav")
+            self.process = subprocess.Popen(command)
+            self.is_running = True
             
-            # 检查是否是本地文件
-            is_local_file = self.stream_url.startswith(('file:///', 'G:/', 'C:/', 'D:/', 'E:/', 'F:/'))
-            if is_local_file:
-                stream_url = self.stream_url.replace('file:///', '')
-            else:
-                stream_url = self.stream_url
-            
-            print(f"开始从 {stream_url} 提取音频...")
-            print(f"音频将保存到: {self.temp_audio_file}")
-            
-            # 使用ffmpeg提取音频
-            stream = ffmpeg.input(stream_url)
-            audio = stream.audio
-            stream = ffmpeg.output(audio, self.temp_audio_file, 
-                                 acodec='pcm_s16le',  # 16位PCM格式
-                                 ac=1,                # 单声道
-                                 ar='44100',          # 44.1kHz采样率
-                                 loglevel='error')    # 只显示错误日志
-                                 
-            # 启动ffmpeg进程
-            self.audio_process = await asyncio.create_subprocess_exec(
-                *ffmpeg.compile(stream),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            print("✅ 音频提取进程已启动")
+            # 启动视频处理循环
+            await self._process_frames()
             
         except Exception as e:
-            print(f"❌ 启动音频提取时发生错误: {str(e)}")
-            traceback.print_exc()
-            self.temp_audio_file = None
+            logger.error(f"启动RTMP服务器失败: {str(e)}")
+            self.stop()
             
-    def get_audio_file(self) -> Optional[str]:
-        """获取当前正在写入的音频文件路径"""
-        return self.temp_audio_file
+    async def _process_frames(self):
+        """处理视频帧"""
+        cap = cv2.VideoCapture(self.input_url)
+        
+        while self.is_running:
+            ret, frame = cap.read()
+            if not ret:
+                continue
+                
+            # 应用所有帧处理器
+            for processor in self.frame_processors:
+                frame = await processor(frame)
+                
+            # 将处理后的帧推送到输出流
+            # 这里需要实现帧推送逻辑
             
-    async def read_frame(self) -> Tuple[bool, Optional[np.ndarray]]:
+        cap.release()
+            
+    def stop(self):
+        """停止RTMP服务器"""
+        self.is_running = False
+        if self.process:
+            self.process.terminate()
+            self.process = None
+
+class VideoStream:
+    def __init__(self, source: str):
+        """
+        初始化视频流
+        :param source: 视频源（可以是摄像头索引或URL）
+        """
+        self.source = source
+        self.cap = None
+        self.is_running = False
+        self.frame_count = 0
+        self.fps = 0
+        self.last_frame_time = 0
+        self.frame_times = []
+        self.processing_times = []
+        
+    async def test_connection(self) -> bool:
+        """
+        测试视频流连接是否可用
+        :return: 如果连接成功返回True，否则返回False
+        """
+        try:
+            print(f"正在测试视频流连接: {self.source}")
+            
+            # 设置OpenCV的超时参数
+            if isinstance(self.source, str):
+                if self.source.startswith('rtmp://'):
+                    # RTMP流需要更长的超时时间
+                    os.environ['OPENCV_FFMPEG_READ_ATTEMPT_TIMEOUT'] = '5000'  # 5秒超时
+                    os.environ['OPENCV_FFMPEG_READ_TIMEOUT'] = '5000'  # 5秒超时
+                    print("检测到RTMP流，设置较长的超时时间")
+                elif not self.source.isdigit():
+                    # 其他网络流使用较短的超时时间
+                    os.environ['OPENCV_FFMPEG_READ_ATTEMPT_TIMEOUT'] = '2000'  # 2秒超时
+                    os.environ['OPENCV_FFMPEG_READ_TIMEOUT'] = '2000'  # 2秒超时
+            
+            # 尝试打开视频流
+            if isinstance(self.source, str) and self.source.isdigit():
+                cap = cv2.VideoCapture(int(self.source))
+            else:
+                # 对于RTMP流，添加特殊参数
+                cap = cv2.VideoCapture(self.source)
+                if self.source.startswith('rtmp://'):
+                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # 设置缓冲区大小为1帧
+            
+            if not cap.isOpened():
+                print(f"无法打开视频流: {self.source}")
+                return False
+            
+            # 尝试读取前3帧，确保流是稳定的
+            success = False
+            for i in range(3):
+                ret, frame = cap.read()
+                if ret and frame is not None:
+                    success = True
+                    print(f"成功读取第{i+1}帧")
+                    break
+                await asyncio.sleep(0.5)  # 增加重试间隔
+            
+            # 释放资源
+            cap.release()
+            
+            if success:
+                print(f"视频流连接测试成功: {self.source}")
+            else:
+                print(f"视频流不稳定: {self.source}")
+            
+            return success
+            
+        except Exception as e:
+            print(f"测试连接失败: {str(e)}")
+            return False
+    
+    async def start(self):
+        """启动视频流"""
+        if isinstance(self.source, str) and self.source.isdigit():
+            self.cap = cv2.VideoCapture(int(self.source))
+        else:
+            self.cap = cv2.VideoCapture(self.source)
+            
+        if not self.cap.isOpened():
+            raise Exception(f"无法打开视频源: {self.source}")
+            
+        self.is_running = True
+        self.frame_count = 0
+        self.last_frame_time = time.time()
+        
+    async def stop(self):
+        """停止视频流"""
+        self.is_running = False
+        if self.cap:
+            self.cap.release()
+        self.cap = None
+        
+    async def get_frame(self) -> Tuple[bool, Optional[np.ndarray]]:
+        """
+        获取下一帧
+        :return: (成功标志, 帧数据)
+        """
         if not self.is_running or not self.cap:
             return False, None
             
-        try:
-            ret, frame = self.cap.read()
-            if not ret:
-                logger.warning(f"无法读取视频帧: {self.stream_url}")
-                return False, None
-            return True, frame
-        except Exception as e:
-            logger.error(f"读取视频帧时发生错误: {str(e)}")
-            return False, None
-    
-    def stop(self):
-        """
-        停止视频流处理
-        """
-        self.is_running = False
-        
-        # 停止音频处理
-        if self.acoustic_detector:
-            self.acoustic_detector.stop_video_audio_processing()
-        
-        # The following lines are removed as per the new_code:
-        # if self.thread and self.thread.is_alive():
-        #     self.thread.join(timeout=5)
-        
-        if self.cap:
-            self.cap.release()
-            self.cap = None
-        
-        print(f"已停止视频流: {self.stream_url}")
-    
-    def _process_loop(self):
-        """
-        视频处理主循环
-        """
-        retry_count = 0
-        max_retries = 5
-        
-        while self.is_running:
-            try:
-                ret, frame = self.cap.read()
-                
-                if not ret:
-                    retry_count += 1
-                    print(f"视频流读取失败，重试 {retry_count}/{max_retries}")
-                    
-                    if retry_count >= max_retries:
-                        print("达到最大重试次数，尝试重新连接...")
-                        self.cap.release()
-                        
-                        # 如果是webcam字符串，转换为默认摄像头索引
-                        stream_url = self.stream_url
-                        if isinstance(stream_url, str) and stream_url.lower() == 'webcam':
-                            stream_url = 0
-                        
-                        # 重新连接，对于本地摄像头使用DirectShow后端
-                        if isinstance(stream_url, int):
-                            self.cap = cv2.VideoCapture(stream_url, cv2.CAP_DSHOW)
-                        else:
-                            self.cap = cv2.VideoCapture(stream_url)
-                        retry_count = 0
-                    
-                    time.sleep(1)
-                    continue
-                
-                # 重置重试计数
-                retry_count = 0
-                
-                # 处理帧
-                with self.lock:
-                    for processor in self.processors:
-                        try:
-                            processor(frame)
-                        except Exception as e:
-                            print(f"处理器执行错误: {e}")
-                
-                # 控制帧率，避免过度消耗CPU
-                time.sleep(0.033)  # 约30fps
-                
-            except Exception as e:
-                print(f"视频流处理循环错误: {e}")
-                time.sleep(1)
-    
-    def get_stream_info(self) -> dict:
-        """
-        获取视频流信息
-        
-        Returns:
-            dict: 包含视频流状态信息的字典
-        """
-        info = {
-            "stream_url": self.stream_url,
-            "is_running": self.is_running,
-            "processors_count": len(self.processors),
-            "has_audio_processing": self.acoustic_detector is not None
-        }
-        
-        if self.cap and self.cap.isOpened():
-            info.update({
-                "width": int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
-                "height": int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
-                "fps": self.cap.get(cv2.CAP_PROP_FPS)
-            })
-        
-        return info
-
-    def process_frame(self, frame: np.ndarray) -> Dict:
-        """处理单帧图像。"""
-        results = {
-            "faces": [],
-            "objects": [],
-            "behaviors": [],
-            "alerts": []
-        }
-        
-        try:
-            # 1. 人脸检测和识别
-            if self.face_recognizer:
-                face_results = self.face_recognizer.detect_and_recognize(frame)
-                results["faces"] = face_results
-                
-                # 检查每个未知人脸并生成告警
-                for face in face_results:
-                    if face["alert_needed"]:
-                        alert = AIAnalysisResult(
-                            camera_id=self.camera_id,
-                            event_type="unknown_face_detected",
-                            timestamp=face["detection_time"],
-                            location={
-                                "box": [
-                                    face["location"]["left"],
-                                    face["location"]["top"],
-                                    face["location"]["right"],
-                                    face["location"]["bottom"]
-                                ],
-                                "description": "摄像头视野内"
-                            },
-                            confidence=face["confidence"],
-                            details={
-                                "best_match_info": face["best_match"] if face["best_match"] else None,
-                                "face_location": face["location"]
-                            }
-                        )
-                        
-                        # 发送报警到后端
-                        try:
-                            self.alert_sender.send_alert(alert)
-                            print(f"🚨 未知人员报警已发送! 位置: {face['location']}")
-                        except Exception as e:
-                            print(f"发送未知人员报警失败: {str(e)}")
-                            traceback.print_exc()
+        ret, frame = self.cap.read()
+        if ret:
+            self.frame_count += 1
+            current_time = time.time()
             
-            # 2. 行为检测（如果需要）
-            if self.behavior_detector:
-                behavior_results = self.behavior_detector.detect(frame)
-                results["behaviors"] = behavior_results
-            
-            # 3. 目标检测（如果需要）
-            if self.object_detector:
-                object_results = self.object_detector.detect(frame)
-                results["objects"] = object_results
+            # 计算FPS
+            if self.frame_count > 1:  # 跳过第一帧
+                frame_time = current_time - self.last_frame_time
+                self.frame_times.append(frame_time)
+                if len(self.frame_times) > 30:  # 保持最近30帧的时间
+                    self.frame_times.pop(0)
+                self.fps = 1.0 / (sum(self.frame_times) / len(self.frame_times))
                 
-        except Exception as e:
-            print(f"处理帧时发生错误: {str(e)}")
-            traceback.print_exc()
+            self.last_frame_time = current_time
+            
+        return ret, frame
         
-        return results
+    def get_fps(self) -> float:
+        """获取当前FPS"""
+        return self.fps
+        
+    def get_frame_count(self) -> int:
+        """获取已处理的帧数"""
+        return self.frame_count
+        
+    def add_processing_time(self, time_ms: float):
+        """
+        添加处理时间记录
+        :param time_ms: 处理时间（毫秒）
+        """
+        self.processing_times.append(time_ms)
+        if len(self.processing_times) > 30:  # 保持最近30次的处理时间
+            self.processing_times.pop(0)
+            
+    def get_avg_processing_time(self) -> float:
+        """获取平均处理时间（毫秒）"""
+        if not self.processing_times:
+            return 0
+        return sum(self.processing_times) / len(self.processing_times)
+        
+    async def close(self):
+        """关闭视频流并释放资源"""
+        await self.stop()
+        
+    def is_active(self) -> bool:
+        """检查视频流是否活动"""
+        return self.is_running and self.cap is not None and self.cap.isOpened()
+        
+    def get_resolution(self) -> Tuple[int, int]:
+        """获取视频分辨率"""
+        if not self.cap:
+            return (0, 0)
+        width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        return (width, height)
+        
+    def get_status(self) -> Dict:
+        """获取视频流状态信息"""
+        resolution = self.get_resolution()
+        return {
+            "is_active": self.is_active(),
+            "frame_count": self.frame_count,
+            "fps": round(self.fps, 2),
+            "avg_processing_time": round(self.get_avg_processing_time(), 2),
+            "resolution": {
+                "width": resolution[0],
+                "height": resolution[1]
+            }
+        }
 
 # 全局视频流管理器
 active_streams: Dict[str, VideoStream] = {}

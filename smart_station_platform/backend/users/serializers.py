@@ -191,6 +191,22 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
 
         # 调用父类验证逻辑 (验证用户名密码，生成tokens)
         data = super().validate(attrs)
+
+        # 重命名token字段以匹配前端期望的格式
+        data['token'] = data.pop('access')
+        data['refresh_token'] = data.pop('refresh')
+
+        # 添加用户信息到响应中
+        user = self.user
+        data['user'] = {
+            'id': user.id,
+            'username': user.username,
+            'email': user.email,
+            'is_staff': user.is_staff,
+            'nickname': getattr(user, 'nickname', None),
+            'phone_number': getattr(user, 'phone_number', None),
+        }
+
         return data
 
 

@@ -72,19 +72,51 @@
                 <!-- 摄像头选择对话框 -->
                 <div v-if="!isStreaming" class="camera-placeholder">
                   <el-icon class="placeholder-icon"><VideoCamera /></el-icon>
-                  <p>点击"启动摄像头"开始智能监控</p>
-                  <el-select
-                    v-model="selectedDeviceId"
-                    placeholder="选择摄像头设备"
-                    class="device-select"
-                  >
-                    <el-option
-                      v-for="device in videoDevices"
-                      :key="device.deviceId"
-                      :label="device.label || `摄像头 ${device.deviceId.slice(0, 8)}`"
-                      :value="device.deviceId"
-                    />
-                  </el-select>
+                  <p>选择视频源开始智能监控</p>
+                  
+                  <!-- 视频源选择 -->
+                  <el-form class="source-selection" label-width="80px">
+                    <el-form-item label="视频源">
+                      <el-select v-model="videoSource" placeholder="选择视频源类型" @change="handleVideoSourceChange">
+                        <el-option label="本地摄像头" value="local" />
+                        <el-option label="RTSP流" value="rtsp" />
+                        <el-option label="HTTP流" value="http" />
+                        <el-option label="RTMP流" value="rtmp" />
+                      </el-select>
+                    </el-form-item>
+
+                    <!-- 本地摄像头选择 -->
+                    <el-form-item v-if="videoSource === 'local'" label="设备">
+                      <el-select
+                        v-model="selectedDeviceId"
+                        placeholder="选择摄像头设备"
+                        class="device-select"
+                      >
+                        <el-option
+                          v-for="device in videoDevices"
+                          :key="device.deviceId"
+                          :label="device.label || `摄像头 ${device.deviceId.slice(0, 8)}`"
+                          :value="device.deviceId"
+                        />
+                      </el-select>
+                    </el-form-item>
+
+                    <!-- RTSP/HTTP/RTMP流地址输入 -->
+                    <el-form-item v-if="videoSource !== 'local'" label="流地址">
+                      <el-input
+                        v-model="streamUrl"
+                        :placeholder="getStreamPlaceholder()"
+                      >
+                        <template #append>
+                          <el-button @click="testStreamConnection">测试连接</el-button>
+                        </template>
+                      </el-input>
+                    </el-form-item>
+                  </el-form>
+
+                  <el-button type="primary" @click="startStream" :disabled="!canStartStream">
+                    开始监控
+                  </el-button>
                 </div>
               </div>
             </el-card>
@@ -488,7 +520,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, nextTick, watch, computed } from 'vue'
 import { ElMessage, ElNotification } from 'element-plus'
 import {
   VideoCamera,
@@ -501,6 +533,8 @@ import {
   Location
 } from '@element-plus/icons-vue'
 import { backendService, aiService, requestWithRetry } from '@/api';
+import api from '@/api';
+import flvjs from 'flv.js'
 
 // 响应式数据
 const videoElement = ref(null)
@@ -568,6 +602,116 @@ const performanceStats = reactive({
 
 let frameProcessTimes = []
 let lastStatsUpdate = Date.now()
+
+// 视频源控制
+const videoSource = ref('local');
+const streamUrl = ref('');
+const canStartStream = computed(() => {
+  if (videoSource.value === 'local') {
+    return selectedDeviceId.value;
+  } else {
+    return streamUrl.value.trim() !== '';
+  }
+});
+
+// 处理视频源变更
+const handleVideoSourceChange = () => {
+  if (isStreaming.value) {
+    stopCamera();
+  }
+  streamUrl.value = '';
+};
+
+// 测试流连接
+const testStreamConnection = async () => {
+  try {
+    const response = await api.ai.testStreamConnection({
+      url: streamUrl.value,
+      type: videoSource.value
+    });
+    ElMessage.success('流连接测试成功');
+  } catch (error) {
+    ElMessage.error('流连接测试失败：' + (error.response?.data?.message || error.message));
+  }
+};
+
+// 启动视频流
+const startStream = async () => {
+  try {
+    if (videoSource.value === 'local') {
+      await startLocalCamera();
+    } else {
+      await startExternalStream();
+    }
+  } catch (error) {
+    ElMessage.error('启动视频流失败：' + error.message);
+  }
+};
+
+// 启动外部视频流
+const startExternalStream = async () => {
+  try {
+    console.log('开始启动外部视频流:', streamUrl.value)
+    
+    // 先调用AI服务启动流处理
+    const response = await api.ai.startStream({
+      camera_id: cameraId,
+      stream_url: streamUrl.value,
+      enable_face_recognition: aiSettings.faceRecognition,
+      enable_behavior_detection: aiSettings.behaviorAnalysis,
+      enable_sound_detection: aiSettings.soundDetection,
+      enable_fire_detection: aiSettings.fireDetection
+    });
+
+    // 检查响应状态
+    if (!response || response.status !== 'success') {
+      throw new Error(response?.message || '服务器返回数据格式错误');
+    }
+
+    // 等待一段时间让AI服务初始化
+    await new Promise(resolve => setTimeout(resolve, 2000));
+
+    // 设置状态
+    isStreaming.value = true;
+    
+    // 启动AI分析
+    if (aiAnalysisEnabled.value) {
+      await startAIAnalysis();
+    }
+
+    ElMessage.success('视频流启动成功');
+  } catch (error) {
+    console.error('启动外部视频流失败:', error);
+    ElMessage.error('启动外部视频流失败：' + (error.response?.data?.message || error.message));
+    throw error;
+  }
+};
+
+// 停止摄像头和视频流
+const stopCamera = async () => {
+  try {
+    if (!currentCamera.value) {
+      console.log('没有正在运行的摄像头');
+      return;
+    }
+    
+    // 停止视频流
+    await api.ai.stopStream();
+    
+    // 清理状态
+    currentCamera.value = null;
+    isStreaming.value = false;
+    
+  } catch (error) {
+    console.error('停止监控失败:', error);
+    ElMessage.error('停止监控失败，请重试');
+  }
+};
+
+// 组件卸载时清理
+onUnmounted(() => {
+  stopCamera();
+});
 
 // 获取可用摄像头设备
 const getVideoDevices = async () => {
@@ -724,62 +868,7 @@ const startLocalCamera = async () => {
   }
 }
 
-// 停止摄像头
-const stopCamera = async () => {
-  try {
-    // 停止AI分析
-    await stopAIStream()
-
-    // 停止媒体流
-    if (mediaStream) {
-      mediaStream.getTracks().forEach(track => track.stop())
-      mediaStream = null
-    }
-
-    if (videoElement.value) {
-      videoElement.value.srcObject = null
-    }
-
-    isStreaming.value = false
-    aiAnalysisEnabled.value = false
-    detectionResults.value = []
-    realtimeAlerts.value = []
-    lastFrameDetections.value = [] // 清除检测缓存
-
-    // 重置性能统计
-    performanceStats.fps = 0
-    performanceStats.avgProcessTime = 0
-    performanceStats.processedFrames = 0
-    performanceStats.skippedFrames = 0
-    performanceStats.motionSkippedFrames = 0
-    performanceStats.audioLevel = 0
-    frameProcessTimes = []
-    isProcessingFrame = false
-
-    // 清理音频相关资源
-    stopAudioMonitoring() // 停止音频监控循环
-    if (audioContext) {
-      audioContext.close()
-      audioContext = null
-    }
-    audioAnalyser = null
-    audioDataArray = null
-    lastFrameData = null
-
-    // 清除告警冷却时间
-    alertCooldowns.clear()
-
-    // 清除画布
-    if (canvasContext) {
-      canvasContext.clearRect(0, 0, overlayCanvas.value.width, overlayCanvas.value.height)
-    }
-
-    ElMessage.success('摄像头已停止')
-  } catch (error) {
-    console.error('停止摄像头失败:', error)
-    ElMessage.error('停止摄像头失败')
-  }
-}
+// ... existing code ...
 
 // 启动AI分析
 const startAIStream = async () => {
@@ -2144,6 +2233,20 @@ onUnmounted(() => {
     overlayCanvas.value.removeEventListener('contextmenu', finishDrawing)
   }
 })
+
+// 获取流地址占位符
+const getStreamPlaceholder = () => {
+  switch (videoSource.value) {
+    case 'rtsp':
+      return 'rtsp://用户名:密码@IP地址:端口/stream'
+    case 'http':
+      return 'http://IP地址:端口/stream'
+    case 'rtmp':
+      return 'rtmp://IP地址:端口/live/stream'
+    default:
+      return '请输入流地址'
+  }
+}
 </script>
 
 <style scoped>
@@ -2539,5 +2642,15 @@ onUnmounted(() => {
     font-size: 12px;
     padding: 6px 12px;
   }
+}
+
+.source-selection {
+  margin-top: 20px;
+  width: 100%;
+  max-width: 500px;
+}
+
+.device-select {
+  width: 100%;
 }
 </style>

@@ -308,9 +308,9 @@ const handleAlert = (row) => {
 
 const updateAlertStatus = async () => {
   try {
-    // 假设后端更新告警接口为 /api/alerts/{id}/update/
+    // 使用正确的API方法更新告警状态
     const newStatus = currentAlert.status === 'pending' ? 'in_progress' : 'resolved';
-    const response = await api.patch(`/api/alerts/${currentAlert.id}/update/`, {
+    await api.alerts.handle(currentAlert.id, {
       status: newStatus,
       processing_notes: currentAlert.processing_notes,
     });
