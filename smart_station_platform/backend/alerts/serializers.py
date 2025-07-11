@@ -33,9 +33,17 @@ class AIResultReceiveSerializer(serializers.Serializer):
         camera_name = validated_data.pop('camera_id')
         try:
             camera_instance = Camera.objects.get(name=camera_name)
+            print(f"找到摄像头记录: {camera_name}")
         except Camera.DoesNotExist:
-            print(f"警告: 未找到名为 '{camera_name}' 的摄像头。告警将不关联摄像头。")
-            camera_instance = None
+            # 自动创建摄像头记录
+            print(f"未找到摄像头 '{camera_name}'，正在自动创建...")
+            camera_instance = Camera.objects.create(
+                name=camera_name,
+                location_desc=f"AI服务自动创建 - {camera_name}",
+                rtsp_url="",  # 空RTSP URL，稍后可以手动配置
+                is_active=True
+            )
+            print(f"成功创建摄像头记录: {camera_name} (ID: {camera_instance.id})")
 
         # 如果没有提供timestamp，使用当前时间
         if 'timestamp' not in validated_data or validated_data['timestamp'] is None:

@@ -24,6 +24,7 @@ import json
 from datetime import datetime, timedelta
 from drf_yasg.utils import swagger_auto_schema
 import logging
+import os # Added for API key validation
 logger = logging.getLogger(__name__)
 
 
@@ -195,33 +196,81 @@ class AIResultReceiveView(APIView):
     接收AI服务发送的分析结果，保存为告警记录，并实时推送到前端。
     POST /alerts/ai-results/
     """
-    # 允许任何来源访问，因为AI服务可能没有认证（或者使用内部API Key认证）
     permission_classes = []
     authentication_classes = []
 
+    def check_api_key(self, request):
+        """验证API密钥"""
+        api_key = request.headers.get('X-API-Key')
+        if not api_key:
+            return False
+        # 从环境变量或设置中获取有效的API密钥，提供默认值
+        valid_api_key = os.getenv('AI_SERVICE_API_KEY', 'smarteye-ai-service-key-2024')
+        return api_key == valid_api_key
+
     @swagger_auto_schema(request_body=AIResultReceiveSerializer)
     def post(self, request, *args, **kwargs):
-        logger.info(f"收到告警数据: {request.data}")
-        serializer = AIResultReceiveSerializer(data=request.data)
-        if serializer.is_valid():
-            try:
+        """处理AI服务发送的分析结果"""
+        # 验证API密钥
+        if not self.check_api_key(request):
+            return Response(
+                {"error": "Invalid or missing API key"},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+        try:
+            serializer = AIResultReceiveSerializer(data=request.data)
+            if serializer.is_valid():
+                # 数据预处理和验证
+                data = serializer.validated_data
+                
+                # 检查必要字段
+                required_fields = ['camera_id', 'event_type', 'confidence', 'timestamp']
+                if not all(field in data for field in required_fields):
+                    return Response(
+                        {"error": "Missing required fields"},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+                # 创建告警记录
                 alert = serializer.save()
-                print(f"成功接收并保存AI告警: {alert.event_type} (ID: {alert.id})")
 
-                # 暂时注释WebSocket推送，专注于基本功能
-                # 发送WebSocket实时推送
-                # self._send_new_alert_notification(alert)
-
-                return Response(AlertDetailSerializer(alert).data, status=status.HTTP_201_CREATED)
-            except Exception as e:
-                print(f"保存告警时发生错误: {e}")
-                import traceback
-                traceback.print_exc()
+                try:
+                    # 发送WebSocket通知
+                    channel_layer = get_channel_layer()
+                    if channel_layer:
+                        alert_data = AlertDetailSerializer(alert).data
+                        async_to_sync(channel_layer.group_send)(
+                            "alerts_group",
+                            {
+                                "type": "alert_message",
+                                "message": {
+                                    "action": "new_alert",
+                                    "alert": alert_data
+                                }
+                            }
+                        )
+                except Exception as ws_error:
+                    logger.error(f"WebSocket通知发送失败: {str(ws_error)}")
+                    # 即使WebSocket发送失败，我们仍然返回成功，因为告警已经保存
+                
                 return Response(
-                    {"error": "处理告警时发生内部错误", "details": str(e)},
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                    {"message": "Alert created successfully", "id": alert.id},
+                    status=status.HTTP_201_CREATED
                 )
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            else:
+                logger.error(f"数据验证失败: {serializer.errors}")
+                return Response(
+                    {"error": "Invalid data", "details": serializer.errors},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        except Exception as e:
+            logger.error(f"处理AI结果时发生错误: {str(e)}")
+            return Response(
+                {"error": "Internal server error"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 class AlertStatsView(APIView):

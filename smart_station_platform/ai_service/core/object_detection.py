@@ -45,24 +45,24 @@ class GenericPredictor:
             print(f"FATAL: 加载YOLOv8模型失败: {e}")
             raise
 
-    def predict(self, frame: np.ndarray, confidence_threshold: float = 0.3) -> List[Dict]:
+    def predict(self, frame: np.ndarray, confidence_threshold: float = 0.25) -> List[Dict]:
         """
         使用YOLOv8对单个图像帧进行目标检测。
 
         参数:
             frame (np.ndarray): OpenCV BGR格式的图像
-            confidence_threshold (float): 基础置信度阈值，YOLOv8默认为0.3
+            confidence_threshold (float): 基础置信度阈值，降低到0.25以提高检测灵敏度
 
         返回:
             检测结果列表，每个结果包含类别名称、置信度和坐标
         """
-        # 设置特定类别的更高置信度要求
+        # 设置特定类别的更高置信度要求（也相应降低）
         high_confidence_classes = {
-            'bicycle': 0.45,
-            'sports ball': 0.45,
-            'carrot': 0.50,
-            'cell phone': 0.45,
-            'book': 0.45
+            'bicycle': 0.35,
+            'sports ball': 0.35,
+            'carrot': 0.40,
+            'cell phone': 0.35,
+            'book': 0.35
         }
 
         # 获取图像尺寸
@@ -98,15 +98,15 @@ class GenericPredictor:
                         box_area = box_width * box_height
                         aspect_ratio = max(box_width / box_height, box_height / box_width)
                         
-                        # 过滤条件：
-                        # 1. 框面积不能过大（超过图像的80%）
-                        # 2. 宽高比不能过于极端（超过5:1）
-                        if box_area / img_area <= 0.8 and aspect_ratio <= 5:
+                        # 放宽过滤条件：
+                        # 1. 框面积不能过大（超过图像的90%）
+                        # 2. 宽高比不能过于极端（超过6:1）
+                        if box_area / img_area <= 0.9 and aspect_ratio <= 6:
                             detections.append({
-                    "class_name": class_name,
+                                "class_name": class_name,
                                 "confidence": confidence,
                                 "coordinates": [x1, y1, x2, y2]
-                })
+                            })
 
             return detections
 

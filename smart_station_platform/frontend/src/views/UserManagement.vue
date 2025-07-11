@@ -1,3 +1,4 @@
+<!-- src/views/UserManagement.vue (使用 Pinia Store) -->
 <template>
   <div class="user-directory-container">
     <div class="header-bar">
@@ -9,78 +10,66 @@
           placeholder="搜索用户名、昵称、邮箱或电话"
           :prefix-icon="Search"
           clearable
-          @input="handleSearch"
-          @clear="fetchUsers"
+          @input="debouncedSearch"
+          @clear="clearSearch"
           style="width: 300px"
         />
       </div>
     </div>
 
     <!-- 用户列表表格 -->
-    <el-table :data="userList" v-loading="loading" style="width: 100%">
+    <!-- v-loading 直接绑定 store.loading -->
+    <el-table :data="store.users" v-loading="store.loading" style="width: 100%" border>
       <el-table-column prop="id" label="ID" width="80" />
       <el-table-column prop="username" label="用户名" width="180" />
       <el-table-column prop="nickname" label="昵称" width="180" />
       <el-table-column prop="email" label="邮箱" width="220" />
       <el-table-column prop="phone_number" label="手机号" min-width="150" />
     </el-table>
+
+    <!-- 错误状态显示 -->
+    <div v-if="store.error" class="error-state">
+      <p>{{ store.error }}</p>
+      <el-button @click="retryFetch" type="primary">重试</el-button>
+    </div>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted } from 'vue';
-import { ElMessage } from 'element-plus';
 import { Search } from '@element-plus/icons-vue';
-import axios from 'axios';
 import _ from 'lodash'; // 引入 lodash 用于防抖
 
-// --- API 客户端配置 (与之前相同) ---
-const apiClient = axios.create({
-  baseURL: 'http://127.0.0.1:8000/api/users/',
-});
+// 1. 引入并使用 userManagement store
+import { useUserManagementStore } from '@/stores/userManagement';
 
-apiClient.interceptors.request.use(config => {
-  const token = localStorage.getItem('access_token');
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
-}, error => {
-  return Promise.reject(error);
-});
+// --- 初始化 Store ---
+const store = useUserManagementStore();
 
-// --- 组件状态定义 ---
-const userList = ref([]);
-const loading = ref(true);
+// --- 组件本地状态 ---
 const searchQuery = ref('');
 
-// --- API 调用函数 ---
-const fetchUsers = async (query = '') => {
-  loading.value = true;
-  try {
-    // 根据是否有查询参数来构建 URL
-    const url = query ? `directory/?search=${query}` : 'directory/';
-    const response = await apiClient.get(url);
-    userList.value = response.data;
-  } catch (error) {
-    console.error('获取用户列表失败:', error);
-    ElMessage.error('获取用户列表失败，请稍后重试。');
-  } finally {
-    loading.value = false;
-  }
-};
-
 // --- 事件处理函数 ---
+
+// 页面加载时获取全部用户
 onMounted(() => {
-  fetchUsers(); // 页面加载时获取全部用户
+  store.fetchUsers();
 });
 
-// 使用 lodash 的 debounce 函数创建一个防抖版的搜索处理函数
-// 这可以防止用户每输入一个字符就发送一次 API 请求，优化性能
-// 延迟 500 毫秒后执行
-const handleSearch = _.debounce(() => {
-  fetchUsers(searchQuery.value);
-}, 500);
+// [核心修改] 2. 创建一个防抖函数，它会调用 store.fetchUsers
+const debouncedSearch = _.debounce(() => {
+  store.fetchUsers(searchQuery.value);
+}, 500); // 延迟 500ms
+
+// 清除搜索框时，重新获取全部用户
+const clearSearch = () => {
+  store.fetchUsers();
+};
+
+// 错误状态下的重试按钮
+const retryFetch = () => {
+  store.fetchUsers(searchQuery.value);
+};
 
 </script>
 
@@ -99,5 +88,11 @@ const handleSearch = _.debounce(() => {
 h1 {
   margin: 0;
   font-size: 24px;
+}
+
+.error-state {
+  text-align: center;
+  margin-top: 40px;
+  color: #f56c6c;
 }
 </style>

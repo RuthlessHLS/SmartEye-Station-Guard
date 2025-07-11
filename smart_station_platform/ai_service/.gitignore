@@ -1,18 +1,27 @@
-# Python
+# AI Service ignore files
+
+# Audio temporary files
+audio_temp/
+*.wav
+*.mp3
+
+# Python cache
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-.Python/
-env/
-venv/
-*.egg-info/
+
+# Environment
 .env
+.env.local
 
-# AI Models
-models/ # 存放AI模型文件，不应上传到Git
+# Logs
+*.log
 
-# IDEs
-.idea/
-.vscode/
-*.iml
+# Model weights (if any large files)
+weights/*.pt
+weights/*.onnx
+
+# Temporary files
+*.tmp
+temp_*
