@@ -11,6 +11,9 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 import os
 from pathlib import Path
+from decouple import config
+
+
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -75,6 +78,8 @@ INSTALLED_APPS = [
     'camera_management',
     'ai_reports',
     'data_analysis',
+
+    'storages',
 ]
 
 # 指定自定义用户模型
@@ -128,6 +133,27 @@ DATABASES = {
     }
 }
 
+# -----------------------------------------------------------
+# 华为云 OBS 存储配置
+# -----------------------------------------------------------
+
+OBS_ACCESS_KEY_ID = config('OBS_ACCESS_KEY_ID')
+OBS_SECRET_ACCESS_KEY = config('OBS_SECRET_ACCESS_KEY')
+OBS_ENDPOINT = config('OBS_ENDPOINT')
+OBS_BUCKET_NAME = config('OBS_BUCKET_NAME')
+
+DEFAULT_FILE_STORAGE = 'smart_station.custom_storages.HuaweiOBSStorage' # <--- 注意这里，如果是monitoring，改成monitoring
+
+MEDIA_URL = f'https://{OBS_BUCKET_NAME}.{OBS_ENDPOINT}/'
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media') # 可以保留，本地调试不实际使用
+
+# 如果静态文件在本地服务，这部分保持不变
+STATIC_URL = '/static/'
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+
+# （可选）如果未来你也要把静态文件也放到 OBS 上，可以这样配置，并创建 HuaweiStaticOBSStorage 类
+# STATIC_URL = f'https://{OBS_BUCKET_NAME}.{OBS_ENDPOINT}/static/'
+# STATICFILES_STORAGE = 'smart_station.custom_storages.HuaweiStaticOBSStorage'
 
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
