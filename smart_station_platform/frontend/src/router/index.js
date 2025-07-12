@@ -11,22 +11,9 @@ import DailyReport from '../views/DailyReport.vue'
 import DataScreen from '../views/DataScreen.vue'
 import UserManagement from '../views/UserManagement.vue'
 import FaceRegistration from '../views/FaceRegistration.vue'
+import UserProfile from '../views/UserProfile.vue'
 
-import { createRouter, createWebHistory } from 'vue-router';
-
-
-// 导入所有需要的视图组件
-import Login from '../views/Login.vue';
-import Register from '../views/Register.vue';
-import Dashboard from '../views/Dashboard.vue';
-import MonitorCenter from '../views/MonitorCenter.vue';
-import AIVideoMonitor from '../views/AIVideoMonitor.vue';
-import AlertManagement from '../views/AlertManagement.vue';
-import DailyReport from '../views/DailyReport.vue';
-import DataScreen from '../views/DataScreen.vue';
-import UserManagement from '../views/UserManagement.vue';
-import UserProfile from '../views/UserProfile.vue';
-
+// --- 路由配置 ---
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
