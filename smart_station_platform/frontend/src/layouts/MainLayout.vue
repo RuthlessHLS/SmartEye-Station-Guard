@@ -8,11 +8,11 @@
       </div>
       <nav class="main-nav">
         <router-link to="/dashboard">首页</router-link>
-        <router-link to="/ai-video-monitor">AI监控</router-link>
-        <router-link to="/alert-management">告警中心</router-link>
-        <router-link to="/daily-report">AI日报</router-link>
+        <router-link to="/ai-monitor">AI监控</router-link>
+        <router-link to="/alerts">告警中心</router-link>
+        <router-link to="/reports">AI日报</router-link>
         <router-link to="/data-screen">数据大屏</router-link>
-        <router-link to="/user-management">用户管理</router-link>
+        <router-link to="/users">用户管理</router-link>
       </nav>
       <div class="user-profile-section">
         <el-dropdown v-if="authStore.isAuthenticated" trigger="click">

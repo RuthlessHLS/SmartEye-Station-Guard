@@ -31,8 +31,18 @@ DEBUG = True
 ALLOWED_HOSTS = ['127.0.0.1', 'localhost']
 
 # CORS配置
-CORS_ALLOW_ALL_ORIGINS = True  # 允许所有来源访问
-CORS_ALLOW_CREDENTIALS = True  # 允许携带cookie
+CORS_ALLOW_ALL_ORIGINS = False  # 禁用允许所有来源
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+
+# 允许携带认证信息
+CORS_ALLOW_CREDENTIALS = True
+
+# 允许的HTTP方法
 CORS_ALLOW_METHODS = [
     'DELETE',
     'GET',
@@ -41,6 +51,8 @@ CORS_ALLOW_METHODS = [
     'POST',
     'PUT',
 ]
+
+# 允许的请求头
 CORS_ALLOW_HEADERS = [
     'accept',
     'accept-encoding',
@@ -52,6 +64,27 @@ CORS_ALLOW_HEADERS = [
     'x-csrftoken',
     'x-requested-with',
 ]
+
+# 暴露的响应头
+CORS_EXPOSE_HEADERS = [
+    'content-type',
+    'x-csrftoken',
+]
+
+# 确保 corsheaders.middleware.CorsMiddleware 位于最前面
+MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',  # 必须放在最前面
+    'django.middleware.security.SecurityMiddleware',
+    'django.contrib.sessions.middleware.SessionMiddleware',
+    'django.middleware.common.CommonMiddleware',
+    'django.middleware.csrf.CsrfViewMiddleware',
+    'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'django.contrib.messages.middleware.MessageMiddleware',
+    'django.middleware.clickjacking.XFrameOptionsMiddleware',
+]
+
+# 添加 CORS 调试设置
+CORS_REPLACE_HTTPS_REFERER = True
 
 # Application definition
 
@@ -75,17 +108,6 @@ INSTALLED_APPS = [
 
 # 指定自定义用户模型
 AUTH_USER_MODEL = 'users.UserProfile'
-
-MIDDLEWARE = [
-    'corsheaders.middleware.CorsMiddleware',
-    "django.middleware.security.SecurityMiddleware",
-    "django.contrib.sessions.middleware.SessionMiddleware",
-    "django.middleware.common.CommonMiddleware",
-    "django.middleware.csrf.CsrfViewMiddleware",
-    "django.contrib.auth.middleware.AuthenticationMiddleware",
-    "django.contrib.messages.middleware.MessageMiddleware",
-    "django.middleware.clickjacking.XFrameOptionsMiddleware",
-]
 
 ROOT_URLCONF = "smart_station.urls"
 

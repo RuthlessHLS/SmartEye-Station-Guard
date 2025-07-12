@@ -91,7 +91,7 @@ const onCaptchaSuccess = async (result) => {
       username: form.username,
       password: form.password,
       captcha_key: result.captcha_key,
-      captcha_position: result.captcha_position.toString(),
+      captcha_position: Math.round(result.captcha_position).toString(), // 确保是整数字符串
     };
 
     console.log('验证码验证成功，准备登录');
@@ -234,3 +234,4 @@ const onCaptchaSuccess = async (result) => {
   text-align: center;
 }
 </style>
+

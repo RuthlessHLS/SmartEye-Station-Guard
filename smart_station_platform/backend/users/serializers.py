@@ -369,3 +369,19 @@ class PasswordChangeSerializer(serializers.Serializer):
             raise serializers.ValidationError("当前密码不正确。")
         return value
 
+#  类 9: PasswordChangeSerializer
+# ==========================================================
+class PasswordChangeSerializer(serializers.Serializer):
+    """
+    修改密码序列化器
+    """
+    current_password = serializers.CharField(style={"input_type": "password"}, required=True)
+    new_password = serializers.CharField(style={"input_type": "password"}, required=True, min_length=8)
+
+    def validate_current_password(self, value):
+        user = self.context['request'].user
+        if not user.check_password(value):
+            raise serializers.ValidationError("当前密码不正确。")
+        return value
+
+

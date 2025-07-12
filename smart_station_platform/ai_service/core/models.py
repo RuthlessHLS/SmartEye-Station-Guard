@@ -39,3 +39,10 @@ class AlertPayload(BaseModel):
     video_clip_url: Optional[str] = None
     status: str = "pending"
     details: Optional[dict[str, Any]] = None
+    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
+    location: dict = Field(default_factory=lambda: {"desc": "车站大厅A区"})
+    confidence: Optional[float] = Field(None, example=0.95)
+    image_snapshot_url: Optional[str] = None
+    video_clip_url: Optional[str] = None
+    status: str = "pending"
+    details: Optional[dict[str, Any]] = None

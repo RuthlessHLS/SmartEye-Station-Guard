@@ -259,16 +259,85 @@ class AIResultReceiveView(APIView):
                     status=status.HTTP_201_CREATED
                 )
             else:
-                logger.error(f"数据验证失败: {serializer.errors}")
+                logger.error(f"AI结果数据验证失败: {serializer.errors}")
                 return Response(
                     {"error": "Invalid data", "details": serializer.errors},
                     status=status.HTTP_400_BAD_REQUEST
                 )
-
         except Exception as e:
-            logger.error(f"处理AI结果时发生错误: {str(e)}")
+            logger.error(f"处理AI分析结果时发生异常: {str(e)}")
             return Response(
-                {"error": "Internal server error"},
+                {"error": "Internal server error", "message": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class WebSocketBroadcastView(APIView):
+    """
+    WebSocket广播接口，用于向前端推送实时数据
+    POST /alerts/websocket/broadcast/
+    """
+    permission_classes = []
+    authentication_classes = []
+
+    def post(self, request, *args, **kwargs):
+        """广播消息到WebSocket客户端"""
+        try:
+            message_data = request.data
+            message_type = message_data.get('type', 'unknown')
+            
+            print(f"📡 收到WebSocket广播请求: {message_type}")
+            
+            # 发送到WebSocket组
+            channel_layer = get_channel_layer()
+            if channel_layer:
+                # 根据消息类型选择合适的处理方式
+                if message_type == 'detection_result':
+                    # 检测结果不保存到数据库，只推送给前端
+                    async_to_sync(channel_layer.group_send)(
+                        "alerts_group",
+                        {
+                            "type": "alert_message",
+                            "message": {
+                                "type": "detection_result",
+                                "data": message_data.get('data', {})
+                            }
+                        }
+                    )
+                elif message_type == 'system_status':
+                    # 系统状态更新
+                    async_to_sync(channel_layer.group_send)(
+                        "alerts_group",
+                        {
+                            "type": "alert_message", 
+                            "message": {
+                                "type": "system_status",
+                                "data": message_data.get('data', {})
+                            }
+                        }
+                    )
+                else:
+                    # 其他类型的消息
+                    async_to_sync(channel_layer.group_send)(
+                        "alerts_group",
+                        {
+                            "type": "alert_message",
+                            "message": message_data
+                        }
+                    )
+                
+                print(f"✅ WebSocket消息已广播: {message_type}")
+                return Response({"status": "success", "message": "Message broadcasted"})
+            else:
+                return Response(
+                    {"status": "error", "message": "WebSocket not available"},
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE
+                )
+                
+        except Exception as e:
+            print(f"WebSocket广播失败: {e}")
+            return Response(
+                {"status": "error", "message": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 

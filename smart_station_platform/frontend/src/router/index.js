@@ -1,7 +1,8 @@
 
-import { createRouter, createWebHistory } from 'vue-router';
-import HomeView from '../views/HomeView.vue'
-import AboutView from '../views/AboutView.vue'
+import { createRouter, createWebHistory } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
+
+// 导入视图组件
 import Login from '../views/Login.vue'
 import Register from '../views/Register.vue'
 import Dashboard from '../views/Dashboard.vue'
@@ -10,94 +11,108 @@ import AlertManagement from '../views/AlertManagement.vue'
 import DailyReport from '../views/DailyReport.vue'
 import DataScreen from '../views/DataScreen.vue'
 import UserManagement from '../views/UserManagement.vue'
-import { useAuthStore } from '@/stores/auth'
+import UserProfile from '../views/UserProfile.vue'
+import FaceRegistration from '../views/FaceRegistration.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
+    // --- 根路径重定向 ---
     {
       path: '/',
       redirect: '/dashboard'
     },
-    {
-      path: '/about',
-      name: 'about',
-      component: AboutView,
-      meta: { layout: 'default', requiresAuth: true }
-    },
+
+    // --- 认证相关路由 (使用 AuthLayout，无导航栏) ---
     {
       path: '/login',
-      name: 'login',
+      name: 'Login',
       component: Login,
-      meta: { layout: 'auth' }
+      meta: {
+        requiresAuth: false,
+        layout: 'auth' // 指定使用 auth 布局
+      }
     },
     {
       path: '/register',
-      name: 'register',
+      name: 'Register',
       component: Register,
-      meta: { layout: 'auth' }
+      meta: {
+        requiresAuth: false,
+        layout: 'auth' // 指定使用 auth 布局
+      }
     },
+
+    // --- 主应用路由 (使用默认的 MainLayout，有白色导航栏) ---
     {
       path: '/dashboard',
-      name: 'dashboard',
+      name: 'Dashboard',
       component: Dashboard,
-      meta: { layout: 'default', requiresAuth: true }
+      meta: { requiresAuth: true } // layout 未指定，将使用 'default' (MainLayout)
     },
     {
-      path: '/ai-video-monitor',
-      name: 'ai-video-monitor',
+      path: '/ai-monitor',
+      name: 'AIVideoMonitor',
       component: AIVideoMonitor,
-      meta: { layout: 'default', requiresAuth: true }
+      meta: { requiresAuth: true }
     },
     {
-      path: '/alert-management',
-      name: 'alert-management',
+      path: '/face-registration',
+      name: 'FaceRegistration',
+      component: FaceRegistration,
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/alerts',
+      name: 'AlertManagement',
       component: AlertManagement,
-      meta: { layout: 'default', requiresAuth: true }
+      meta: { requiresAuth: true }
     },
     {
-      path: '/daily-report',
-      name: 'daily-report',
+      path: '/reports',
+      name: 'DailyReport',
       component: DailyReport,
-      meta: { layout: 'default', requiresAuth: true }
+      meta: { requiresAuth: true }
     },
     {
       path: '/data-screen',
-      name: 'data-screen',
+      name: 'DataScreen',
       component: DataScreen,
-      meta: { layout: 'default', requiresAuth: true }
+      meta: { requiresAuth: true }
     },
     {
-      path: '/user-management',
-      name: 'user-management',
+      path: '/profile',
+      name: 'UserProfile',
+      component: UserProfile,
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/users',
+      name: 'UserManagement',
       component: UserManagement,
-      meta: { layout: 'default', requiresAuth: true }
+      meta: { requiresAuth: true }
+    },
+
+    // --- 捕获所有未匹配的路由 ---
+    {
+      path: '/:catchAll(.*)',
+      redirect: '/dashboard'
     }
   ]
-})
+});
 
-// 全局前置守卫
+// 导航守卫
 router.beforeEach((to, from, next) => {
-  const authStore = useAuthStore()
-  const requiresAuth = to.matched.some(record => record.meta.requiresAuth)
+  const authStore = useAuthStore();
+  const requiresAuth = to.meta.requiresAuth;
 
-  // 如果路由需要认证
-  if (requiresAuth) {
-    // 检查是否已登录
-    if (!authStore.isAuthenticated) {
-      // 未登录则重定向到登录页
-      next({
-        path: '/login',
-        query: { redirect: to.fullPath } // 保存原本要去的路径
-      })
-    } else {
-      // 已登录则允许访问
-      next()
-    }
+  if (requiresAuth && !authStore.isAuthenticated) {
+    next('/login');
+  } else if (!requiresAuth && authStore.isAuthenticated && (to.name === 'Login' || to.name === 'Register')) {
+    next({ name: 'Dashboard' });
   } else {
-    // 不需要认证的路由直接放行
-    next()
+    next();
   }
-})
+});
 
-export default router
+export default router;
