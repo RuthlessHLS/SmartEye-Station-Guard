@@ -387,6 +387,16 @@ const resizeCanvas = () => {
     if (props.video && props.video.getBoundingClientRect) {
       containerRect = props.video.getBoundingClientRect()
       console.log('📐 使用video元素尺寸:', containerRect)
+      
+      // 验证Canvas和video的位置是否对齐
+      const canvasRect = overlayCanvas.value.getBoundingClientRect()
+      console.log('📐 Canvas当前位置:', canvasRect)
+      console.log('📐 位置偏移检查:', {
+        xOffset: canvasRect.left - containerRect.left,
+        yOffset: canvasRect.top - containerRect.top,
+        widthDiff: canvasRect.width - containerRect.width,
+        heightDiff: canvasRect.height - containerRect.height
+      })
     }
     
     // 如果video元素无效，使用父容器尺寸
