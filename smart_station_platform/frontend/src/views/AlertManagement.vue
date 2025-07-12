@@ -139,6 +139,7 @@
 import { ref, reactive, onMounted, onUnmounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import api from '../api'; // 导入API请求服务
+import { useRouter } from 'vue-router'; // 导入路由实例
 
 const alerts = ref([]);
 const loading = ref(false);
@@ -174,6 +175,8 @@ const alertStatusMap = {
   in_progress: '处理中',
   resolved: '已解决',
 };
+
+const router = useRouter(); // 获取路由实例
 
 onMounted(() => {
   fetchAlerts();
@@ -224,6 +227,14 @@ const connectWebSocket = () => {
 const fetchAlerts = async () => {
   loading.value = true;
   try {
+    // 检查认证状态
+    const token = localStorage.getItem('access_token');
+    if (!token) {
+      ElMessage.warning('请先登录后再查看告警信息');
+      await router.push('/login');
+      return;
+    }
+    
     const params = {
       page: pagination.currentPage,
       page_size: pagination.pageSize,
@@ -233,20 +244,62 @@ const fetchAlerts = async () => {
       end_time: filterForm.dateRange && filterForm.dateRange[1] ? filterForm.dateRange[1] : '',
     };
     // 修正API路径，添加/api前缀
+    console.log('发送告警请求，参数:', params); // 调试日志
     const response = await api.alerts.getList(params);
-    alerts.value = response.results.map(alert => {
+    console.log('API响应数据:', response); // 调试日志
+    
+    // 处理不同的响应数据格式
+    let alertsData = [];
+    let totalCount = 0;
+    
+    if (response && response.results) {
+      // DRF标准分页响应格式
+      alertsData = response.results;
+      totalCount = response.count || 0;
+    } else if (Array.isArray(response)) {
+      // 直接是数组
+      alertsData = response;
+      totalCount = response.length;
+    } else {
+      console.warn('未知的响应格式:', response);
+      alertsData = [];
+      totalCount = 0;
+    }
+    
+    console.log('处理后的数据:', { alertsCount: alertsData.length, totalCount }); // 调试日志
+    
+    alerts.value = alertsData.map(alert => {
       return {
-      ...alert,
-        alert_time: alert.timestamp.replace('T', ' ').slice(0, 19), // 保证与数据库一致
-      event_type_display: alertTypeMap[alert.event_type] || alert.event_type,
-      status_display: alertStatusMap[alert.status],
-      location_desc: JSON.stringify(alert.location), // 简化位置描述
+        ...alert,
+        alert_time: alert.timestamp ? alert.timestamp.replace('T', ' ').slice(0, 19) : '未知时间',
+        event_type_display: alertTypeMap[alert.event_type] || alert.event_type,
+        status_display: alertStatusMap[alert.status] || alert.status,
+        location_desc: alert.location ? JSON.stringify(alert.location) : '未知位置',
       };
     });
-    pagination.total = response.count;
+    pagination.total = totalCount;
+    
+    console.log('最终设置的告警数据:', alerts.value.length, '条'); // 调试日志
   } catch (error) {
-    ElMessage.error('获取告警列表失败！');
     console.error('Fetch alerts error:', error);
+    
+    // 根据错误类型给出不同的提示
+    if (error.response?.status === 401) {
+      ElMessage.error('认证失败，请重新登录');
+      localStorage.removeItem('access_token');
+      localStorage.removeItem('refresh_token');
+      await router.push('/login');
+    } else if (error.response?.status === 403) {
+      ElMessage.error('没有权限查看告警信息');
+    } else if (error.response?.status === 500) {
+      ElMessage.error('服务器错误，请稍后重试');
+    } else {
+      ElMessage.error('获取告警列表失败：' + (error.message || '未知错误'));
+    }
+    
+    // 设置空数据避免界面错误
+    alerts.value = [];
+    pagination.total = 0;
   } finally {
     loading.value = false;
   }

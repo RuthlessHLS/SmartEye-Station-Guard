@@ -2,7 +2,7 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import router from '@/router';
-import { backendService as apiClient } from '@/api';
+import api from '@/api';
 
 // localStorage key 定义
 const ACCESS_TOKEN_KEY = 'access_token';
@@ -49,7 +49,7 @@ export const useAuthStore = defineStore('auth', () => {
   function setAuthData(accessToken, newRefreshToken, userData) {
     token.value = accessToken;
     localStorage.setItem(ACCESS_TOKEN_KEY, accessToken);
-    apiClient.defaults.headers.common['Authorization'] = `Bearer ${accessToken}`;
+    api.backendService.defaults.headers.common['Authorization'] = `Bearer ${accessToken}`;
 
     if (newRefreshToken) {
       refreshToken.value = newRefreshToken;
@@ -68,7 +68,7 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.removeItem(ACCESS_TOKEN_KEY);
     localStorage.removeItem(REFRESH_TOKEN_KEY);
     localStorage.removeItem(USER_KEY);
-    delete apiClient.defaults.headers.common['Authorization'];
+    delete api.backendService.defaults.headers.common['Authorization'];
   }
 
   // Actions
@@ -76,33 +76,75 @@ export const useAuthStore = defineStore('auth', () => {
     try {
       clearAuth();
       console.log('发送登录请求:', { ...credentials, password: '***' });
-      const response = await apiClient.post('/api/users/login/', credentials);
       
-      console.log('登录响应数据:', response.data);
+      // 发送登录请求
+      const response = await api.auth.login(credentials);
       
-      // 检查响应数据
-      if (!response.data) {
+      // 验证响应数据
+      if (!response || !response.data || typeof response.data !== 'object') {
         throw new Error('无效的登录响应数据');
       }
 
-      // 检查响应数据结构
-      const { token, refresh_token, user: userData } = response.data;
-      console.log('解析的数据:', { token, refresh_token, userData });
+      const { token, refresh_token, user } = response.data;
+      
+      // 验证必需的字段
+      if (!token || !refresh_token || !user) {
+        console.error('登录响应数据不完整:', response);
+        throw new Error('登录响应数据不完整');
+      }
 
-      if (!token) {
-        throw new Error('未收到访问令牌');
+      // 验证用户数据
+      if (!user.id || !user.username) {
+        console.error('用户数据不完整:', user);
+        throw new Error('用户数据不完整');
       }
 
       // 设置认证数据和用户信息
-      setAuthData(token, refresh_token, userData);
+      setAuthData(token, refresh_token, user);
+      
+      // 登录成功后跳转
       router.push('/dashboard');
     } catch (error) {
       console.error('登录失败:', error);
+      let errorMessage = '登录失败，请重试';
+      
       if (error.response) {
-        console.error('错误响应:', error.response.data);
-        console.error('状态码:', error.response.status);
+        const { status, data } = error.response;
+        console.log('错误响应:', data);
+        
+        // 处理验证码相关错误
+        if (data.captcha) {
+          if (Array.isArray(data.captcha)) {
+            errorMessage = data.captcha[0];
+          } else {
+            errorMessage = data.captcha;
+          }
+          throw new Error(errorMessage);
+        }
+        
+        // 处理其他错误
+        if (status === 401) {
+          errorMessage = '用户名或密码错误';
+        } else if (status === 400) {
+          if (data.detail) {
+            errorMessage = data.detail;
+          } else if (data.non_field_errors) {
+            errorMessage = data.non_field_errors[0];
+          } else if (data.error) {
+            errorMessage = data.error;
+          } else {
+            // 尝试获取第一个错误信息
+            const firstError = Object.values(data)[0];
+            errorMessage = Array.isArray(firstError) ? firstError[0] : '请求参数错误';
+          }
+        } else if (status === 500) {
+          errorMessage = '服务器错误，请稍后重试';
+        }
+      } else if (error.message) {
+        errorMessage = error.message;
       }
-      throw error;
+      
+      throw new Error(errorMessage);
     }
   }
 
@@ -114,30 +156,36 @@ export const useAuthStore = defineStore('auth', () => {
   async function fetchUser() {
     if (!token.value) return;
     try {
-      const response = await apiClient.get('/api/users/profile/');
+      const response = await api.auth.getProfile();
       setAuthData(token.value, refreshToken.value, response.data);
     } catch (error) {
       console.error('获取用户信息失败:', error);
-      logout();
+      // 静默清除认证数据，不自动跳转到登录页
+      clearAuth();
     }
   }
 
   async function updateUserProfile(profileData) {
-    const response = await apiClient.patch('/api/users/profile/', profileData);
+    const response = await api.auth.updateProfile(profileData);
     setAuthData(token.value, refreshToken.value, response.data);
   }
 
   async function changePassword(passwordData) {
-    await apiClient.post('/api/users/change-password/', passwordData);
+    await api.auth.changePassword(passwordData);
   }
 
   // 初始化 Authorization header
   if (token.value) {
-    apiClient.defaults.headers.common['Authorization'] = `Bearer ${token.value}`;
-    // 如果有 token，尝试获取用户信息
-    fetchUser().catch(console.error);
+    api.backendService.defaults.headers.common['Authorization'] = `Bearer ${token.value}`;
+    // 延迟验证token，避免应用启动时的401错误
+    setTimeout(() => {
+      if (token.value && !user.value) {
+        fetchUser().catch(console.error);
+      }
+    }, 1000);
   }
 
+  // 返回 store 对象
   return {
     token,
     user,

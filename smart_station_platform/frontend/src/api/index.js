@@ -5,12 +5,14 @@ import router from '../router';
 const backendService = axios.create({
   baseURL: import.meta.env.VITE_APP_API_BASE_URL || 'http://127.0.0.1:8000',
   timeout: 10000,
+  withCredentials: true, // 允许跨域请求携带凭证
 });
 
 // AI服务实例
 const aiService = axios.create({
   baseURL: import.meta.env.VITE_APP_AI_SERVICE_URL || 'http://127.0.0.1:8001',
-  timeout: 30000,  // 增加超时时间到30秒
+  timeout: 60000,  // 增加超时时间到60秒
+  withCredentials: false, // AI服务不需要携带凭证
 });
 
 // 请求重试配置
@@ -57,42 +59,108 @@ aiService.interceptors.request.use(
 // 响应拦截器 - 后端服务
 backendService.interceptors.response.use(
   response => {
-    if (response.config.url.includes('/login/') || response.config.url.includes('/token/refresh/')) {
+    // 对于登录、刷新令牌和验证码请求，直接返回响应
+    if (response.config.url.includes('/login/') || 
+        response.config.url.includes('/token/refresh/') ||
+        response.config.url.includes('/captcha/generate/')
+    ) {
       return response;
     }
+    // 对于其他API请求，返回response.data
     return response.data;
   },
   async error => {
     const originalRequest = error.config;
     
     if (!error.response) {
-      console.error('Network error:', error.message);
+      console.error('网络错误:', error.message);
+      error.message = '网络连接错误，请检查网络后重试';
       return Promise.reject(error);
     }
 
+    // 处理401错误（未授权）
     if (error.response.status === 401 && !originalRequest._retry) {
       originalRequest._retry = true;
       try {
         const refreshToken = localStorage.getItem('refresh_token');
         if (refreshToken) {
-          const res = await backendService.post('/api/users/token/refresh/', { refresh: refreshToken });
-          if (res.data && res.data.access) {
-            localStorage.setItem('access_token', res.data.access);
-            originalRequest.headers['Authorization'] = 'Bearer ' + res.data.access;
+          // 临时移除拦截器，避免无限递归
+          const response = await axios.post(
+            (import.meta.env.VITE_APP_API_BASE_URL || 'http://127.0.0.1:8000') + '/api/users/token/refresh/', 
+            { refresh: refreshToken },
+            {
+              headers: { 'Content-Type': 'application/json' },
+              withCredentials: true
+            }
+          );
+          
+          // 检查响应数据结构
+          if (response && response.data && response.data.access) {
+            // 更新本地存储的token
+            localStorage.setItem('access_token', response.data.access);
+            // 更新原始请求的Authorization头
+            originalRequest.headers['Authorization'] = 'Bearer ' + response.data.access;
+            // 重试原始请求
             return backendService(originalRequest);
           }
         }
-      } catch (refreshError) {
-        console.error('Token refresh failed:', refreshError);
+        // 如果刷新失败，清除令牌并重定向到登录页
         localStorage.removeItem('access_token');
         localStorage.removeItem('refresh_token');
+        localStorage.removeItem('user');
+        router.push('/login');
+      } catch (refreshError) {
+        console.error('令牌刷新失败:', refreshError);
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('refresh_token');
+        localStorage.removeItem('user');
         router.push('/login');
         return Promise.reject(refreshError);
       }
     }
 
+    // 处理验证码相关错误
+    if (originalRequest.url.includes('/captcha/') || originalRequest.url.includes('/login/')) {
+      console.error('验证码/登录错误:', error.response.data);
+      if (error.response.data?.captcha) {
+        error.message = Array.isArray(error.response.data.captcha) 
+          ? error.response.data.captcha[0] 
+          : error.response.data.captcha;
+      } else if (error.response.status === 400) {
+        if (error.response.data?.non_field_errors) {
+          error.message = error.response.data.non_field_errors[0];
+        } else if (error.response.data?.detail) {
+          error.message = error.response.data.detail;
+        } else {
+          error.message = '验证码验证失败，请重试';
+        }
+      } else if (error.response.status >= 500) {
+        error.message = '服务暂时不可用，请稍后重试';
+      }
+      return Promise.reject(error);
+    }
+
+    // 处理其他错误
     if (error.response.status >= 500) {
-      console.error('Server error:', error.response.data);
+      console.error('服务器错误:', error.response.data);
+      error.message = error.response.data?.error || '服务器内部错误，请稍后重试';
+    } else if (error.response.status === 400) {
+      console.error('请求错误:', error.response.data);
+      const errorData = error.response.data;
+      if (typeof errorData === 'string') {
+        error.message = errorData;
+      } else if (errorData.detail) {
+        error.message = errorData.detail;
+      } else if (errorData.non_field_errors) {
+        error.message = errorData.non_field_errors[0];
+      } else {
+        const firstError = Object.values(errorData)[0];
+        error.message = Array.isArray(firstError) ? firstError[0] : '请求参数错误';
+      }
+    } else if (error.response.status === 403) {
+      error.message = '没有权限执行此操作';
+    } else if (error.response.status === 404) {
+      error.message = '请求的资源不存在';
     }
     return Promise.reject(error);
   }
@@ -134,6 +202,9 @@ const requestWithRetry = async (service, config) => {
 
 // 默认导出API服务对象
 const api = {
+  backendService,  // 导出backendService实例
+  aiService,       // 导出aiService实例
+  
   // 用户认证相关接口
   auth: {
     login: (data) => backendService.post('/api/users/login/', data),
@@ -143,6 +214,7 @@ const api = {
     updateProfile: (data) => backendService.patch('/api/users/profile/', data),
     changePassword: (data) => backendService.post('/api/users/change-password/', data),
     getCaptcha: () => backendService.get('/api/users/captcha/generate/'),
+    getUsers: (url) => backendService.get(url),
   },
   // 告警相关接口
   alerts: {
@@ -150,21 +222,61 @@ const api = {
     getDetail: (id) => backendService.get(`/api/alerts/${id}/`),
     create: (data) => backendService.post('/api/alerts/', data),
     update: (id, data) => backendService.patch(`/api/alerts/${id}/`, data),
-    delete: (id) => backendService.delete(`/api/alerts/${id}/`),
     handle: (id, data) => backendService.patch(`/api/alerts/${id}/handle/`, data),
   },
   // AI服务相关接口
   ai: {
-    startStream: (data) => aiService.post('/stream/start/', data),
-    stopStream: () => aiService.post('/stream/stop/'),  // 添加末尾斜杠
-    testStreamConnection: (data) => aiService.post('/stream/test/', {  // 添加末尾斜杠
-      url: data.url,
-      type: data.type
-    }),
-    analyzeFrame: (data) => aiService.post('/frame/analyze/', data),
+    startStream: (config) => {
+      return requestWithRetry(aiService, {
+        url: '/stream/start/',
+        method: 'post',
+        data: {
+          camera_id: config.camera_id,
+          stream_url: config.stream_url,
+          enable_face_recognition: config.enable_face_recognition,
+          enable_object_detection: config.enable_object_detection,
+          enable_behavior_detection: config.enable_behavior_detection,
+          enable_fire_detection: config.enable_fire_detection
+        }
+      });
+    },
+    stopStream: (camera_id) => {
+      return requestWithRetry(aiService, {
+        url: `/stream/stop/${camera_id}`,
+        method: 'post'
+      });
+    },
+    testStreamConnection: (config) => {
+      return requestWithRetry(aiService, {
+        url: '/stream/test/',
+        method: 'post',
+        data: {
+          url: config.url,
+          type: config.type
+        }
+      });
+    },
+    analyzeFrame: (data) => {
+      return requestWithRetry(aiService, {
+        url: '/frame/analyze/',
+        method: 'post',
+        data: data,
+        timeout: 20000  // 减少到20秒超时，避免阻塞
+      }, {
+        retries: 1,  // 只重试1次
+        retryDelay: 1000  // 重试延迟1秒
+      });
+    },
+    getSystemStatus: () => aiService.get('/system/status/'),
     getStreamStatus: () => aiService.get('/system/status/'),
   }
 };
 
-export { backendService, aiService, requestWithRetry };
+// 创建useApi钩子函数
+export const useApi = () => {
+  return api;
+};
+
+// 导出服务实例和API对象
+export { backendService, aiService };
 export default api;

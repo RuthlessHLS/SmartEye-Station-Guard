@@ -75,53 +75,53 @@ def calculate_bbox_overlap(bbox1, bbox2):
     y1 = max(bbox1[1], bbox2[1])
     x2 = min(bbox1[2], bbox2[2])
     y2 = min(bbox1[3], bbox2[3])
-
+    
     if x2 <= x1 or y2 <= y1:
         return 0
-
+    
     intersection = (x2 - x1) * (y2 - y1)
     area1 = (bbox1[2] - bbox1[0]) * (bbox1[3] - bbox1[1])
     area2 = (bbox2[2] - bbox2[0]) * (bbox2[3] - bbox2[1])
     union = area1 + area2 - intersection
-
+    
     return intersection / union if union > 0 else 0
 
 
 def stabilize_detections(camera_id: str, new_detections: List[Dict]) -> List[Dict]:
     """高性能自适应检测结果稳定化 - 人脸持续跟踪优化"""
     current_time = time.time()
-
+    
     # 快速模式：对于少量检测，跳过复杂处理
     if len(new_detections) <= 1:
         for i, detection in enumerate(new_detections):
             detection["tracking_id"] = f"{detection['type']}_{i}"
             detection["is_stable"] = True
         return new_detections
-
+    
     # 初始化该摄像头的缓存
     if camera_id not in detection_cache:
         detection_cache[camera_id] = {"objects": {}, "face_history": {}}
-
+    
     cache = detection_cache[camera_id]["objects"]
     face_history = detection_cache[camera_id]["face_history"]
     results = []
     matched_ids = set()
-
+    
     # 分离人脸和其他检测，使用不同策略
     face_detections = [d for d in new_detections if d["type"] == "face"]
     other_detections = [d for d in new_detections if d["type"] != "face"]
-
+    
     # 🎯 人脸专用持续跟踪算法
     face_results = _advanced_face_tracking(camera_id, face_detections, cache, face_history, current_time, matched_ids)
     results.extend(face_results)
-
+    
     # 🎯 其他检测使用标准算法
     other_results = _standard_object_tracking(other_detections, cache, current_time, matched_ids, camera_id)
     results.extend(other_results)
-
+    
     # 清理过期缓存
     _cleanup_expired_cache(cache, face_history, current_time)
-
+    
     return results
 
 
@@ -129,10 +129,10 @@ def _advanced_face_tracking(camera_id: str, face_detections: List[Dict], cache: 
                             current_time: float, matched_ids: set) -> List[Dict]:
     """人脸专用高级跟踪算法"""
     results = []
-
+    
     # 🔧 获取动态配置参数（默认启用抗抖动）
     config = getattr(configure_stabilization, 'config', {}).get(camera_id, {})
-
+    
     # 人脸跟踪参数（超强抗闪烁配置）
     FACE_MATCH_THRESHOLD = config.get('face_match_threshold', 150)  # 放宽匹配，避免跟丢
     FACE_SMOOTH_FACTOR = config.get('face_smooth_factor', 0.85)  # 降低平滑系数，提高响应速度
@@ -142,64 +142,64 @@ def _advanced_face_tracking(camera_id: str, face_detections: List[Dict], cache: 
     FACE_MIN_CONFIDENCE = 0.25  # 降低最小置信度，提高检测率
     FACE_STABLE_THRESHOLD = 1  # 1次检测即稳定，减少闪烁
     CONFIDENCE_SMOOTH_FACTOR = 0.7  # 提高新置信度权重
-
+    
     # 🎯 人脸身份稳定化参数
     IDENTITY_HISTORY_SIZE = 8  # 减少历史记录大小，提高响应速度
     IDENTITY_CHANGE_THRESHOLD = 0.6  # 降低身份切换门槛
     IDENTITY_CONFIDENCE_DIFF = 0.12  # 降低身份切换所需置信度差
     MIN_STABLE_FRAMES = 2  # 减少所需稳定帧数
-
+    
     # 预测丢失人脸的位置
     _predict_missing_faces(cache, face_history, current_time)
-
+    
     for face_det in face_detections:
         face_bbox = face_det["bbox"]
         best_match_id = None
         best_score = float('inf')
-
+        
         # 寻找最佳匹配（包括预测位置）
         for obj_id, obj_data in cache.items():
             if obj_data["type"] != "face" or obj_id in matched_ids:
                 continue
-
+                
             # 计算综合匹配分数
             score = _calculate_face_match_score(face_bbox, obj_data, current_time)
-
+            
             if score < best_score and score < FACE_MATCH_THRESHOLD:
                 best_score = score
                 best_match_id = obj_id
-
+        
         if best_match_id:
             # 更新现有人脸跟踪
             old_obj = cache[best_match_id]
-
+            
             # 🛡️ 智能抖动检测和自适应处理
             history = face_history.get(best_match_id, {})
             is_jittery = _detect_jitter(face_bbox, old_obj["bbox"], history, JITTER_THRESHOLD)
-
+            
             # 自动抗抖动：检测到抖动时自动增强平滑
             if is_jittery:
                 effective_smooth_factor = min(0.97, FACE_SMOOTH_FACTOR + 0.05)  # 自动增强到97%
                 print(f"🛡️ 检测到人脸抖动，自动启用强化平滑 ID={best_match_id}")
             else:
                 effective_smooth_factor = FACE_SMOOTH_FACTOR
-
+            
             # 高级平滑算法：考虑运动趋势和抖动抑制
             smoothed_bbox = _advanced_face_smoothing(face_bbox, old_obj, history, effective_smooth_factor)
-
+            
             # 📏 尺寸稳定化：限制框尺寸变化
             smoothed_bbox = _stabilize_bbox_size(smoothed_bbox, old_obj["bbox"], max_change_ratio=SIZE_CHANGE_RATIO)
-
+            
             # 🎯 置信度平滑处理，避免闪烁
             old_confidence = old_obj.get("confidence", face_det["confidence"])
             smoothed_confidence = old_confidence * (1 - CONFIDENCE_SMOOTH_FACTOR) + face_det[
                 "confidence"] * CONFIDENCE_SMOOTH_FACTOR
-
+            
             # 🛡️ 防闪烁保护：确保置信度不会突然掉落太多
             if smoothed_confidence < old_confidence * 0.7:  # 如果置信度掉落超过30%
                 smoothed_confidence = old_confidence * 0.8  # 限制掉落幅度
                 print(f"🛡️ 防止人脸置信度突降 ID={best_match_id}, 保护后={smoothed_confidence:.2f}")
-
+            
             # 更新缓存和历史
             cache[best_match_id].update({
                 "bbox": smoothed_bbox,
@@ -211,46 +211,46 @@ def _advanced_face_tracking(camera_id: str, face_detections: List[Dict], cache: 
                 "is_jittery": is_jittery,
                 "flicker_protection": True
             })
-
+            
             # 记录运动历史
             if best_match_id not in face_history:
                 face_history[best_match_id] = {"positions": [], "timestamps": []}
-
+            
             history = face_history[best_match_id]
             history["positions"].append(smoothed_bbox)
             history["timestamps"].append(current_time)
-
+            
             # 只保留最近5个位置
             if len(history["positions"]) > 5:
                 history["positions"] = history["positions"][-5:]
                 history["timestamps"] = history["timestamps"][-5:]
-
+            
             # 🎯 人脸身份稳定化处理
             if "identity" in face_det:
                 # 为身份信息添加置信度（如果没有的话）
                 new_identity = face_det["identity"].copy()
                 if "confidence" not in new_identity:
                     new_identity["confidence"] = face_det.get("confidence", 0.5)
-
+                
                 # 应用身份稳定化
                 stable_identity = _stabilize_face_identity(
-                    best_match_id,
-                    new_identity,
+                    best_match_id, 
+                    new_identity, 
                     face_history,
                     IDENTITY_HISTORY_SIZE,
                     IDENTITY_CHANGE_THRESHOLD,
                     IDENTITY_CONFIDENCE_DIFF,
                     MIN_STABLE_FRAMES
                 )
-
+                
                 # 更新检测结果的身份信息
                 face_det["identity"] = stable_identity
-
+                
                 # 更新缓存中的身份信息
                 cache[best_match_id]["identity"] = stable_identity
-
+            
             matched_ids.add(best_match_id)
-
+            
             # 生成结果
             result_det = face_det.copy()
             result_det["bbox"] = smoothed_bbox
@@ -258,10 +258,10 @@ def _advanced_face_tracking(camera_id: str, face_detections: List[Dict], cache: 
             result_det["is_stable"] = cache[best_match_id]["stable_count"] >= FACE_STABLE_THRESHOLD
             result_det["consecutive_detections"] = cache[best_match_id]["consecutive_detections"]
             results.append(result_det)
-
+            
             print(
                 f"👤 人脸匹配: ID={best_match_id}, 分数={best_score:.1f}, 连续={cache[best_match_id]['consecutive_detections']}, 身份={face_det.get('identity', {}).get('name', 'unknown')}")
-
+            
         else:
             # 新人脸
             new_id = f"face_{int(current_time * 1000) % 10000}"
@@ -275,27 +275,27 @@ def _advanced_face_tracking(camera_id: str, face_detections: List[Dict], cache: 
                 "first_seen": current_time,
                 "last_detection": current_time
             }
-
+            
             # 初始化历史
             face_history[new_id] = {"positions": [face_bbox], "timestamps": [current_time]}
-
+            
             result_det = face_det.copy()
             result_det["tracking_id"] = new_id
             result_det["is_stable"] = False
             result_det["consecutive_detections"] = 1
             results.append(result_det)
             matched_ids.add(new_id)
-
+            
             print(f"🆕 新人脸: ID={new_id}")
-
+    
     # 保持丢失的稳定人脸
     for obj_id, obj_data in list(cache.items()):
-        if (obj_data["type"] == "face" and
-                obj_id not in matched_ids and
-                obj_data.get("consecutive_detections", 0) >= 3):  # 至少连续检测过3次
-
+        if (obj_data["type"] == "face" and 
+            obj_id not in matched_ids and
+            obj_data.get("consecutive_detections", 0) >= 3):  # 至少连续检测过3次
+            
             time_since_last_seen = current_time - obj_data["last_seen"]
-
+            
             if time_since_last_seen < FACE_KEEP_TIME:
                 # 使用预测位置保持人脸框
                 predicted_bbox = _predict_face_position(obj_id, face_history, current_time)
@@ -314,30 +314,30 @@ def _advanced_face_tracking(camera_id: str, face_detections: List[Dict], cache: 
                     }
                     results.append(kept_det)
                     print(f"🔮 预测保持人脸: ID={obj_id}, 丢失时间={time_since_last_seen:.1f}s")
-
+    
     return results
 
 
 def _calculate_face_match_score(new_bbox: List[int], obj_data: Dict, current_time: float) -> float:
     """计算人脸匹配综合分数"""
     old_bbox = obj_data["bbox"]
-
+    
     # 中心点距离
     old_center = ((old_bbox[0] + old_bbox[2]) / 2, (old_bbox[1] + old_bbox[3]) / 2)
     new_center = ((new_bbox[0] + new_bbox[2]) / 2, (new_bbox[1] + new_bbox[3]) / 2)
     center_distance = ((old_center[0] - new_center[0]) ** 2 + (old_center[1] - new_center[1]) ** 2) ** 0.5
-
+    
     # 尺寸相似性
     old_w, old_h = old_bbox[2] - old_bbox[0], old_bbox[3] - old_bbox[1]
     new_w, new_h = new_bbox[2] - new_bbox[0], new_bbox[3] - new_bbox[1]
     size_similarity = abs(old_w - new_w) + abs(old_h - new_h)
-
+    
     # 时间权重（最近检测到的优先）
     time_weight = min(2.0, current_time - obj_data["last_seen"])
-
+    
     # 连续性权重（连续检测次数越多，匹配优先级越高）
     consecutive_bonus = max(0, 5 - obj_data.get("consecutive_detections", 0))
-
+    
     # 综合分数
     score = center_distance + size_similarity * 0.5 + time_weight * 10 + consecutive_bonus
     return score
@@ -346,84 +346,84 @@ def _calculate_face_match_score(new_bbox: List[int], obj_data: Dict, current_tim
 def _advanced_face_smoothing(new_bbox: List[int], old_obj: Dict, history: Dict, smooth_factor: float) -> List[int]:
     """增强的人脸框平滑算法 - 抗抖动优化"""
     old_bbox = old_obj["bbox"]
-
+    
     # 🎯 多级平滑策略
     # 1. 基础位置平滑
     smoothed_bbox = [
-        int(old_bbox[i] * (1 - smooth_factor) + new_bbox[i] * smooth_factor)
+        int(old_bbox[i] * (1 - smooth_factor) + new_bbox[i] * smooth_factor) 
         for i in range(4)
     ]
-
+    
     # 2. 智能运动预测和平滑
     if history and "positions" in history and len(history["positions"]) >= 2:
         positions = history["positions"]
         timestamps = history.get("timestamps", [])
-
+        
         if len(positions) >= 3 and len(timestamps) >= 3:
             # 使用更多历史数据计算稳定的运动趋势
             recent_positions = positions[-3:]
             recent_timestamps = timestamps[-3:]
-
+            
             # 计算平均运动向量
             total_dx, total_dy = 0, 0
             valid_moves = 0
-
+            
             for i in range(1, len(recent_positions)):
                 dt = recent_timestamps[i] - recent_timestamps[i - 1]
                 if dt > 0:
                     old_center = ((recent_positions[i - 1][0] + recent_positions[i - 1][2]) / 2,
                                   (recent_positions[i - 1][1] + recent_positions[i - 1][3]) / 2)
                     new_center = ((recent_positions[i][0] + recent_positions[i][2]) / 2,
-                                  (recent_positions[i][1] + recent_positions[i][3]) / 2)
-
+                                 (recent_positions[i][1] + recent_positions[i][3]) / 2)
+                    
                     dx = (new_center[0] - old_center[0]) / dt
                     dy = (new_center[1] - old_center[1]) / dt
-
+                    
                     # 过滤异常运动（速度过快视为噪声）
                     speed = (dx ** 2 + dy ** 2) ** 0.5
                     if speed < 200:  # 像素/秒的速度阈值
                         total_dx += dx
                         total_dy += dy
                         valid_moves += 1
-
+            
             if valid_moves > 0:
                 # 计算预测位移
                 avg_dx = total_dx / valid_moves
                 avg_dy = total_dy / valid_moves
-
+                
                 # 保守的运动预测因子
                 motion_factor = 0.15 if abs(avg_dx) < 50 and abs(avg_dy) < 50 else 0.05
-
+                
                 # 应用运动预测到所有坐标
                 predict_offset_x = int(avg_dx * motion_factor)
                 predict_offset_y = int(avg_dy * motion_factor)
-
+                
                 smoothed_bbox[0] += predict_offset_x
                 smoothed_bbox[1] += predict_offset_y
                 smoothed_bbox[2] += predict_offset_x
                 smoothed_bbox[3] += predict_offset_y
-
+    
     # 3. 边界合理性检查
     # 确保框尺寸合理
     w = smoothed_bbox[2] - smoothed_bbox[0]
     h = smoothed_bbox[3] - smoothed_bbox[1]
-
+    
     if w <= 0 or h <= 0:
         # 如果平滑后尺寸异常，使用原始检测结果
         return new_bbox
-
+    
     # 4. 最终稳定性检查
     # 如果平滑后的变化仍然很大，降低变化幅度
     old_center = ((old_bbox[0] + old_bbox[2]) / 2, (old_bbox[1] + old_bbox[3]) / 2)
     new_center = ((smoothed_bbox[0] + smoothed_bbox[2]) / 2, (smoothed_bbox[1] + smoothed_bbox[3]) / 2)
     center_change = ((old_center[0] - new_center[0]) ** 2 + (old_center[1] - new_center[1]) ** 2) ** 0.5
-
+    
     if center_change > 25:  # 如果中心移动超过25像素
         # 进一步限制移动幅度
         limit_factor = 25 / center_change
         final_center_x = old_center[0] + (new_center[0] - old_center[0]) * limit_factor
         final_center_y = old_center[1] + (new_center[1] - old_center[1]) * limit_factor
-
+        
         # 重构检测框
         smoothed_bbox = [
             int(final_center_x - w / 2),
@@ -431,7 +431,7 @@ def _advanced_face_smoothing(new_bbox: List[int], old_obj: Dict, history: Dict, 
             int(final_center_x + w / 2),
             int(final_center_y + h / 2)
         ]
-
+    
     return smoothed_bbox
 
 
@@ -450,40 +450,40 @@ def _predict_face_position(obj_id: str, face_history: Dict, current_time: float)
     """预测人脸位置"""
     if obj_id not in face_history or len(face_history[obj_id]["positions"]) < 2:
         return None
-
+    
     history = face_history[obj_id]
     positions = history["positions"]
     timestamps = history["timestamps"]
-
+    
     # 使用最近两个位置计算运动趋势
     if len(positions) >= 2:
         last_pos = positions[-1]
         prev_pos = positions[-2]
         last_time = timestamps[-1]
         prev_time = timestamps[-2]
-
+        
         # 计算速度
         dt = last_time - prev_time
         if dt > 0:
             vx = (last_pos[0] - prev_pos[0]) / dt
             vy = (last_pos[1] - prev_pos[1]) / dt
-
+            
             # 预测当前位置
             time_delta = current_time - last_time
             predicted_x = last_pos[0] + vx * time_delta
             predicted_y = last_pos[1] + vy * time_delta
-
+            
             # 保持框的尺寸
             w = last_pos[2] - last_pos[0]
             h = last_pos[3] - last_pos[1]
-
+            
             return [
                 int(predicted_x),
                 int(predicted_y),
                 int(predicted_x + w),
                 int(predicted_y + h)
             ]
-
+    
     return None
 
 
@@ -491,73 +491,73 @@ def _standard_object_tracking(detections: List[Dict], cache: Dict, current_time:
                               camera_id: str = "") -> List[Dict]:
     """增强的目标跟踪算法 - 减少抖动"""
     results = []
-
+    
     # 🔧 获取动态配置参数（默认启用抗抖动）
     config = getattr(configure_stabilization, 'config', {}).get(camera_id, {})
-
+    
     # 目标检测稳定化参数（超强抗闪烁配置）
     OBJECT_MATCH_THRESHOLD = config.get('object_match_threshold', 80)  # 放宽匹配，避免跟丢
     OBJECT_SMOOTH_FACTOR = config.get('object_smooth_factor', 0.95)  # 超强平滑
     SIZE_CHANGE_RATIO = config.get('max_size_change_ratio', 0.1)  # 极严格尺寸限制
     CONFIDENCE_SMOOTH_FACTOR = 0.8  # 置信度平滑，避免闪烁
-
+    
     for det in detections:
         bbox = det["bbox"]
         det_type = det["type"]
         best_match_id = None
         best_distance = OBJECT_MATCH_THRESHOLD
-
+        
         for obj_id, obj_data in cache.items():
             if obj_data["type"] != det_type or obj_id in matched_ids:
                 continue
-
+                
             old_center = ((obj_data["bbox"][0] + obj_data["bbox"][2]) / 2,
-                          (obj_data["bbox"][1] + obj_data["bbox"][3]) / 2)
+                         (obj_data["bbox"][1] + obj_data["bbox"][3]) / 2)
             new_center = ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2)
-
-            distance = ((old_center[0] - new_center[0]) ** 2 +
-                        (old_center[1] - new_center[1]) ** 2) ** 0.5
-
+            
+            distance = ((old_center[0] - new_center[0]) ** 2 + 
+                       (old_center[1] - new_center[1]) ** 2) ** 0.5
+            
             if distance < best_distance:
                 best_distance = distance
                 best_match_id = obj_id
-
+        
         if best_match_id:
             # 更新现有目标
             old_obj = cache[best_match_id]
             old_bbox = old_obj["bbox"]
-
+            
             # 🛡️ 智能抖动检测和自适应平滑
             # 检测目标是否出现抖动
             old_center = ((old_bbox[0] + old_bbox[2]) / 2, (old_bbox[1] + old_bbox[3]) / 2)
             new_center = ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2)
             movement = ((old_center[0] - new_center[0]) ** 2 + (old_center[1] - new_center[1]) ** 2) ** 0.5
-
+            
             # 如果移动过大，自动增强平滑处理
             if movement > 25:  # 25像素抖动阈值
                 enhanced_smooth = min(0.95, OBJECT_SMOOTH_FACTOR + 0.08)  # 自动增强平滑
                 print(f"🛡️ 检测到目标抖动({movement:.1f}px)，自动启用强化平滑 ID={best_match_id}")
             else:
                 enhanced_smooth = OBJECT_SMOOTH_FACTOR
-
+            
             smoothed_bbox = [
-                int(old_bbox[i] * (1 - enhanced_smooth) + bbox[i] * enhanced_smooth)
+                int(old_bbox[i] * (1 - enhanced_smooth) + bbox[i] * enhanced_smooth) 
                 for i in range(4)
             ]
-
+            
             # 📏 限制尺寸变化
             smoothed_bbox = _stabilize_bbox_size(smoothed_bbox, old_bbox, max_change_ratio=SIZE_CHANGE_RATIO)
-
+            
             # 🎯 置信度平滑处理，避免闪烁
             old_confidence = old_obj.get("confidence", det["confidence"])
             smoothed_confidence = old_confidence * (1 - CONFIDENCE_SMOOTH_FACTOR) + det[
                 "confidence"] * CONFIDENCE_SMOOTH_FACTOR
-
+            
             # 🛡️ 防闪烁保护：确保置信度不会突然掉落太多
             if smoothed_confidence < old_confidence * 0.6:  # 目标检测允许更大的置信度变化
                 smoothed_confidence = old_confidence * 0.7
                 print(f"🛡️ 防止目标置信度突降 ID={best_match_id}, 保护后={smoothed_confidence:.2f}")
-
+            
             cache[best_match_id].update({
                 "bbox": smoothed_bbox,
                 "confidence": max(0.3, smoothed_confidence),  # 确保不低于最小置信度
@@ -566,19 +566,19 @@ def _standard_object_tracking(detections: List[Dict], cache: Dict, current_time:
                 "consecutive_detections": old_obj.get("consecutive_detections", 0) + 1,
                 "flicker_protection": True
             })
-
+            
             matched_ids.add(best_match_id)
-
+            
             result_det = det.copy()
             result_det["bbox"] = smoothed_bbox
             result_det["tracking_id"] = best_match_id
             result_det["is_stable"] = cache[best_match_id]["stable_count"] >= 2
             result_det["consecutive_detections"] = cache[best_match_id]["consecutive_detections"]
             results.append(result_det)
-
+            
             print(
                 f"🎯 目标匹配: ID={best_match_id}, 距离={best_distance:.1f}, 连续={cache[best_match_id]['consecutive_detections']}")
-
+            
         else:
             # 新目标 - 降低初始不稳定性
             new_id = f"{det_type}_{int(current_time * 1000) % 10000}"
@@ -590,16 +590,16 @@ def _standard_object_tracking(detections: List[Dict], cache: Dict, current_time:
                 "stable_count": 1,
                 "consecutive_detections": 1
             }
-
+            
             result_det = det.copy()
             result_det["tracking_id"] = new_id
             result_det["is_stable"] = False
             result_det["consecutive_detections"] = 1
             results.append(result_det)
             matched_ids.add(new_id)
-
+            
             print(f"🆕 新目标: ID={new_id}, 类型={det_type}")
-
+    
     return results
 
 
@@ -608,17 +608,17 @@ def _detect_jitter(new_bbox: List[int], old_bbox: List[int], history: Dict, thre
     # 计算位移大小
     old_center = ((old_bbox[0] + old_bbox[2]) / 2, (old_bbox[1] + old_bbox[3]) / 2)
     new_center = ((new_bbox[0] + new_bbox[2]) / 2, (new_bbox[1] + new_bbox[3]) / 2)
-
+    
     movement = ((old_center[0] - new_center[0]) ** 2 + (old_center[1] - new_center[1]) ** 2) ** 0.5
-
+    
     # 如果位移过大，认为是抖动
     if movement > threshold:
         return True
-
+    
     # 检查历史运动趋势
     if history and "positions" in history and len(history["positions"]) >= 3:
         positions = history["positions"][-3:]  # 最近3个位置
-
+        
         # 计算运动方差，如果过大说明运动不稳定
         centers = [((pos[0] + pos[2]) / 2, (pos[1] + pos[3]) / 2) for pos in positions]
         if len(centers) >= 2:
@@ -627,13 +627,13 @@ def _detect_jitter(new_bbox: List[int], old_bbox: List[int], history: Dict, thre
                 move = ((centers[i][0] - centers[i - 1][0]) ** 2 +
                         (centers[i][1] - centers[i - 1][1]) ** 2) ** 0.5
                 movements.append(move)
-
+            
             # 如果运动变化很大，认为是抖动
             if len(movements) >= 2:
                 movement_variance = sum((m - sum(movements) / len(movements)) ** 2 for m in movements) / len(movements)
                 if movement_variance > 100:  # 方差阈值
                     return True
-
+    
     return False
 
 
@@ -643,24 +643,24 @@ def _stabilize_bbox_size(new_bbox: List[int], old_bbox: List[int], max_change_ra
     old_h = old_bbox[3] - old_bbox[1]
     new_w = new_bbox[2] - new_bbox[0]
     new_h = new_bbox[3] - new_bbox[1]
-
+    
     # 计算尺寸变化比例
     w_change_ratio = abs(new_w - old_w) / old_w if old_w > 0 else 0
     h_change_ratio = abs(new_h - old_h) / old_h if old_h > 0 else 0
-
+    
     # 如果变化过大，限制变化幅度
     if w_change_ratio > max_change_ratio or h_change_ratio > max_change_ratio:
         # 保持中心点，调整尺寸
         center_x = (new_bbox[0] + new_bbox[2]) / 2
         center_y = (new_bbox[1] + new_bbox[3]) / 2
-
+        
         # 限制尺寸变化
         max_w_change = old_w * max_change_ratio
         max_h_change = old_h * max_change_ratio
-
+        
         stabilized_w = old_w + max_w_change if new_w > old_w else old_w - max_w_change
         stabilized_h = old_h + max_h_change if new_h > old_h else old_h - max_h_change
-
+        
         # 重新计算边界
         stabilized_bbox = [
             int(center_x - stabilized_w / 2),
@@ -668,20 +668,20 @@ def _stabilize_bbox_size(new_bbox: List[int], old_bbox: List[int], max_change_ra
             int(center_x + stabilized_w / 2),
             int(center_y + stabilized_h / 2)
         ]
-
+        
         return stabilized_bbox
-
+    
     return new_bbox
 
 
 def _process_face_recognition_with_stabilization(camera_id: str, frame: np.ndarray) -> List[Dict]:
     """
     🎯 集成的人脸识别和稳定化处理：解决检测框闪烁和身份变化问题
-
+    
     Args:
         camera_id: 摄像头ID
         frame: 视频帧
-
+    
     Returns:
         稳定化后的人脸检测和识别结果
     """
@@ -689,7 +689,7 @@ def _process_face_recognition_with_stabilization(camera_id: str, frame: np.ndarr
         # 第一步：原始人脸识别 - 使用动态配置的灵敏度
         current_tolerance = getattr(globals(), 'face_recognition_config', {}).get('tolerance', 0.65)
         recognized_faces = detectors["face"].detect_and_recognize(frame, tolerance=current_tolerance)
-
+        
         # 第二步：转换为标准检测格式
         face_detections = []
         for face in recognized_faces:
@@ -701,7 +701,7 @@ def _process_face_recognition_with_stabilization(camera_id: str, frame: np.ndarr
                 location["right"],  # x2
                 location["bottom"]  # y2
             ]
-
+            
             detection = {
                 "type": "face",
                 "bbox": bbox,
@@ -710,27 +710,27 @@ def _process_face_recognition_with_stabilization(camera_id: str, frame: np.ndarr
                 "identity": face["identity"]  # 包含 name, known, confidence
             }
             face_detections.append(detection)
-
+        
         print(f"🔍 原始人脸识别结果: {len(face_detections)} 个人脸")
         for i, det in enumerate(face_detections):
             identity = det["identity"]
             print(
                 f"  人脸 #{i + 1}: {identity['name']} (known={identity['known']}, conf={identity.get('confidence', 0):.2f})")
-
+        
         # 第三步：通过稳定化系统处理
         if face_detections:
             stabilized_faces = stabilize_detections(camera_id, face_detections)
-
+            
             print(f"✅ 稳定化后人脸结果: {len(stabilized_faces)} 个人脸")
             for face in stabilized_faces:
                 identity = face.get("identity", {})
                 print(
                     f"  稳定人脸 ID={face.get('tracking_id', 'N/A')}: {identity.get('name', 'unknown')} (conf={identity.get('confidence', 0):.2f})")
-
+            
             return stabilized_faces
         else:
             return []
-
+            
     except Exception as e:
         print(f"❌ 人脸识别稳定化处理错误: {e}")
         import traceback
@@ -738,12 +738,12 @@ def _process_face_recognition_with_stabilization(camera_id: str, frame: np.ndarr
         return []
 
 
-def _stabilize_face_identity(face_id: str, new_identity: Dict, face_history: Dict,
-                             history_size: int = 10, change_threshold: float = 0.7,
-                             confidence_diff: float = 0.15, min_stable_frames: int = 3) -> Dict:
+def _stabilize_face_identity(face_id: str, new_identity: Dict, face_history: Dict, 
+                           history_size: int = 10, change_threshold: float = 0.7,
+                           confidence_diff: float = 0.15, min_stable_frames: int = 3) -> Dict:
     """
     🎯 人脸身份稳定化：防止同一人脸的识别结果频繁变化
-
+    
     Args:
         face_id: 人脸跟踪ID
         new_identity: 新的识别结果 {"name": str, "known": bool, "confidence": float}
@@ -752,7 +752,7 @@ def _stabilize_face_identity(face_id: str, new_identity: Dict, face_history: Dic
         change_threshold: 身份改变需要的投票比例
         confidence_diff: 新身份必须比当前身份高出的置信度差值
         min_stable_frames: 最少稳定帧数才确认切换
-
+    
     Returns:
         稳定化后的身份信息
     """
@@ -767,9 +767,9 @@ def _stabilize_face_identity(face_id: str, new_identity: Dict, face_history: Dic
         }
         print(f"🆕 新人脸 {face_id} 初始身份: {new_identity.get('name', 'unknown')}")
         return new_identity
-
+    
     history_data = face_history[face_id]
-
+    
     # 🔧 数据结构兼容性处理：检查是否是位置跟踪数据结构
     if "positions" in history_data and "current_identity" not in history_data:
         # 这是位置跟踪数据结构，需要扩展为身份稳定化数据结构
@@ -781,7 +781,7 @@ def _stabilize_face_identity(face_id: str, new_identity: Dict, face_history: Dic
             "last_change_time": time.time()
         })
         return new_identity
-
+    
     # 🔧 安全访问：确保必要字段存在
     if "current_identity" not in history_data:
         print(f"⚠️ 人脸 {face_id} 缺少身份数据，重新初始化")
@@ -790,33 +790,33 @@ def _stabilize_face_identity(face_id: str, new_identity: Dict, face_history: Dic
         history_data["stable_count"] = 0
         history_data["last_change_time"] = time.time()
         return new_identity
-
+    
     current_identity = history_data["current_identity"]
-
+    
     # 确保 identity_history 存在
     if "identity_history" not in history_data:
         history_data["identity_history"] = []
     identity_history = history_data["identity_history"]
-
+    
     # 确保 stable_count 存在
     if "stable_count" not in history_data:
         history_data["stable_count"] = 0
-
+    
     # 添加新的识别结果到历史记录
     identity_history.append({
         "name": new_identity.get("name", "unknown"),
         "confidence": new_identity.get("confidence", 0),
         "timestamp": time.time()
     })
-
+    
     # 限制历史记录大小
     if len(identity_history) > history_size:
         identity_history.pop(0)
-
+    
     # 🗳️ 统计最近的身份投票（置信度加权）
     name_votes = {}
     total_weight = 0
-
+    
     for record in identity_history:
         name = record["name"]
         confidence = record["confidence"]
@@ -824,7 +824,7 @@ def _stabilize_face_identity(face_id: str, new_identity: Dict, face_history: Dic
         weight = max(0.1, confidence)  # 最小权重0.1
         name_votes[name] = name_votes.get(name, 0) + weight
         total_weight += weight
-
+    
     # 找到得票最高的身份
     if name_votes and total_weight > 0:
         most_voted_name = max(name_votes.items(), key=lambda x: x[1])
@@ -833,25 +833,25 @@ def _stabilize_face_identity(face_id: str, new_identity: Dict, face_history: Dic
     else:
         winning_name = "unknown"
         vote_ratio = 0
-
+    
     current_name = current_identity.get("name", "unknown")
     new_name = new_identity.get("name", "unknown")
-
+    
     # 🛡️ 身份稳定性检查
     should_change_identity = False
     change_reason = ""
-
+    
     if current_name == winning_name:
         # 当前身份与投票结果一致，保持稳定
         history_data["stable_count"] = history_data.get("stable_count", 0) + 1
         should_change_identity = False
         change_reason = "身份一致，保持稳定"
-
+        
     elif vote_ratio >= change_threshold:
         # 投票支持率达到阈值
         current_confidence = current_identity.get("confidence", 0)
         new_confidence = new_identity.get("confidence", 0)
-
+        
         # 检查置信度差异
         if new_confidence > current_confidence + confidence_diff:
             # 新身份置信度明显更高
@@ -867,7 +867,7 @@ def _stabilize_face_identity(face_id: str, new_identity: Dict, face_history: Dic
     else:
         should_change_identity = False
         change_reason = f"投票支持率不足({vote_ratio:.1%}<{change_threshold:.1%})"
-
+    
     # 🔄 执行身份切换或保持
     if should_change_identity:
         # 找到投票最高身份的最高置信度记录
@@ -875,7 +875,7 @@ def _stabilize_face_identity(face_id: str, new_identity: Dict, face_history: Dic
         for record in identity_history:
             if record["name"] == winning_name:
                 best_confidence = max(best_confidence, record["confidence"])
-
+        
         history_data["current_identity"] = {
             "name": winning_name,
             "known": winning_name != "unknown",
@@ -883,17 +883,17 @@ def _stabilize_face_identity(face_id: str, new_identity: Dict, face_history: Dic
         }
         history_data["stable_count"] = 0  # 重置稳定计数
         history_data["last_change_time"] = time.time()
-
+        
         print(f"🔄 人脸 {face_id} 身份切换: {current_name} → {winning_name} ({change_reason})")
-
+        
     else:
         # 保持当前身份，但可能更新置信度
         if new_name == current_name and new_identity.get("confidence", 0) > current_identity.get("confidence", 0):
             history_data["current_identity"]["confidence"] = new_identity["confidence"]
             print(f"📈 人脸 {face_id} 置信度提升: {new_identity['confidence']:.2f}")
-
+        
         print(f"🛡️ 人脸 {face_id} 身份保持: {current_name} ({change_reason})")
-
+    
     # 📊 定期输出身份统计
     if len(identity_history) % 5 == 0:  # 每5次记录输出一次统计
         print(f"📊 人脸 {face_id} 身份统计:")
@@ -902,17 +902,17 @@ def _stabilize_face_identity(face_id: str, new_identity: Dict, face_history: Dic
             print(f"  - {name}: {vote_pct:.1f}%")
         print(f"  当前身份: {history_data['current_identity']['name']}")
         print(f"  稳定程度: {history_data.get('stable_count', 0)} 帧")
-
+    
     return history_data["current_identity"]
 
 
 def _cleanup_expired_cache(cache: Dict, face_history: Dict, current_time: float):
     """防闪烁清理策略 - 逐渐降低置信度而非立即删除"""
     to_remove = []
-
+    
     for obj_id, obj_data in cache.items():
         time_since_seen = current_time - obj_data["last_seen"]
-
+        
         if obj_data["type"] == "face":
             # 🎯 人脸防闪烁策略：更长的保持时间 + 置信度渐变
             if time_since_seen > 6.0:  # 6秒后彻底删除（原来3秒）
@@ -935,12 +935,12 @@ def _cleanup_expired_cache(cache: Dict, face_history: Dict, current_time: float)
                 obj_data["confidence"] = max(0.2, current_confidence * fade_factor)
                 obj_data["fading"] = True
                 print(f"🌫️ 目标淡出 {obj_id}, 置信度={obj_data['confidence']:.2f}")
-
+    
     for obj_id in to_remove:
         del cache[obj_id]
         if obj_id in face_history:
             del face_history[obj_id]
-
+    
     # 🚀 防闪烁缓存管理：更大的缓存容量
     if len(cache) > 25:  # 增加缓存容量从15到25
         sorted_items = sorted(cache.items(), key=lambda x: x[1]["last_seen"])
@@ -956,7 +956,7 @@ def _get_fast_strategy(frame_count: int, is_low_res: bool) -> dict:
     """极速模式：错峰检测，最大化性能"""
     # 错峰检测：目标检测和人脸识别轮流执行
     is_object_frame = frame_count % 2 == 0
-
+    
     return {
         "run_object_detection": is_object_frame,
         "run_face_recognition": not is_object_frame,
@@ -971,7 +971,7 @@ def _get_balanced_strategy(frame_count: int, is_low_res: bool) -> dict:
     """平衡模式：智能轮换，兼顾性能和质量"""
     # 智能策略：每3帧并行一次，其他时间错峰
     use_parallel_this_frame = frame_count % 3 == 0
-
+    
     if use_parallel_this_frame:
         # 并行帧：同时执行但使用更小的缩放
         return {
@@ -1065,7 +1065,7 @@ def init_detectors():
                 detectors["acoustic"] = acoustic_detector
             except Exception as e:
                 print(f"警告: 声学检测器初始化失败，将禁用此功能。错误: {e}")
-
+                
         # 5. 初始化火焰烟雾检测器
         try:
             # 检查是否有专用的火焰检测模型
@@ -1078,7 +1078,7 @@ def init_detectors():
                 general_model_path = os.path.join(ASSET_BASE_PATH, "models", "torch", "yolov8n.pt")
                 print(f"未找到专用火焰检测模型，尝试使用通用YOLO模型: {general_model_path}")
                 fire_detector = FlameSmokeDetector(model_path=general_model_path)
-
+                
             detectors["fire"] = fire_detector
             print("火焰烟雾检测器初始化成功")
         except Exception as e:
@@ -1123,8 +1123,8 @@ app = FastAPI(
 # 配置CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 在生产环境中应该设置为具体的域名
-    allow_credentials=True,
+    allow_origins=["*"],  # AI服务不需要严格的域名限制
+    allow_credentials=False,  # 不需要处理凭证
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -1183,11 +1183,11 @@ def send_result_to_backend(result: AIAnalysisResult):
                 'Content-Type': 'application/json',
                 'X-AI-Service': 'true',  # AI服务标识
             }
-
+            
             # 使用后端期望的X-API-Key头部
             ai_api_key = os.getenv('AI_SERVICE_API_KEY', 'smarteye-ai-service-key-2024')
             headers['X-API-Key'] = ai_api_key
-
+            
             # 发送请求
             response = session.post(
                 'http://localhost:8000/api/alerts/ai-results/',  # 修复API路径
@@ -1195,7 +1195,7 @@ def send_result_to_backend(result: AIAnalysisResult):
                 headers=headers,
                 timeout=5  # 5秒超时
             )
-
+            
             if response.status_code == 200:
                 print(f"✅ 成功发送告警到后端: {result.event_type}")
             else:
@@ -1226,7 +1226,7 @@ async def run_acoustic_analysis():
     """在后台持续运行的协程，用于分析音频数据。"""
     print("声学分析后台任务已启动。")
     acoustic_detector = detectors.get("acoustic")
-    if not acoustic_detector:
+    if not acoustic_detector: 
         return
 
     while True:  # 持续运行，直到服务停止
@@ -1236,7 +1236,7 @@ async def run_acoustic_analysis():
                 if not hasattr(stream, 'get_audio_file'):
                     # 跳过不支持音频的流（如WebcamProcessor）
                     continue
-
+                    
                 audio_file = stream.get_audio_file()
                 if audio_file and os.path.exists(audio_file):
                     events = await acoustic_detector.process_audio_file(audio_file)
@@ -1247,12 +1247,12 @@ async def run_acoustic_analysis():
                             "high_frequency_noise": "🔊",
                             "sudden_noise": "💥"
                         }.get(event['type'], "🔔")
-
+                        
                         print(f"{event_emoji} [音频] {event['description']}")
                         print(f"   - 类型: {event['type']}")
                         print(f"   - 时间: {datetime.fromtimestamp(event['timestamp']).strftime('%H:%M:%S')}")
                         print(f"   - 置信度: {event['confidence']:.2f}")
-
+                        
                         alert = AIAnalysisResult(
                             camera_id=stream.camera_id,
                             event_type=f"acoustic_{event['type']}",
@@ -1271,7 +1271,7 @@ async def run_acoustic_analysis():
         except Exception as e:
             print(f"声学分析过程中发生错误: {e}")
             traceback.print_exc()
-
+        
         await asyncio.sleep(5)  # 每5秒检查一次，减少检测频率
 
 
@@ -1313,11 +1313,11 @@ def create_master_processor(camera_id: str, config: StreamConfig):
                     identity = face.get("identity", {})
                     if not identity.get("known", False):  # 未知人员
                         print(f"🚨 [{camera_id}] 检测到未知人员! (跟踪ID: {face.get('tracking_id', 'N/A')})")
-
+                        
                         # 转换bbox格式用于警报
                         bbox = face.get("bbox", [0, 0, 0, 0])
                         location_box = [bbox[0], bbox[1], bbox[2], bbox[3]]  # [x1, y1, x2, y2]
-
+                        
                         alert = AIAnalysisResult(
                             camera_id=camera_id,
                             event_type="unknown_face_detected",
@@ -1332,18 +1332,18 @@ def create_master_processor(camera_id: str, config: StreamConfig):
                             }
                         )
                         send_result_to_backend(alert)
-
+                        
             # 添加火焰烟雾检测
             if "fire" in detectors:
                 try:
                     fire_detector = detectors["fire"]
                     fire_results = fire_detector.detect(frame, confidence_threshold=0.45)
-
+                    
                     if fire_results:
                         for fire_obj in fire_results:
                             print(
                                 f"🔥 [{camera_id}] 检测到{fire_obj['type']}: {fire_obj['class_name']}, 置信度={fire_obj['confidence']:.2f}")
-
+                            
                             # 发送火灾告警
                             alert = AIAnalysisResult(
                                 camera_id=camera_id,
@@ -1370,6 +1370,84 @@ def create_master_processor(camera_id: str, config: StreamConfig):
 
 # --- API 端点 (保持不变) ---
 
+# RTMP推流回调处理
+@app.post("/rtmp/publish")
+async def rtmp_publish_callback(request: dict = Body(...)):
+    """处理RTMP推流开始回调"""
+    try:
+        stream_name = request.get('name', '')
+        client_addr = request.get('addr', '')
+        
+        print(f"📡 RTMP推流开始: stream={stream_name}, client={client_addr}")
+        
+        # 为新的推流创建摄像头ID
+        camera_id = f"rtmp_stream_{stream_name}"
+        
+        # 如果需要，可以在这里启动AI分析
+        # 暂时返回成功，允许推流
+        return {"status": "success", "message": "推流已接受", "camera_id": camera_id}
+        
+    except Exception as e:
+        print(f"处理RTMP推流回调失败: {e}")
+        return {"status": "error", "message": str(e)}
+
+@app.post("/rtmp/publish_done")
+async def rtmp_publish_done_callback(request: dict = Body(...)):
+    """处理RTMP推流结束回调"""
+    try:
+        stream_name = request.get('name', '')
+        print(f"📡 RTMP推流结束: stream={stream_name}")
+        
+        # 清理相关资源
+        camera_id = f"rtmp_stream_{stream_name}"
+        if camera_id in video_streams:
+            try:
+                video_streams[camera_id].stop()
+                del video_streams[camera_id]
+                print(f"清理摄像头 {camera_id} 资源")
+            except Exception as e:
+                print(f"清理资源失败: {e}")
+        
+        return {"status": "success", "message": "推流结束处理完成"}
+        
+    except Exception as e:
+        print(f"处理RTMP推流结束回调失败: {e}")
+        return {"status": "error", "message": str(e)}
+
+# 发送检测结果到前端的WebSocket
+async def send_detection_to_websocket(camera_id: str, detection_results: dict):
+    """通过WebSocket向前端发送检测结果"""
+    try:
+        import requests
+        import json
+        
+        # 准备WebSocket消息数据
+        websocket_data = {
+            "type": "detection_result",
+            "data": {
+                "camera_id": camera_id,
+                "timestamp": datetime.now().isoformat(),
+                "detections": detection_results.get("detections", []),
+                "performance_info": detection_results.get("performance_info", {})
+            }
+        }
+        
+        # 发送到后端的WebSocket广播接口
+        response = requests.post(
+            'http://localhost:8000/api/websocket/broadcast/',
+            json=websocket_data,
+            headers={'Content-Type': 'application/json'},
+            timeout=2
+        )
+        
+        if response.status_code == 200:
+            print(f"✅ 检测结果已发送到WebSocket: {camera_id}")
+        else:
+            print(f"⚠️ WebSocket发送失败: {response.status_code}")
+            
+    except Exception as e:
+        print(f"发送检测结果到WebSocket失败: {e}")
+
 @app.post("/stream/start/")
 async def start_stream(config: StreamConfig):
     """启动视频流处理。"""
@@ -1380,7 +1458,7 @@ async def start_stream(config: StreamConfig):
         print(f"正在启动视频流: {config.stream_url}")
         
         # 先测试流连接
-        stream = VideoStream(config.stream_url)
+        stream = VideoStream(stream_url=config.stream_url)
         is_available = await stream.test_connection()
         
         if not is_available:
@@ -1392,23 +1470,23 @@ async def start_stream(config: StreamConfig):
         if config.camera_id not in object_trackers:
             object_trackers[config.camera_id] = DeepSORTTracker()
             print(f"为摄像头 {config.camera_id} 初始化Deep SORT追踪器")
-
+        
         # 如果启用了声音检测，启动音频提取
         if config.enable_sound_detection:
             await stream.start_audio_extraction()
-
+        
         # 启动视频流
         if not await stream.start():
             return {"status": "error", "message": "无法启动视频流"}
 
         # 创建并存储视频流处理器
         video_streams[config.camera_id] = stream
-
+        
         # 启动异步处理任务
         asyncio.create_task(process_video_stream_async(stream, config.camera_id))
-
+        
         return {"status": "success", "message": f"成功启动摄像头 {config.camera_id} 的视频流处理"}
-
+        
     except Exception as e:
         print(f"启动视频流时出错: {str(e)}")
         traceback.print_exc()
@@ -1424,7 +1502,7 @@ async def process_video_stream_async(stream: VideoStream, camera_id: str):
             if not success:
                 print(f"读取视频帧失败: {camera_id}")
                 continue
-
+                
             # 处理帧
             with stream.lock:
                 for processor in stream.processors:
@@ -1432,10 +1510,10 @@ async def process_video_stream_async(stream: VideoStream, camera_id: str):
                         processor(frame)
                     except Exception as e:
                         print(f"处理器执行错误: {e}")
-
+            
             # 控制帧率 (优化为更高频率)
             await asyncio.sleep(0.02)  # 约50fps
-
+            
         except Exception as e:
             print(f"视频流处理错误 [{camera_id}]: {e}")
             await asyncio.sleep(1)
@@ -1450,18 +1528,18 @@ async def stop_stream(camera_id: str):
             stream_processor = video_streams[camera_id]
             stream_processor.stop()
             del video_streams[camera_id]
-
+            
             # 清理该摄像头的Deep SORT追踪器实例
             if camera_id in object_trackers:
                 object_trackers[camera_id].reset()  # 重置追踪器状态
                 del object_trackers[camera_id]
                 print(f"已清理摄像头 {camera_id} 的Deep SORT追踪器")
-
+            
             # 清理检测缓存
             if camera_id in detection_cache:
                 del detection_cache[camera_id]
                 print(f"已清理摄像头 {camera_id} 的检测缓存")
-
+            
             # 如果没有活跃的视频流了，停止声音检测
             if not video_streams and detectors.get("acoustic") and detectors["acoustic"].is_running:
                 detectors["acoustic"].stop_listening()
@@ -1514,21 +1592,21 @@ async def get_system_status():
 
 @app.post("/audio/settings/")
 async def update_audio_settings(
-        confidence_threshold: float = Body(default=None),
-        detection_interval: float = Body(default=None),
-        event_cooldown: float = Body(default=None),
-        sensitivity: str = Body(default=None)  # "low", "medium", "high"
+    confidence_threshold: float = Body(default=None),
+    detection_interval: float = Body(default=None), 
+    event_cooldown: float = Body(default=None),
+    sensitivity: str = Body(default=None)  # "low", "medium", "high"
 ):
     """更新音频检测设置"""
     try:
         acoustic_detector = detectors.get("acoustic")
         if not acoustic_detector:
             return {"status": "error", "message": "音频检测器未初始化"}
-
+            
         # 验证敏感度参数
         if sensitivity is not None and sensitivity not in ["low", "medium", "high"]:
             return {"status": "error", "message": "敏感度必须是 'low', 'medium' 或 'high'"}
-
+            
         # 更新设置
         acoustic_detector.update_settings(
             confidence_threshold=confidence_threshold,
@@ -1536,9 +1614,9 @@ async def update_audio_settings(
             event_cooldown=event_cooldown,
             sensitivity=sensitivity
         )
-
+        
         return {
-            "status": "success",
+            "status": "success", 
             "message": "音频检测设置已更新",
             "current_settings": {
                 "confidence_threshold": acoustic_detector.confidence_threshold,
@@ -1549,7 +1627,7 @@ async def update_audio_settings(
                 "noise_multiplier": acoustic_detector.noise_multiplier
             }
         }
-
+        
     except Exception as e:
         return {"status": "error", "message": f"更新设置失败: {str(e)}"}
 
@@ -1561,7 +1639,7 @@ async def get_audio_settings():
         acoustic_detector = detectors.get("acoustic")
         if not acoustic_detector:
             return {"status": "error", "message": "音频检测器未初始化"}
-
+            
         return {
             "status": "success",
             "settings": {
@@ -1573,7 +1651,7 @@ async def get_audio_settings():
                 "noise_multiplier": acoustic_detector.noise_multiplier
             }
         }
-
+        
     except Exception as e:
         return {"status": "error", "message": f"获取设置失败: {str(e)}"}
 
@@ -1585,26 +1663,26 @@ async def reset_audio_history():
         acoustic_detector = detectors.get("acoustic")
         if not acoustic_detector:
             return {"status": "error", "message": "音频检测器未初始化"}
-
+            
         acoustic_detector.reset_event_history()
         return {"status": "success", "message": "音频事件历史已重置"}
-
+        
     except Exception as e:
         return {"status": "error", "message": f"重置失败: {str(e)}"}
 
 
 @app.post("/audio/frontend/alert/")
 async def process_frontend_audio_alert(
-        camera_id: str = Body(...),
-        audio_level: float = Body(...),
-        event_type: str = Body(default="high_volume"),
-        timestamp: str = Body(default=None)
+    camera_id: str = Body(...),
+    audio_level: float = Body(...),
+    event_type: str = Body(default="high_volume"),
+    timestamp: str = Body(default=None)
 ):
     """处理前端发送的音频告警事件"""
     try:
         if not timestamp:
             timestamp = datetime.now().isoformat()
-
+            
         # 创建音频告警结果
         alert_result = AIAnalysisResult(
             camera_id=camera_id,
@@ -1618,57 +1696,57 @@ async def process_frontend_audio_alert(
                 "event_type": event_type
             }
         )
-
+        
         # 发送到后端
         send_result_to_backend(alert_result)
-
+        
         return {
-            "status": "success",
+            "status": "success", 
             "message": f"音频告警已处理: {event_type}, 音量级别: {audio_level}%"
         }
-
+        
     except Exception as e:
         return {"status": "error", "message": f"处理音频告警失败: {str(e)}"}
 
 
 @app.post("/frame/analyze/")
 async def analyze_frame(
-        frame: UploadFile = File(...),
-        camera_id: str = Body(...),
-        enable_face_recognition: bool = Body(default=True),
-        enable_object_detection: bool = Body(default=True),
-        enable_behavior_detection: bool = Body(default=False),
+    frame: UploadFile = File(...),
+    camera_id: str = Body(...),
+    enable_face_recognition: bool = Body(default=True),
+    enable_object_detection: bool = Body(default=True),
+    enable_behavior_detection: bool = Body(default=False),
 
-        enable_fire_detection: bool = Body(default=True),
+    enable_fire_detection: bool = Body(default=True),
 
-        performance_mode: str = Body(default="balanced")  # "fast", "balanced", "quality"
+    performance_mode: str = Body(default="balanced")  # "fast", "balanced", "quality"
 ):
     """高性能智能分析 - 防卡顿优化"""
     import concurrent.futures
     import threading
-
+    
     try:
         start_time = time.time()
         frame_count = getattr(analyze_frame, 'frame_count', 0) + 1
         setattr(analyze_frame, 'frame_count', frame_count)
-
+        
         # 读取图像数据
         image_data = await frame.read()
         image_array = np.frombuffer(image_data, np.uint8)
         image = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
-
+        
         if image is None:
             return {"status": "error", "message": "无效的图像数据"}
-
+        
         # 获取图像尺寸
         height, width = image.shape[:2]
         is_low_res = width < 400 or height < 400
-
+        
         # 确保该摄像头有Deep SORT追踪器实例
         if camera_id not in object_trackers:
             object_trackers[camera_id] = DeepSORTTracker()
             print(f"为摄像头 {camera_id} 动态初始化Deep SORT追踪器")
-
+        
         results = {
             "camera_id": camera_id,
             "timestamp": datetime.now().isoformat(),
@@ -1682,14 +1760,14 @@ async def analyze_frame(
             try:
                 # 添加调试信息
                 print(f"执行火焰检测: 图像大小={image.shape}")
-
+                
                 fire_results = detectors["fire"].detect(image, confidence_threshold=0.25)  # 降低置信度阈值
-
+                
                 print(f"火焰检测结果: 检测到{len(fire_results)}个火焰/烟雾对象")
                 for idx, fire_obj in enumerate(fire_results):
                     print(
                         f"  火焰对象 #{idx + 1}: 类型={fire_obj['type']}, 类别={fire_obj['class_name']}, 置信度={fire_obj['confidence']:.3f}")
-
+                
                 for fire_obj in fire_results:
                     # 确保坐标转换为Python原生int类型
                     bbox = [int(float(coord)) for coord in fire_obj["coordinates"]]
@@ -1702,7 +1780,7 @@ async def analyze_frame(
                         "timestamp": datetime.now().isoformat()
                     }
                     results["detections"].append(detection)
-
+                    
                     # 生成火灾告警
                     alert = {
                         "type": f"fire_{fire_obj['type']}",
@@ -1711,7 +1789,7 @@ async def analyze_frame(
                         "location": bbox
                     }
                     results["alerts"].append(alert)
-
+                    
                     # 异步发送到后端
                     backend_alert = AIAnalysisResult(
                         camera_id=camera_id,
@@ -1732,7 +1810,7 @@ async def analyze_frame(
                 print(f"火焰检测失败: {e}")
                 traceback.print_exc()  # 打印详细堆栈信息
                 # 火焰检测失败时不影响其他功能继续运行
-
+        
         # 高性能目标检测
         if enable_object_detection:
             # 根据图像质量调整检测策略
@@ -1754,10 +1832,10 @@ async def analyze_frame(
             strategy = _get_quality_strategy(frame_count, is_low_res)
             scale_factor = 0.8
             max_detections = 8
-
+        
         # 🎯 根据策略执行检测
         active_tasks = []
-
+        
         # 目标检测任务
         def optimized_object_detection():
             if not (enable_object_detection and strategy["run_object_detection"]):
@@ -1768,14 +1846,14 @@ async def analyze_frame(
                 obj_scale = scale_factor * strategy["object_scale_factor"]
                 obj_height, obj_width = int(height * obj_scale), int(width * obj_scale)
                 obj_image = cv2.resize(image, (obj_width, obj_height))
-
+                
                 confidence_threshold = 0.45 if performance_mode == "fast" else 0.35
                 detected_objects = detectors["object"].predict(obj_image, confidence_threshold=confidence_threshold)
-
+                
                 # 坐标缩放回原图尺寸
                 scale_back_x = width / obj_width
                 scale_back_y = height / obj_height
-
+                
                 object_detections = []
                 for obj in detected_objects[:max_detections]:
                     bbox = [
@@ -1784,7 +1862,7 @@ async def analyze_frame(
                         int(float(obj["coordinates"][2]) * scale_back_x),
                         int(float(obj["coordinates"][3]) * scale_back_y)
                     ]
-
+                    
                     detection = {
                         "type": "object",
                         "class_name": obj["class_name"],
@@ -1793,7 +1871,7 @@ async def analyze_frame(
                         "timestamp": datetime.now().isoformat()
                     }
                     object_detections.append(detection)
-
+                    
                     # 重要告警 (降低人员检测的置信度要求)
                     if obj["class_name"] == "person" and obj["confidence"] > 0.5:
                         alert = {
@@ -1803,13 +1881,13 @@ async def analyze_frame(
                             "location": bbox
                         }
                         results["alerts"].append(alert)
-
+                
                 return object_detections
-
+                
             except Exception as e:
                 print(f"目标检测失败: {e}")
                 return []
-
+        
         # 人脸识别任务
         def optimized_face_recognition():
             if not (enable_face_recognition and strategy["run_face_recognition"]):
@@ -1817,14 +1895,14 @@ async def analyze_frame(
             try:
                 # 动态缩放
                 face_scale = scale_factor * strategy["face_scale_factor"]
-
+                
                 # 极速模式下更激进的缩放
                 if performance_mode == "fast":
                     face_scale = min(0.5, face_scale)
-
+                
                 face_height, face_width = int(height * face_scale), int(width * face_scale)
                 face_image = cv2.resize(image, (face_width, face_height))
-
+                
                 # 🎯 对于单帧分析，使用稳定化处理（但历史信息较少）
                 temp_camera_id = f"single_frame_{camera_id}_{int(time.time())}"
                 stabilized_faces = _process_face_recognition_with_stabilization(temp_camera_id, face_image)
@@ -1843,13 +1921,13 @@ async def analyze_frame(
                         "identity": identity,
                         "confidence": identity.get("confidence", 0.5)
                     })
-
+                
                 scale_back_x = width / face_width
                 scale_back_y = height / face_height
-
+                
                 face_detections = []
                 face_limit = 2 if performance_mode == "fast" else 3
-
+                
                 for face in recognized_faces[:face_limit]:
                     face_bbox = [
                         int(float(face["location"]["left"]) * scale_back_x),
@@ -1857,7 +1935,7 @@ async def analyze_frame(
                         int(float(face["location"]["right"]) * scale_back_x),
                         int(float(face["location"]["bottom"]) * scale_back_y)
                     ]
-
+                    
                     detection = {
                         "type": "face",
                         "known": face["identity"]["known"],
@@ -1867,7 +1945,7 @@ async def analyze_frame(
                         "timestamp": datetime.now().isoformat()
                     }
                     face_detections.append(detection)
-
+                    
                     # 异步告警处理（不阻塞）
                     if not face["identity"]["known"] and performance_mode != "fast":
                         clean_location = {
@@ -1881,34 +1959,34 @@ async def analyze_frame(
                             "location": clean_location
                         }
                         results["alerts"].append(alert)
-
+                
                 return face_detections
-
+                
             except Exception as e:
                 print(f"人脸识别失败: {e}")
                 return []
-
+        
         # 🚀 执行策略：串行或并行
         if strategy["use_parallel"]:
             # 并行执行（性能好的设备）
             with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
                 future_objects = executor.submit(optimized_object_detection)
                 future_faces = executor.submit(optimized_face_recognition)
-
+                
                 object_results = future_objects.result()
                 face_results = future_faces.result()
         else:
             # 串行执行（防止卡顿）
             object_results = optimized_object_detection()
             face_results = optimized_face_recognition()
-
+        
         # 🎯 使用Deep SORT处理目标检测结果，保留人脸识别的稳定化处理
         tracked_object_results = []
         if object_results and camera_id in object_trackers:
             try:
                 # 确保该摄像头有追踪器实例
                 tracker = object_trackers[camera_id]
-
+                
                 # 将object_results转换为Deep SORT需要的格式
                 detection_list = []
                 for obj in object_results:
@@ -1919,11 +1997,11 @@ async def analyze_frame(
                             'class_name': obj['class_name'],
                             'class_id': obj.get('class_id', 0)
                         })
-
+                
                 # 使用Deep SORT进行追踪
                 if detection_list:
                     tracked_results = tracker.update(detection_list, image)
-
+                    
                     # 转换追踪结果为统一格式
                     for tracked_obj in tracked_results:
                         detection = {
@@ -1935,7 +2013,7 @@ async def analyze_frame(
                             "timestamp": datetime.now().isoformat()
                         }
                         tracked_object_results.append(detection)
-
+                        
                         # 为追踪的目标生成告警（包含tracking_id）
                         if tracked_obj["class_name"] == "person" and tracked_obj["confidence"] > 0.5:
                             alert = {
@@ -1946,7 +2024,7 @@ async def analyze_frame(
                                 "tracking_id": tracked_obj["tracking_id"]
                             }
                             results["alerts"].append(alert)
-
+                            
                             # 发送到后端的告警也包含tracking_id
                             backend_alert = AIAnalysisResult(
                                 camera_id=camera_id,
@@ -1964,7 +2042,7 @@ async def analyze_frame(
                             # 异步发送到后端
                             import threading
                             threading.Thread(target=lambda: send_result_to_backend(backend_alert), daemon=True).start()
-
+                
             except Exception as e:
                 print(f"Deep SORT追踪失败: {e}")
                 # 回退到原始目标检测结果
@@ -1972,7 +2050,7 @@ async def analyze_frame(
         else:
             # 如果没有追踪器或没有目标检测结果，使用原始结果
             tracked_object_results = object_results
-
+        
         # 🎯 保留人脸识别的稳定化处理（独立于Deep SORT）
         stabilized_face_results = face_results
         if face_results and strategy["use_stabilization"]:
@@ -1989,11 +2067,11 @@ async def analyze_frame(
                     }
                 }
                 face_detections_for_stabilization.append(face_det)
-
+            
             # 应用人脸稳定化
             if face_detections_for_stabilization:
                 stabilized_faces = stabilize_detections(camera_id, face_detections_for_stabilization)
-
+                
                 # 转换回原格式
                 stabilized_face_results = []
                 for stabilized_face in stabilized_faces:
@@ -2008,11 +2086,11 @@ async def analyze_frame(
                             "timestamp": stabilized_face.get("timestamp", datetime.now().isoformat())
                         }
                         stabilized_face_results.append(face_result)
-
+        
         # 合并Deep SORT追踪的目标结果和稳定化的人脸结果
         all_detections = tracked_object_results + stabilized_face_results
         results["detections"] = all_detections
-
+        
         # 🎯 危险区域检测（基于人员跟踪结果）
         try:
             # 调试信息：检查检测数据
@@ -2022,14 +2100,14 @@ async def analyze_frame(
                 print(f"🧑 检测到 {len(person_detections)} 个人员，开始危险区域检测...")
                 for i, detection in enumerate(person_detections):
                     print(f"  人员 #{i + 1}: tracking_id={detection.get('tracking_id')}, bbox={detection.get('bbox')}")
-
+            
             danger_zone_alerts = danger_zone_detector.detect_intrusions(camera_id, all_detections)
             if danger_zone_alerts:
                 print(f"🚨 危险区域告警: {len(danger_zone_alerts)}条")
             else:
                 if person_detections:
                     print(f"✅ 危险区域检测完成，无入侵检测到")
-
+                
                 # 添加到结果中
                 for alert in danger_zone_alerts:
                     results["alerts"].append({
@@ -2041,7 +2119,7 @@ async def analyze_frame(
                         "distance": alert.get("distance"),
                         "dwell_time": alert.get("dwell_time")
                     })
-
+                    
                     # 发送到后端
                     backend_alert = AIAnalysisResult(
                         camera_id=camera_id,
@@ -2065,7 +2143,7 @@ async def analyze_frame(
         except Exception as e:
             print(f"⚠️ 危险区域检测失败: {e}")
             # 不影响其他功能
-
+        
         total_time = (time.time() - start_time) * 1000
         results["performance_info"]["processing_time_ms"] = round(total_time, 1)
         results["performance_info"]["detection_count"] = len(results["detections"])
@@ -2074,16 +2152,24 @@ async def analyze_frame(
             "stabilized_faces": len(stabilized_face_results),
             "tracker_available": camera_id in object_trackers
         }
-
+        
         # 性能警告
         if total_time > 800:
             print(f"⚠️ 处理时间过长: {total_time:.1f}ms，建议使用 fast 模式")
         else:
             print(
                 f"⚡ {performance_mode}模式处理完成: {total_time:.1f}ms (Deep SORT追踪: {len(tracked_object_results)}个目标)")
-
+        
+        # 异步发送检测结果到WebSocket（不阻塞响应）
+        if results.get("detections"):
+            import threading
+            threading.Thread(
+                target=lambda: asyncio.run(send_detection_to_websocket(camera_id, results)), 
+                daemon=True
+            ).start()
+        
         return {"status": "success", "results": results}
-
+        
     except Exception as e:
         print(f"分析帧时发生错误: {e}")
         return {"status": "error", "message": f"分析失败: {str(e)}"}
@@ -2099,14 +2185,14 @@ async def start_webcam_stream(camera_id: str):
             if camera_id not in object_trackers:
                 object_trackers[camera_id] = DeepSORTTracker()
                 print(f"为网络摄像头 {camera_id} 初始化Deep SORT追踪器")
-
+            
             # 创建虚拟流处理器
             class WebcamProcessor:
                 def __init__(self, camera_id):
                     self.camera_id = camera_id
                     self.is_running = True
                     self.frame_count = 0
-
+                    
                 def get_status(self):
                     return {
                         "camera_id": self.camera_id,
@@ -2114,21 +2200,21 @@ async def start_webcam_stream(camera_id: str):
                         "type": "webcam",
                         "frame_count": self.frame_count
                     }
-
+                    
                 def stop(self):
                     self.is_running = False
-
+                    
                 def process_frame(self):
                     self.frame_count += 1
-
+            
             video_streams[camera_id] = WebcamProcessor(camera_id)
-
+        
         return {
             "status": "success",
             "message": f"网络摄像头流 {camera_id} 已启动",
             "camera_id": camera_id
         }
-
+        
     except Exception as e:
         return {"status": "error", "message": f"启动失败: {str(e)}"}
 
@@ -2140,20 +2226,20 @@ async def stop_webcam_stream(camera_id: str):
         if camera_id in video_streams:
             video_streams[camera_id].stop()
             del video_streams[camera_id]
-
+        
         # 清理该摄像头的Deep SORT追踪器实例
         if camera_id in object_trackers:
             object_trackers[camera_id].reset()
             del object_trackers[camera_id]
             print(f"已清理网络摄像头 {camera_id} 的Deep SORT追踪器")
-
+        
         # 清除该摄像头的检测缓存
         if camera_id in detection_cache:
             del detection_cache[camera_id]
             print(f"🧹 [{camera_id}] 已清除检测缓存")
-
+            
         return {"status": "success", "message": f"网络摄像头流 {camera_id} 已停止并清除缓存"}
-
+            
     except Exception as e:
         return {"status": "error", "message": f"停止失败: {str(e)}"}
 
@@ -2186,7 +2272,7 @@ async def get_performance_tips():
     """获取性能优化建议"""
     try:
         tips = []
-
+        
         # 检查检测器状态
         if "object" in detectors:
             tips.append({
@@ -2194,26 +2280,26 @@ async def get_performance_tips():
                 "title": "并行目标检测",
                 "description": "已启用高性能并行处理，图像自动缩放至60%，检测速度提升3-5倍"
             })
-
+        
         if "face" in detectors:
             tips.append({
-                "type": "success",
+                "type": "success", 
                 "title": "优化人脸识别",
                 "description": "并行处理+图像缩放至50%，低分辨率自动跳过，最多处理3个人脸"
             })
-
+            
         tips.append({
             "type": "success",
             "title": "轻量级稳定化",
             "description": "采用O(n+m)快速匹配算法，中心点距离计算，内存泄漏防护"
         })
-
+        
         tips.append({
             "type": "info",
             "title": "性能建议",
             "description": "如果仍然延迟较高，建议：1)降低前端发送频率 2)关闭人脸识别 3)使用更小的图像尺寸"
         })
-
+            
         tips.extend([
             {
                 "type": "success",
@@ -2226,20 +2312,20 @@ async def get_performance_tips():
                 "description": "前端已启用帧差检测、动态画质调整和智能跳帧机制"
             }
         ])
-
+        
         return {
             "status": "success",
             "tips": tips,
             "performance_mode": "high_performance",
             "optimizations": [
                 "动态检测阈值",
-                "结果数量限制",
+                "结果数量限制", 
                 "低分辨率跳过",
                 "异步后端通信",
                 "错误容错机制"
             ]
         }
-
+        
     except Exception as e:
         return {"status": "error", "message": f"获取性能信息失败: {str(e)}"}
 
@@ -2253,7 +2339,7 @@ async def get_performance_stats():
             "detector_status": {},
             "optimization_status": "high_performance_mode"
         }
-
+        
         # 缓存统计
         for camera_id, cache_data in detection_cache.items():
             if isinstance(cache_data, dict) and "objects" in cache_data:
@@ -2261,22 +2347,22 @@ async def get_performance_stats():
                     "cached_objects": len(cache_data["objects"]),
                     "types": {}
                 }
-
+                
                 # 按类型统计
                 for obj_data in cache_data["objects"].values():
                     obj_type = obj_data.get("type", "unknown")
                     if obj_type not in stats["cache_info"][camera_id]["types"]:
                         stats["cache_info"][camera_id]["types"][obj_type] = 0
                     stats["cache_info"][camera_id]["types"][obj_type] += 1
-
+        
         # 检测器状态
         stats["detector_status"] = {
             "object_detection": "parallel_enabled" if "object" in detectors else "disabled",
-            "face_recognition": "adaptive_scaling_enabled" if "face" in detectors else "disabled",
+            "face_recognition": "adaptive_scaling_enabled" if "face" in detectors else "disabled", 
             "behavior_detection": "enabled" if "behavior" in detectors else "disabled",
             "acoustic_detection": "enabled" if "acoustic" in detectors else "disabled"
         }
-
+        
         # 优化特性
         stats["performance_features"] = {
             "parallel_processing": True,
@@ -2287,9 +2373,9 @@ async def get_performance_stats():
             "async_backend_communication": True,
             "smart_caching": True
         }
-
+        
         return {"status": "success", "stats": stats}
-
+        
     except Exception as e:
         return {"status": "error", "message": f"获取性能统计失败: {str(e)}"}
 
@@ -2319,17 +2405,17 @@ async def get_face_tracking_debug(camera_id: str):
                 "连续检测优先级"
             ]
         }
-
+        
         current_time = time.time()
-
+        
         # 获取人脸缓存和历史信息
         if camera_id in detection_cache:
             cache_data = detection_cache[camera_id]
-
+            
             if "objects" in cache_data:
                 cache = cache_data["objects"]
                 face_objects = {k: v for k, v in cache.items() if v.get("type") == "face"}
-
+                
                 for obj_id, obj_data in face_objects.items():
                     time_since_last_seen = current_time - obj_data["last_seen"]
                     debug_info["face_cache"][obj_id] = {
@@ -2344,10 +2430,10 @@ async def get_face_tracking_debug(camera_id: str):
                         "first_seen": obj_data.get("first_seen", obj_data["last_seen"]),
                         "has_predicted_bbox": "predicted_bbox" in obj_data
                     }
-
+            
             if "face_history" in cache_data:
                 face_history = cache_data["face_history"]
-
+                
                 for obj_id, history in face_history.items():
                     if obj_id in debug_info["face_cache"]:
                         debug_info["face_history"][obj_id] = {
@@ -2356,26 +2442,26 @@ async def get_face_tracking_debug(camera_id: str):
                             "latest_timestamps": history.get("timestamps", [])[-3:],
                             "has_motion_data": len(history.get("positions", [])) >= 2
                         }
-
+                        
                         # 计算运动速度
                         if len(history.get("positions", [])) >= 2:
                             pos1 = history["positions"][-2]
                             pos2 = history["positions"][-1]
                             time1 = history["timestamps"][-2]
                             time2 = history["timestamps"][-1]
-
+                            
                             if time2 - time1 > 0:
                                 vx = (pos2[0] - pos1[0]) / (time2 - time1)
                                 vy = (pos2[1] - pos1[1]) / (time2 - time1)
                                 speed = (vx ** 2 + vy ** 2) ** 0.5
                                 debug_info["face_history"][obj_id]["motion_speed"] = round(speed, 2)
                                 debug_info["face_history"][obj_id]["motion_vector"] = [round(vx, 2), round(vy, 2)]
-
+        
         # 统计信息
         face_count = len(debug_info["face_cache"])
         active_faces = len([f for f in debug_info["face_cache"].values() if f["status"] == "active"])
         missing_faces = len([f for f in debug_info["face_cache"].values() if f["status"] == "missing"])
-
+        
         debug_info["statistics"] = {
             "total_faces": face_count,
             "active_faces": active_faces,
@@ -2383,9 +2469,9 @@ async def get_face_tracking_debug(camera_id: str):
             "face_history_count": len(debug_info["face_history"]),
             "system_status": "高级人脸持续跟踪已启用"
         }
-
+        
         return {"status": "success", "debug_info": debug_info}
-
+        
     except Exception as e:
         return {"status": "error", "message": f"获取调试信息失败: {str(e)}"}
 
@@ -2397,11 +2483,11 @@ async def recommend_performance_mode():
         # 分析系统性能
         import psutil
         import threading
-
+        
         # CPU和内存状态
         cpu_percent = psutil.cpu_percent(interval=1)
         memory = psutil.virtual_memory()
-
+        
         # GPU检测（如果可用）
         try:
             import GPUtil
@@ -2411,7 +2497,7 @@ async def recommend_performance_mode():
         except:
             gpu_available = False
             gpu_memory_free = 0
-
+        
         # 基于系统状态推荐模式
         if cpu_percent > 80 or memory.percent > 85:
             recommended_mode = "fast"
@@ -2422,7 +2508,7 @@ async def recommend_performance_mode():
         else:
             recommended_mode = "balanced"
             reason = "系统性能适中，建议使用平衡模式"
-
+        
         # 性能建议
         tips = []
         if cpu_percent > 70:
@@ -2431,7 +2517,7 @@ async def recommend_performance_mode():
             tips.append("增加更多内存或关闭其他应用")
         if not gpu_available:
             tips.append("使用GPU可以显著提升AI处理性能")
-
+        
         return {
             "recommended_mode": recommended_mode,
             "reason": reason,
@@ -2449,7 +2535,7 @@ async def recommend_performance_mode():
                 "quality": "质量模式：全功能并行，追求最佳检测效果，适合高性能设备"
             }
         }
-
+        
     except Exception as e:
         return {
             "recommended_mode": "balanced",
@@ -2464,7 +2550,7 @@ async def get_performance_guide():
     return {
         "title": "SmartEye 摄像头监控性能优化指南",
         "overview": "针对同时开启多个检测功能导致卡顿的解决方案",
-
+        
         "performance_modes": {
             "fast": {
                 "name": "极速模式",
@@ -2479,7 +2565,7 @@ async def get_performance_guide():
                 "expected_improvement": "延迟降低70-80%，CPU使用率减少60%",
                 "best_for": ["低配置设备", "高负载系统", "网络摄像头", "实时监控优先"]
             },
-
+            
             "balanced": {
                 "name": "平衡模式",
                 "description": "智能策略，兼顾性能和检测质量",
@@ -2493,7 +2579,7 @@ async def get_performance_guide():
                 "expected_improvement": "延迟降低40-50%，质量损失<10%",
                 "best_for": ["大多数应用场景", "中等配置设备", "稳定监控环境"]
             },
-
+            
             "quality": {
                 "name": "质量模式",
                 "description": "追求最佳检测效果，适合高性能设备",
@@ -2508,7 +2594,7 @@ async def get_performance_guide():
                 "best_for": ["高性能设备", "关键监控区域", "GPU加速环境"]
             }
         },
-
+        
         "usage_instructions": {
             "api_call": {
                 "endpoint": "/frame/analyze/",
@@ -2523,7 +2609,7 @@ async def get_performance_guide():
                     }
                 }
             },
-
+            
             "frontend_integration": {
                 "step1": "调用 /performance/mode/recommend/ 获取系统推荐模式",
                 "step2": "在前端添加性能模式选择器",
@@ -2531,7 +2617,7 @@ async def get_performance_guide():
                 "step4": "监控performance_info中的处理时间和检测数量"
             }
         },
-
+        
         "optimization_tips": {
             "hardware": [
                 "💻 使用SSD硬盘提升I/O性能",
@@ -2539,14 +2625,14 @@ async def get_performance_guide():
                 "🎮 使用支持CUDA的GPU加速",
                 "🌡️ 确保良好的散热避免CPU降频"
             ],
-
+            
             "software": [
                 "🔄 关闭不必要的后台程序",
                 "📱 降低摄像头分辨率到720p或480p",
                 "⏱️ 增加前端检测间隔到500ms以上",
                 "🎯 仅启用必要的检测功能"
             ],
-
+            
             "network": [
                 "📡 使用有线网络代替WiFi",
                 "⚡ 确保足够的网络带宽",
@@ -2554,7 +2640,7 @@ async def get_performance_guide():
                 "📊 启用网络压缩"
             ]
         },
-
+        
         "monitoring": {
             "key_metrics": [
                 "processing_time_ms: 每帧处理时间（目标<300ms）",
@@ -2562,21 +2648,21 @@ async def get_performance_guide():
                 "cpu_usage: CPU使用率（目标<70%）",
                 "memory_usage: 内存使用率（目标<80%）"
             ],
-
+            
             "warning_signs": [
                 "⚠️ 处理时间>800ms：建议切换到fast模式",
                 "🔥 CPU使用率>85%：关闭其他程序或降低检测频率",
                 "💾 内存使用率>90%：重启服务或增加内存",
                 "📱 前端卡顿：增加检测间隔或降低分辨率"
             ],
-
+            
             "debug_endpoints": [
                 "GET /performance/stats/ - 获取详细性能统计",
                 "GET /performance/mode/recommend/ - 获取推荐性能模式",
                 "POST /detection/cache/clear/all - 清理所有缓存释放内存"
             ]
         },
-
+        
         "troubleshooting": {
             "common_issues": {
                 "卡顿严重": {
@@ -2605,7 +2691,7 @@ async def get_performance_guide():
                 }
             }
         },
-
+        
         "quick_start": {
             "step1": "调用 /performance/mode/recommend/ 获取推荐模式",
             "step2": "在API调用中添加 performance_mode 参数",
@@ -2617,33 +2703,33 @@ async def get_performance_guide():
 
 @app.post("/detection/stabilization/config/")
 async def configure_stabilization(
-        camera_id: str = Body(...),
-        face_smooth_factor: float = Body(default=0.92),
-        object_smooth_factor: float = Body(default=0.88),
-        face_match_threshold: int = Body(default=120),
-        object_match_threshold: int = Body(default=60),
-        jitter_detection_threshold: int = Body(default=30),
-        max_size_change_ratio: float = Body(default=0.2)
+    camera_id: str = Body(...),
+    face_smooth_factor: float = Body(default=0.92),
+    object_smooth_factor: float = Body(default=0.88),
+    face_match_threshold: int = Body(default=120),
+    object_match_threshold: int = Body(default=60),
+    jitter_detection_threshold: int = Body(default=30),
+    max_size_change_ratio: float = Body(default=0.2)
 ):
     """配置检测框稳定化参数 - 解决抖动问题"""
-
+    
     # 参数验证
     if not (0.5 <= face_smooth_factor <= 0.99):
         return {"status": "error", "message": "人脸平滑因子必须在0.5-0.99之间"}
-
+    
     if not (0.5 <= object_smooth_factor <= 0.99):
         return {"status": "error", "message": "目标平滑因子必须在0.5-0.99之间"}
-
+    
     if not (30 <= face_match_threshold <= 300):
         return {"status": "error", "message": "人脸匹配阈值必须在30-300像素之间"}
-
+    
     if not (20 <= object_match_threshold <= 200):
         return {"status": "error", "message": "目标匹配阈值必须在20-200像素之间"}
-
+    
     # 全局配置存储
     if not hasattr(configure_stabilization, 'config'):
         configure_stabilization.config = {}
-
+    
     configure_stabilization.config[camera_id] = {
         "face_smooth_factor": face_smooth_factor,
         "object_smooth_factor": object_smooth_factor,
@@ -2653,7 +2739,7 @@ async def configure_stabilization(
         "max_size_change_ratio": max_size_change_ratio,
         "updated_at": datetime.now().isoformat()
     }
-
+    
     return {
         "status": "success",
         "message": f"摄像头 {camera_id} 的稳定化参数已更新",
@@ -2681,10 +2767,10 @@ async def configure_stabilization(
 @app.get("/detection/stabilization/config/{camera_id}")
 async def get_stabilization_config(camera_id: str):
     """获取当前的稳定化配置"""
-
+    
     if not hasattr(configure_stabilization, 'config'):
         configure_stabilization.config = {}
-
+    
     if camera_id in configure_stabilization.config:
         config = configure_stabilization.config[camera_id]
     else:
@@ -2698,7 +2784,7 @@ async def get_stabilization_config(camera_id: str):
             "max_size_change_ratio": 0.2,
             "updated_at": "默认配置"
         }
-
+    
     return {
         "camera_id": camera_id,
         "config": config,
@@ -2720,11 +2806,11 @@ async def get_stabilization_config(camera_id: str):
 
 @app.post("/detection/stabilization/preset/{preset_name}")
 async def apply_stabilization_preset(
-        preset_name: str,
-        camera_id: str = Body(...)
+    preset_name: str,
+    camera_id: str = Body(...)
 ):
     """应用预设的稳定化配置 - 快速解决抖动问题"""
-
+    
     presets = {
         "anti_flicker": {
             "name": "🚨 超强防闪烁模式",
@@ -2775,7 +2861,7 @@ async def apply_stabilization_preset(
             }
         },
         "responsive": {
-            "name": "响应模式",
+            "name": "响应模式", 
             "description": "优先响应速度，轻度稳定化",
             "config": {
                 "face_smooth_factor": 0.80,
@@ -2799,31 +2885,31 @@ async def apply_stabilization_preset(
             }
         }
     }
-
+    
     if preset_name not in presets:
         available = ", ".join(presets.keys())
         return {
-            "status": "error",
+            "status": "error", 
             "message": f"预设 '{preset_name}' 不存在",
             "available_presets": available
         }
-
+    
     preset = presets[preset_name]
-
+    
     # 应用配置
     if not hasattr(configure_stabilization, 'config'):
         configure_stabilization.config = {}
-
+    
     config = preset["config"].copy()
     config["updated_at"] = datetime.now().isoformat()
     config["preset_name"] = preset_name
-
+    
     configure_stabilization.config[camera_id] = config
-
+    
     # 清理当前缓存，让新配置立即生效
     if camera_id in detection_cache:
         detection_cache[camera_id] = {"objects": {}, "face_history": {}}
-
+    
     return {
         "status": "success",
         "message": f"已应用 '{preset['name']}' 配置到摄像头 {camera_id}",
@@ -2845,7 +2931,7 @@ async def apply_stabilization_preset(
 @app.get("/detection/stabilization/presets/")
 async def list_stabilization_presets():
     """获取所有可用的稳定化预设"""
-
+    
     presets = {
         "anti_flicker": {
             "name": "🚨 超强防闪烁模式",
@@ -2860,7 +2946,7 @@ async def list_stabilization_presets():
             "trade_offs": "可能增加10-20ms延迟"
         },
         "ultra_stable": {
-            "name": "超稳定模式",
+            "name": "超稳定模式", 
             "description": "最强稳定化，适合静态场景监控",
             "best_for": ["静态监控", "高精度要求", "稳定环境"],
             "trade_offs": "响应稍慢，适合静态场景"
@@ -2873,7 +2959,7 @@ async def list_stabilization_presets():
         },
         "responsive": {
             "name": "响应模式",
-            "description": "优先响应速度，轻度稳定化",
+            "description": "优先响应速度，轻度稳定化", 
             "best_for": ["快速移动", "实时互动", "低延迟要求"],
             "trade_offs": "可能有轻微抖动"
         },
@@ -2884,7 +2970,7 @@ async def list_stabilization_presets():
             "trade_offs": "可根据具体需求调整"
         }
     }
-
+    
     return {
         "available_presets": presets,
         "usage": {
@@ -2895,7 +2981,7 @@ async def list_stabilization_presets():
         "recommendations": {
             "框一闪一闪": "anti_flicker",
             "严重抖动": "anti_jitter",
-            "偶尔抖动": "balanced",
+            "偶尔抖动": "balanced", 
             "追求稳定": "ultra_stable",
             "追求速度": "responsive"
         }
@@ -2906,17 +2992,17 @@ async def list_stabilization_presets():
 async def apply_anti_flicker_all_cameras():
     """🚨 一键应用防闪烁配置到所有摄像头"""
     applied_cameras = []
-
+    
     # 获取所有活跃的摄像头
     active_cameras = list(video_streams.keys())
     if not active_cameras:
         active_cameras = ["default"]  # 如果没有活跃摄像头，应用到默认配置
-
+    
     # 为每个摄像头应用防闪烁配置
     for camera_id in active_cameras:
         if not hasattr(configure_stabilization, 'config'):
             configure_stabilization.config = {}
-
+        
         # 应用超强防闪烁配置
         anti_flicker_config = {
             "face_smooth_factor": 0.97,
@@ -2928,15 +3014,15 @@ async def apply_anti_flicker_all_cameras():
             "updated_at": datetime.now().isoformat(),
             "preset_name": "anti_flicker"
         }
-
+        
         configure_stabilization.config[camera_id] = anti_flicker_config
-
+        
         # 清理缓存让配置立即生效
         if camera_id in detection_cache:
             detection_cache[camera_id] = {"objects": {}, "face_history": {}}
-
+        
         applied_cameras.append(camera_id)
-
+    
     return {
         "status": "success",
         "message": "🚨 已对所有摄像头应用超强防闪烁配置！",
@@ -2962,31 +3048,31 @@ async def check_identity_stabilization_status():
     """🎯 检查人脸身份稳定化系统状态"""
     total_cameras = len(detection_cache)
     active_streams = len(video_streams)
-
+    
     # 统计身份稳定化信息
     total_faces = 0
     stable_identities = 0
     identity_changes = 0
-
+    
     for camera_id, cache_data in detection_cache.items():
         face_history = cache_data.get("face_history", {})
-
+        
         for face_id, history_data in face_history.items():
             total_faces += 1
             identity_history = history_data.get("identity_history", [])
-
+            
             if len(identity_history) >= 3:  # 有足够历史记录
                 stable_identities += 1
-
+                
             # 统计身份变化次数
             last_change_time = history_data.get("last_change_time", 0)
             if time.time() - last_change_time < 10:  # 10秒内有变化
                 identity_changes += 1
-
+    
     return {
         "status": "active",
         "message": "🎯 人脸身份稳定化系统运行正常",
-
+        
         "system_stats": {
             "监控摄像头数量": total_cameras,
             "活跃视频流": active_streams,
@@ -2994,7 +3080,7 @@ async def check_identity_stabilization_status():
             "稳定身份数": stable_identities,
             "近期身份变化": identity_changes
         },
-
+        
         "stabilization_features": {
             "✅ 检测框防闪烁": "97% 超强平滑处理",
             "✅ 身份投票机制": "70% 投票阈值，防止误切换",
@@ -3004,16 +3090,16 @@ async def check_identity_stabilization_status():
             "✅ 逐渐淡出": "人脸消失时逐渐降低置信度",
             "✅ 智能缓存": "25个对象缓存，防止频繁删除"
         },
-
+        
         "current_settings": {
             "身份变化阈值": "70%",
             "置信度差异要求": "15%",
-            "最小稳定帧数": "3帧",
+            "最小稳定帧数": "3帧", 
             "历史记录长度": "10次",
             "检测框平滑": "97%",
             "闪烁检测阈值": "15像素"
         },
-
+        
         "quick_actions": {
             "应用超强防闪烁": "POST /detection/anti_flicker/apply/",
             "查看调试信息": "GET /debug/face_tracking/{camera_id}",
@@ -3029,7 +3115,7 @@ async def get_anti_jitter_status():
         "anti_jitter_enabled": True,
         "status": "自动启用",
         "description": "抗抖动功能已默认启用，无需手动操作",
-
+        
         "automatic_features": {
             "智能检测": "自动检测检测框抖动现象",
             "自适应平滑": "抖动时自动增强平滑处理到97%",
@@ -3037,52 +3123,52 @@ async def get_anti_jitter_status():
             "尺寸稳定": "限制框尺寸突变，保持稳定性",
             "实时调整": "根据检测情况实时调整参数"
         },
-
+        
         "default_settings": {
             "人脸平滑因子": "95% (检测到抖动时自动提升到97%)",
-            "目标平滑因子": "92% (检测到抖动时自动提升到95%)",
+            "目标平滑因子": "92% (检测到抖动时自动提升到95%)", 
             "抖动检测阈值": "20像素 (人脸) / 25像素 (目标)",
             "匹配严格度": "100像素 (人脸) / 50像素 (目标)",
             "尺寸变化限制": "15% (避免突然的尺寸跳变)"
         },
-
+        
         "performance_impact": {
             "延迟增加": "约5-10ms",
             "稳定性提升": "90%+",
             "抖动减少": "95%+",
             "CPU开销": "几乎无影响"
         },
-
+        
         "monitoring": {
             "抖动检测日志": "终端会显示 '🛡️ 检测到抖动' 信息",
             "自动调整提示": "显示何时启用强化平滑处理",
             "跟踪ID状态": "显示每个目标的跟踪连续性"
         },
-
+        
         "if_still_jittering": {
             "step1": "检查终端日志，确认是否检测到抖动",
             "step2": "尝试应用 'ultra_stable' 预设: POST /detection/stabilization/preset/ultra_stable",
             "step3": "检查摄像头安装是否稳固",
             "step4": "确保光照条件稳定"
         },
-
+        
         "message": "✅ 抗抖动功能已自动启用并运行，您的检测框会自动保持稳定！"
     }
 
 
 @app.post("/face/sensitivity/adjust/")
 async def adjust_face_recognition_sensitivity(
-        tolerance: float = Body(default=0.6, description="人脸识别容忍度 (0.3-0.8, 越大越宽松)"),
-        detection_model: str = Body(default="auto", description="检测模型 (auto/cnn/hog)"),
-        enable_multi_scale: bool = Body(default=True, description="是否启用多尺度检测"),
-        min_face_size: int = Body(default=50, description="最小人脸尺寸 (像素)")
+    tolerance: float = Body(default=0.6, description="人脸识别容忍度 (0.3-0.8, 越大越宽松)"),
+    detection_model: str = Body(default="auto", description="检测模型 (auto/cnn/hog)"),
+    enable_multi_scale: bool = Body(default=True, description="是否启用多尺度检测"),
+    min_face_size: int = Body(default=50, description="最小人脸尺寸 (像素)")
 ):
     """
     🎯 调整人脸识别灵敏度和检测参数
-
+    
     Parameters:
     - tolerance: 识别容忍度，0.3(严格) - 0.8(宽松)
-    - detection_model: auto(自动选择)/cnn(高精度)/hog(高速度)
+    - detection_model: auto(自动选择)/cnn(高精度)/hog(高速度)  
     - enable_multi_scale: 是否启用多尺度检测
     - min_face_size: 最小人脸尺寸，过小的人脸将被过滤
     """
@@ -3090,10 +3176,10 @@ async def adjust_face_recognition_sensitivity(
         # 验证参数范围
         if not (0.3 <= tolerance <= 0.8):
             return {"status": "error", "message": "tolerance 必须在 0.3-0.8 范围内"}
-
+        
         if detection_model not in ["auto", "cnn", "hog"]:
             return {"status": "error", "message": "detection_model 必须是 auto/cnn/hog 之一"}
-
+        
         # 保存全局配置
         global face_recognition_config
         face_recognition_config = {
@@ -3103,30 +3189,30 @@ async def adjust_face_recognition_sensitivity(
             "min_face_size": min_face_size,
             "updated_at": datetime.now().isoformat()
         }
-
+        
         print(f"🎯 人脸识别灵敏度已调整:")
         print(f"  - 容忍度: {tolerance}")
         print(f"  - 检测模型: {detection_model}")
         print(f"  - 多尺度检测: {enable_multi_scale}")
         print(f"  - 最小人脸尺寸: {min_face_size}px")
-
+        
         # 清除人脸检测缓存，让新设置生效
         for camera_id in list(detection_cache.keys()):
             if "face_history" in detection_cache[camera_id]:
                 detection_cache[camera_id]["face_history"].clear()
                 print(f"🧹 已清除摄像头 {camera_id} 的人脸缓存")
-
+        
         return {
             "status": "success",
             "message": "人脸识别灵敏度已成功调整",
             "config": face_recognition_config,
             "recommendations": {
                 "high_accuracy": "tolerance=0.4, model=cnn",
-                "balanced": "tolerance=0.6, model=auto",
+                "balanced": "tolerance=0.6, model=auto", 
                 "high_sensitivity": "tolerance=0.7, model=hog"
             }
         }
-
+        
     except Exception as e:
         return {"status": "error", "message": f"调整失败: {str(e)}"}
 
@@ -3141,7 +3227,7 @@ async def get_face_recognition_sensitivity():
             "enable_multi_scale": True,
             "min_face_size": 40
         })
-
+        
         return {
             "status": "success",
             "current_config": config,
@@ -3152,20 +3238,20 @@ async def get_face_recognition_sensitivity():
             },
             "sensitivity_guide": {
                 "0.3-0.4": "严格模式 - 高精度，可能漏检相似人脸",
-                "0.5-0.6": "平衡模式 - 推荐设置",
+                "0.5-0.6": "平衡模式 - 推荐设置", 
                 "0.7-0.8": "宽松模式 - 高检测率，可能误识别"
             }
         }
-
+        
     except Exception as e:
         return {"status": "error", "message": f"获取配置失败: {str(e)}"}
 
 
 @app.post("/face/detection/test/")
 async def test_face_detection_with_config(
-        frame: UploadFile = File(...),
-        tolerance: float = Body(default=None),
-        detection_model: str = Body(default=None)
+    frame: UploadFile = File(...),
+    tolerance: float = Body(default=None),
+    detection_model: str = Body(default=None)
 ):
     """
     🧪 测试人脸检测效果
@@ -3176,27 +3262,27 @@ async def test_face_detection_with_config(
         image_bytes = await frame.read()
         nparr = np.frombuffer(image_bytes, np.uint8)
         test_frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-
+        
         if test_frame is None:
             return {"status": "error", "message": "无法解析图片"}
-
+        
         # 使用指定参数或当前配置
         test_tolerance = tolerance or getattr(globals(), 'face_recognition_config', {}).get('tolerance', 0.65)
         test_model = detection_model or getattr(globals(), 'face_recognition_config', {}).get('detection_model', 'auto')
-
+        
         if "face" not in detectors:
             return {"status": "error", "message": "人脸识别器未初始化"}
-
+        
         # 执行检测
         start_time = time.time()
         results = detectors["face"].detect_and_recognize(test_frame, tolerance=test_tolerance)
         detection_time = (time.time() - start_time) * 1000
-
+        
         # 统计结果
         total_faces = len(results)
         known_faces = sum(1 for r in results if r["identity"]["known"])
         unknown_faces = total_faces - known_faces
-
+        
         return {
             "status": "success",
             "test_results": {
@@ -3220,7 +3306,7 @@ async def test_face_detection_with_config(
                 for i, result in enumerate(results)
             ]
         }
-
+        
     except Exception as e:
         return {"status": "error", "message": f"测试失败: {str(e)}"}
 
@@ -3244,7 +3330,7 @@ async def optimize_face_recognition_for_sensitivity():
     """
     try:
         global face_recognition_config
-
+        
         # 应用高灵敏度设置
         face_recognition_config = {
             "tolerance": 0.65,  # 提高容忍度
@@ -3253,24 +3339,24 @@ async def optimize_face_recognition_for_sensitivity():
             "min_face_size": 40,  # 降低最小人脸尺寸
             "updated_at": datetime.now().isoformat()
         }
-
+        
         # 清除所有人脸缓存
         cleared_cameras = []
         for camera_id in list(detection_cache.keys()):
             if camera_id in detection_cache and "face_history" in detection_cache[camera_id]:
                 detection_cache[camera_id]["face_history"].clear()
                 cleared_cameras.append(camera_id)
-
+        
         print("🚀 人脸识别已优化为高灵敏度模式!")
         print(f"📊 配置详情: tolerance={face_recognition_config['tolerance']}")
         print(f"🧹 已清除 {len(cleared_cameras)} 个摄像头的人脸缓存")
-
+        
         return {
             "status": "success",
             "message": "🎯 人脸识别灵敏度已优化!",
             "optimizations_applied": [
                 "✅ 提高识别容忍度到 0.65 (更宽松)",
-                "✅ 启用多尺度人脸检测",
+                "✅ 启用多尺度人脸检测", 
                 "✅ 降低最小人脸尺寸到 40px",
                 "✅ 启用 CNN + HOG 混合检测",
                 "✅ 简化识别验证逻辑",
@@ -3280,12 +3366,12 @@ async def optimize_face_recognition_for_sensitivity():
             "cleared_cache_cameras": cleared_cameras,
             "expected_improvements": [
                 "🎯 检测到更多小尺寸人脸",
-                "🎯 提高边缘情况下的识别率",
+                "🎯 提高边缘情况下的识别率", 
                 "🎯 减少漏检现象",
                 "🎯 更好的实时性能"
             ]
         }
-
+        
     except Exception as e:
         return {"status": "error", "message": f"优化失败: {str(e)}"}
 
@@ -3314,7 +3400,7 @@ async def get_face_recognition_improvements():
             ],
             "stabilization_improvements": [
                 "🛡️ 保持稳定化系统防止闪烁",
-                "🛡️ 身份切换需要多帧验证",
+                "🛡️ 身份切换需要多帧验证", 
                 "🛡️ 智能缓存清理机制"
             ]
         },
@@ -3335,15 +3421,15 @@ object_detection_config = {
 
 @app.post("/object/sensitivity/adjust/")
 async def adjust_object_detection_sensitivity(
-        confidence_threshold: float = Body(default=0.35, description="目标检测置信度阈值 (0.1-0.8, 越小越灵敏)"),
-        area_ratio_threshold: float = Body(default=0.9, description="最大面积比例阈值 (0.5-1.0)"),
-        special_class_threshold: float = Body(default=0.6, description="特殊类别置信度要求 (0.3-0.9)"),
-        enable_size_filter: bool = Body(default=True, description="是否启用尺寸过滤"),
-        enable_aspect_ratio_filter: bool = Body(default=True, description="是否启用宽高比过滤")
+    confidence_threshold: float = Body(default=0.35, description="目标检测置信度阈值 (0.1-0.8, 越小越灵敏)"),
+    area_ratio_threshold: float = Body(default=0.9, description="最大面积比例阈值 (0.5-1.0)"),
+    special_class_threshold: float = Body(default=0.6, description="特殊类别置信度要求 (0.3-0.9)"),
+    enable_size_filter: bool = Body(default=True, description="是否启用尺寸过滤"),
+    enable_aspect_ratio_filter: bool = Body(default=True, description="是否启用宽高比过滤")
 ):
     """
     🎯 调整目标检测灵敏度和过滤参数
-
+    
     Parameters:
     - confidence_threshold: 基础置信度阈值，越小越灵敏
     - area_ratio_threshold: 目标最大面积比例，防止检测整个画面
@@ -3355,13 +3441,13 @@ async def adjust_object_detection_sensitivity(
         # 验证参数范围
         if not (0.1 <= confidence_threshold <= 0.8):
             return {"status": "error", "message": "confidence_threshold 必须在 0.1-0.8 范围内"}
-
+        
         if not (0.5 <= area_ratio_threshold <= 1.0):
             return {"status": "error", "message": "area_ratio_threshold 必须在 0.5-1.0 范围内"}
-
+        
         if not (0.3 <= special_class_threshold <= 0.9):
             return {"status": "error", "message": "special_class_threshold 必须在 0.3-0.9 范围内"}
-
+        
         # 保存全局配置
         global object_detection_config
         object_detection_config = {
@@ -3372,14 +3458,14 @@ async def adjust_object_detection_sensitivity(
             "enable_aspect_ratio_filter": enable_aspect_ratio_filter,
             "updated_at": datetime.now().isoformat()
         }
-
+        
         print(f"🎯 目标检测灵敏度已调整:")
         print(f"  - 置信度阈值: {confidence_threshold}")
         print(f"  - 面积比例阈值: {area_ratio_threshold}")
         print(f"  - 特殊类别阈值: {special_class_threshold}")
         print(f"  - 尺寸过滤: {enable_size_filter}")
         print(f"  - 宽高比过滤: {enable_aspect_ratio_filter}")
-
+        
         # 清除目标检测缓存，让新设置生效
         for camera_id in list(detection_cache.keys()):
             if "objects" in detection_cache[camera_id]:
@@ -3388,18 +3474,18 @@ async def adjust_object_detection_sensitivity(
                     if object_cache[obj_id].get("type") != "face":
                         del object_cache[obj_id]
                 print(f"🧹 已清除摄像头 {camera_id} 的目标检测缓存")
-
+        
         return {
             "status": "success",
             "message": "目标检测灵敏度已成功调整",
             "config": object_detection_config,
             "recommendations": {
                 "高灵敏度": "confidence=0.25, area_ratio=0.9",
-                "平衡模式": "confidence=0.35, area_ratio=0.85",
+                "平衡模式": "confidence=0.35, area_ratio=0.85", 
                 "高精度": "confidence=0.5, area_ratio=0.8"
             }
         }
-
+        
     except Exception as e:
         return {"status": "error", "message": f"调整失败: {str(e)}"}
 
@@ -3415,7 +3501,7 @@ async def get_object_detection_sensitivity():
             "enable_size_filter": True,
             "enable_aspect_ratio_filter": True
         })
-
+        
         return {
             "status": "success",
             "current_config": config,
@@ -3430,7 +3516,7 @@ async def get_object_detection_sensitivity():
                 "higher_threshold": "更少误报，但可能漏检真实目标"
             }
         }
-
+        
     except Exception as e:
         return {"status": "error", "message": f"获取配置失败: {str(e)}"}
 
@@ -3443,7 +3529,7 @@ async def optimize_object_detection_for_sensitivity():
     """
     try:
         global object_detection_config
-
+        
         # 应用高灵敏度设置
         object_detection_config = {
             "confidence_threshold": 0.3,  # 高灵敏度阈值
@@ -3453,7 +3539,7 @@ async def optimize_object_detection_for_sensitivity():
             "enable_aspect_ratio_filter": False,  # 关闭宽高比过滤以提高检测率
             "updated_at": datetime.now().isoformat()
         }
-
+        
         # 清除所有目标检测缓存
         cleared_cameras = []
         for camera_id in list(detection_cache.keys()):
@@ -3463,11 +3549,11 @@ async def optimize_object_detection_for_sensitivity():
                     if object_cache[obj_id].get("type") != "face":
                         del object_cache[obj_id]
                 cleared_cameras.append(camera_id)
-
+        
         print("🚀 目标检测已优化为高灵敏度模式!")
         print(f"📊 配置详情: confidence={object_detection_config['confidence_threshold']}")
         print(f"🧹 已清除 {len(cleared_cameras)} 个摄像头的目标检测缓存")
-
+        
         return {
             "status": "success",
             "message": "🎯 目标检测灵敏度已优化!",
@@ -3487,7 +3573,7 @@ async def optimize_object_detection_for_sensitivity():
                 "🎯 更好的实时响应性"
             ]
         }
-
+        
     except Exception as e:
         return {"status": "error", "message": f"优化失败: {str(e)}"}
 
@@ -3500,7 +3586,7 @@ async def optimize_all_detection_sensitivity():
     """
     try:
         global object_detection_config, face_recognition_config
-
+        
         # 优化目标检测配置
         object_detection_config = {
             "confidence_threshold": 0.3,
@@ -3510,7 +3596,7 @@ async def optimize_all_detection_sensitivity():
             "enable_aspect_ratio_filter": False,
             "updated_at": datetime.now().isoformat()
         }
-
+        
         # 优化人脸识别配置
         face_recognition_config = {
             "tolerance": 0.7,  # 进一步提高到0.7获得最大灵敏度
@@ -3519,15 +3605,15 @@ async def optimize_all_detection_sensitivity():
             "min_face_size": 35,  # 进一步降低到35px
             "updated_at": datetime.now().isoformat()
         }
-
+        
         # 清除所有检测缓存
         cleared_cameras = []
         for camera_id in list(detection_cache.keys()):
             detection_cache[camera_id] = {"objects": {}, "face_history": {}}
             cleared_cameras.append(camera_id)
-
+        
         print("🚀 已对所有检测系统应用最高灵敏度配置!")
-
+        
         return {
             "status": "success",
             "message": "🎯 所有检测系统灵敏度已优化到最高!",
@@ -3555,7 +3641,7 @@ async def optimize_all_detection_sensitivity():
                 "🎯 更灵敏的人脸识别"
             ]
         }
-
+        
     except Exception as e:
         return {"status": "error", "message": f"全面优化失败: {str(e)}"}
 
@@ -3566,12 +3652,12 @@ async def optimize_all_detection_sensitivity():
 
 @app.post("/danger_zone/config/")
 async def configure_danger_zones(
-        camera_id: str = Body(...),
-        zones: List[Dict] = Body(...)
+    camera_id: str = Body(...),
+    zones: List[Dict] = Body(...)
 ):
     """
     配置摄像头的危险区域
-
+    
     Args:
         camera_id: 摄像头ID
         zones: 危险区域列表，格式:
@@ -3587,20 +3673,20 @@ async def configure_danger_zones(
     """
     try:
         danger_zone_detector.update_camera_zones(camera_id, zones)
-
+        
         print(f"✅ 摄像头 {camera_id} 危险区域配置已更新:")
         for zone in zones:
             print(f"  - {zone['name']}: {len(zone['coordinates'])}个顶点, "
                   f"距离阈值={zone.get('min_distance_threshold', 0)}px, "
                   f"停留阈值={zone.get('time_in_area_threshold', 0)}s")
-
+        
         return {
             "status": "success",
             "message": f"摄像头 {camera_id} 的危险区域配置已更新",
             "configured_zones": len(zones),
             "zones": zones
         }
-
+        
     except Exception as e:
         print(f"❌ 配置危险区域失败: {e}")
         return {"status": "error", "message": f"配置失败: {str(e)}"}
@@ -3612,7 +3698,7 @@ async def get_danger_zone_status(camera_id: str):
     try:
         status = danger_zone_detector.get_zone_status(camera_id)
         return {"status": "success", "data": status}
-
+        
     except Exception as e:
         return {"status": "error", "message": f"获取状态失败: {str(e)}"}
 
@@ -3623,7 +3709,7 @@ async def remove_danger_zone(camera_id: str, zone_id: str):
     try:
         danger_zone_detector.remove_danger_zone(camera_id, zone_id)
         return {"status": "success", "message": f"危险区域 {zone_id} 已移除"}
-
+        
     except Exception as e:
         return {"status": "error", "message": f"移除失败: {str(e)}"}
 
@@ -3633,10 +3719,10 @@ async def remove_danger_zone(camera_id: str, zone_id: str):
 async def process_face(request_data: dict):
     """
     处理上传的人脸图像，检测人脸并提取特征
-
+    
     请求体:
     - image: base64编码的图像数据
-
+    
     返回:
     - success: 处理是否成功
     - message: 处理结果信息
@@ -3648,31 +3734,31 @@ async def process_face(request_data: dict):
         image_data = base64.b64decode(request_data.get("image", ""))
         nparr = np.frombuffer(image_data, np.uint8)
         image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-
+        
         if image is None:
             return {"success": False, "message": "无法解码图像"}
-
+        
         # 使用OpenCV的人脸检测作为备选方案
         try:
             import face_recognition
             # 转换为RGB格式（face_recognition库要求）
             rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
+            
             # 检测人脸
             face_locations = face_recognition.face_locations(rgb_image, model="hog")
-
+            
             if not face_locations:
                 return {"success": False, "message": "未检测到人脸"}
-
+            
             if len(face_locations) > 1:
                 return {"success": False, "message": "检测到多个人脸，请确保图像中只有一个人脸"}
-
+            
             # 提取人脸特征
             face_encodings = face_recognition.face_encodings(rgb_image, face_locations)
-
+            
             if not face_encodings:
                 return {"success": False, "message": "无法提取人脸特征"}
-
+            
             # 返回处理结果
             return {
                 "success": True,
@@ -3685,33 +3771,33 @@ async def process_face(request_data: dict):
             face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
             faces = face_cascade.detectMultiScale(gray, 1.1, 4)
-
+            
             if len(faces) == 0:
                 return {"success": False, "message": "未检测到人脸"}
-
+            
             if len(faces) > 1:
                 return {"success": False, "message": "检测到多个人脸，请确保图像中只有一个人脸"}
-
+            
             # 使用OpenCV检测到的人脸坐标
             x, y, w, h = faces[0]
             face_location = (y, x + w, y + h, x)  # 转换为face_recognition格式 (top, right, bottom, left)
-
+            
             # 提取人脸区域并创建简单的特征向量
             face_roi = gray[y:y + h, x:x + w]
             face_roi = cv2.resize(face_roi, (128, 128))
             face_encoding = face_roi.flatten() / 255.0  # 简单归一化
-
+            
             # 只保留128个特征点以模拟face_recognition的输出
             if len(face_encoding) > 128:
                 face_encoding = face_encoding[:128]
-
+            
             return {
                 "success": True,
                 "message": "人脸处理成功 (使用OpenCV备选方案)",
                 "face_encoding": face_encoding.tolist(),
                 "face_location": face_location
             }
-
+            
     except Exception as e:
         return {"success": False, "message": f"处理人脸时出错: {str(e)}"}
 
@@ -3720,11 +3806,11 @@ async def process_face(request_data: dict):
 async def verify_face(request_data: dict):
     """
     验证上传的人脸图像与特定用户的人脸是否匹配
-
+    
     请求体:
     - image: base64编码的图像数据
     - user_id: 要验证的用户ID
-
+    
     返回:
     - success: 验证是否成功
     - matched: 是否匹配
@@ -3736,58 +3822,58 @@ async def verify_face(request_data: dict):
         image_data = base64.b64decode(request_data.get("image", ""))
         nparr = np.frombuffer(image_data, np.uint8)
         image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-
+        
         if image is None:
             return {"success": False, "message": "无法解码图像"}
-
+        
         # 获取用户ID
         user_id = request_data.get("user_id")
         if not user_id:
             return {"success": False, "message": "未提供用户ID"}
-
+        
         # 使用OpenCV的人脸检测作为备选方案
         try:
             import face_recognition
             # 转换为RGB格式
             rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
+            
             # 检测人脸
             face_locations = face_recognition.face_locations(rgb_image, model="hog")
-
+            
             if not face_locations:
                 return {"success": False, "message": "未检测到人脸"}
-
+            
             # 提取人脸特征
             face_encodings = face_recognition.face_encodings(rgb_image, face_locations)
-
+            
             if not face_encodings:
                 return {"success": False, "message": "无法提取人脸特征"}
-
+            
             # 查询数据库获取该用户的所有人脸编码
             api_url = f"http://localhost:8000/api/users/faces/user/{user_id}/encodings/"
-
+            
             try:
                 response = requests.get(api_url)
                 if response.status_code != 200:
                     return {"success": False, "message": "无法获取用户人脸数据"}
-
+                
                 stored_face_encodings = response.json().get("encodings", [])
-
+                
                 if not stored_face_encodings:
                     return {"success": False, "message": "用户没有注册人脸数据"}
-
+                
                 # 比对人脸
                 best_match = 1.0  # 初始化为最大距离
                 for stored_encoding in stored_face_encodings:
                     # 计算欧氏距离
                     distance = face_recognition.face_distance(
-                        [np.array(stored_encoding)],
+                        [np.array(stored_encoding)], 
                         face_encodings[0]
                     )[0]
-
+                    
                     if distance < best_match:
                         best_match = distance
-
+                
                 # 判断是否匹配（距离越小越匹配）
                 if best_match <= 0.6:  # 阈值可调整
                     confidence = 1.0 - best_match
@@ -3803,58 +3889,58 @@ async def verify_face(request_data: dict):
                         "matched": False,
                         "message": "人脸不匹配"
                     }
-
+                    
             except Exception as e:
                 return {"success": False, "message": f"验证过程中出错: {str(e)}"}
-
+                
         except (ImportError, NameError):
             # 如果face_recognition不可用，使用OpenCV的人脸检测
             face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
             faces = face_cascade.detectMultiScale(gray, 1.1, 4)
-
+            
             if len(faces) == 0:
                 return {"success": False, "message": "未检测到人脸"}
-
+            
             # 使用OpenCV检测到的人脸坐标
             x, y, w, h = faces[0]
-
+            
             # 提取人脸区域并创建简单的特征向量
             face_roi = gray[y:y + h, x:x + w]
             face_roi = cv2.resize(face_roi, (128, 128))
             face_encoding = face_roi.flatten() / 255.0  # 简单归一化
-
+            
             # 只保留128个特征点以模拟face_recognition的输出
             if len(face_encoding) > 128:
                 face_encoding = face_encoding[:128]
-
+            
             # 查询数据库获取该用户的所有人脸编码
             api_url = f"http://localhost:8000/api/users/faces/user/{user_id}/encodings/"
-
+            
             try:
                 response = requests.get(api_url)
                 if response.status_code != 200:
                     return {"success": False, "message": "无法获取用户人脸数据"}
-
+                
                 stored_face_encodings = response.json().get("encodings", [])
-
+                
                 if not stored_face_encodings:
                     return {"success": False, "message": "用户没有注册人脸数据"}
-
+                
                 # 使用简单的欧氏距离进行比较
                 best_match = 1.0
                 for stored_encoding in stored_face_encodings:
                     stored_array = np.array(stored_encoding)
                     if len(stored_array) != len(face_encoding):
                         continue
-
+                    
                     # 计算欧氏距离
                     distance = np.linalg.norm(stored_array - face_encoding)
                     distance = distance / np.sqrt(len(face_encoding))  # 归一化
-
+                    
                     if distance < best_match:
                         best_match = distance
-
+                
                 # 判断是否匹配（距离越小越匹配）
                 threshold = 0.4  # OpenCV特征向量的阈值需要调整
                 if best_match <= threshold:
@@ -3871,15 +3957,15 @@ async def verify_face(request_data: dict):
                         "matched": False,
                         "message": "人脸不匹配 (使用OpenCV备选方案)"
                     }
-
+                    
             except Exception as e:
                 return {"success": False, "message": f"验证过程中出错: {str(e)}"}
-
+            
     except Exception as e:
         return {"success": False, "message": f"处理人脸时出错: {str(e)}"}
 
 
-@app.post("/stream/test/")  # 添加末尾斜杠
+@app.post("/stream/test/")
 async def test_stream_connection(
     url: str = Body(...),
     type: str = Body(...)
@@ -3887,23 +3973,13 @@ async def test_stream_connection(
     """测试视频流连接是否可用"""
     try:
         print(f"正在测试视频流连接: {url} (类型: {type})")
-        
-        # 创建临时视频流实例
-        stream = VideoStream(url)
-        
-        # 测试连接
+        stream = VideoStream(stream_url=url)
         is_available = await stream.test_connection()
-        
-        if is_available:
-            print(f"视频流连接测试成功: {url}")
-            return {"status": "success", "message": "视频流连接测试成功"}
-        else:
-            print(f"无法连接到视频流: {url}")
-            return {"status": "error", "message": "无法连接到视频流"}
-            
+        return {"status": "success" if is_available else "error",
+                "message": "视频流可用" if is_available else "无法连接到视频流"}
     except Exception as e:
         print(f"测试视频流连接失败: {str(e)}")
-        return {"status": "error", "message": f"测试失败: {str(e)}"}
+        return {"status": "error", "message": str(e)}
 
 
 if __name__ == "__main__":

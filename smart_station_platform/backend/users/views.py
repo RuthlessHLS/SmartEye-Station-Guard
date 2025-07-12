@@ -239,30 +239,47 @@ class GenerateCaptchaView(APIView):
     permission_classes = [permissions.AllowAny]
 
     def get(self, request, *args, **kwargs):
-        # 1. 调用辅助函数生成图片数据
-        image_data = create_captcha_images()
+        try:
+            # 1. 调用辅助函数生成图片数据
+            image_data = create_captcha_images()
+            if not image_data or not all(key in image_data for key in ['background_base64', 'slider_base64', 'position_x', 'position_y']):
+                return Response(
+                    {'error': '验证码生成失败：数据格式错误'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
 
-        # 2. 生成唯一的 key 并将正确答案存入缓存
-        captcha_key = str(uuid.uuid4())
+            # 2. 生成唯一的验证码密钥
+            captcha_key = str(uuid.uuid4())
 
-        # 3. 将包含位置和时间戳的字典存入缓存
-        cache_data = {
-            'position': image_data['position_x'],
-            'timestamp': time.time()  # 记录当前时间的 Unix 时间戳
-        }
+            # 3. 准备缓存数据
+            cache_data = {
+                'position': image_data['position_x'],
+                'timestamp': time.time(),
+            }
 
-        # 将数据存入缓存，有效期 5 分钟 (300秒)
-        cache.set(f"captcha:{captcha_key}", cache_data, timeout=300)
+            # 4. 将验证码数据存入缓存（5分钟过期）
+            cache_key = f"captcha:{captcha_key}"
+            cache.set(cache_key, cache_data, timeout=300)
 
-        # 4. 准备返回给前端的数据
-        response_data = {
-            "captcha_key": captcha_key,
-            "background_image": f"data:image/png;base64,{image_data['background_base64']}",
-            "slider_image": f"data:image/png;base64,{image_data['slider_base64']}",
-            "slider_y": image_data['position_y']  # 滑块的 y 坐标，用于前端定位
-        }
+            # 5. 准备响应数据
+            response_data = {
+                'background_image': f"data:image/png;base64,{image_data['background_base64']}",
+                'slider_image': f"data:image/png;base64,{image_data['slider_base64']}",
+                'slider_y': image_data['position_y'],
+                'captcha_key': captcha_key,
+            }
 
-        return Response(response_data, status=status.HTTP_200_OK)
+            # 6. 返回响应（不再手动设置CORS头部）
+            return Response(response_data, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"验证码生成失败: {str(e)}")
+            return Response(
+                {'error': '验证码生成失败，请重试'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 # ==========================================================
 # 视图 6-1: CaptchaAPIView (新增)
