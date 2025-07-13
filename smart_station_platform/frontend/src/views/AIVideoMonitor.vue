@@ -132,7 +132,7 @@
                 </div>
                 
                 <!-- 视频播放区域 -->
-                <div v-else class="video-player-wrapper" ref="videoPlayerWrapper">
+                <div v-else class="video-player-wrapper">
                   <!-- 本地摄像头视频 -->
                   <video
                     v-if="videoSource === 'local'"
@@ -147,12 +147,9 @@
                   <!-- 网络流播放器容器 -->
                   <div
                     v-else
-                    ref="playerContainer"
+                    ref="videoRef"
                     class="dplayer-container"
-                    style="width:100%;height:100%;min-height:400px;display:block !important;"
-                  >
-                    <div ref="videoRef" class="dplayer-box" style="width:100%;height:100%;"></div>
-                  </div>
+                  ></div>
                   
                   <!-- AI分析器组件 -->
                   <AIAnalyzer
@@ -169,11 +166,6 @@
                     @performance-stats="handlePerformanceStats"
                     @canvas-click="handleCanvasClick"
                   />
-                </div>
-                
-                <!-- 隐藏的播放器容器，确保videoRef始终存在 -->
-                <div style="display: none;">
-                  <div ref="fallbackVideoRef" class="dplayer-box-hidden"></div>
                 </div>
               </div>
             </el-card>
@@ -255,64 +247,19 @@
               </div>
             </el-card>
 
-            <!-- 危险区域设置面板 -->
-            <el-card class="zone-panel" shadow="never" v-if="isStreaming">
-              <template #header>
-                <div class="card-header">
-                  <span>⚠️ 危险区域设置</span>
-                  <el-badge :value="dangerZones.length" class="badge" />
-                </div>
-              </template>
-
-              <div class="zone-controls">
-                <div v-if="!isDrawingZone">
-                  <el-button type="primary" @click="startDrawingZone" :disabled="!isStreaming">
-                    <el-icon><Plus /></el-icon> 添加区域
-                  </el-button>
-                </div>
-                <div v-else class="drawing-controls">
-                  <el-input v-model="zoneName" placeholder="区域名称" size="small" class="zone-name-input" />
-                  <el-color-picker v-model="zoneColor" size="small" />
-                  <div class="zone-buttons">
-                    <el-button type="success" @click="finishDrawingZone" :disabled="currentZonePoints.length < 3">
-                      完成区域
-                    </el-button>
-                    <el-button @click="cancelDrawingZone">
-                      取消绘制
-                    </el-button>
-                  </div>
-                </div>
-              </div>
-
-              <el-divider v-if="dangerZones.length > 0">已设置区域</el-divider>
-
-              <div class="zones-list">
-                <div v-for="zone in dangerZones" :key="zone.id" class="zone-item">
-                  <div class="zone-color" :style="{backgroundColor: zone.color}"></div>
-                  <div class="zone-info">
-                    <div class="zone-name">{{zone.name}}</div>
-                    <div class="zone-points">{{zone.points.length}}个顶点</div>
-                  </div>
-                  <el-button link type="danger" @click="deleteZone(zone.id)" class="zone-delete">
-                    删除
-                  </el-button>
-                </div>
-              </div>
-            </el-card>
-
             <!-- 实时检测结果 -->
             <el-card class="results-panel" shadow="never">
               <template #header>
                 <div class="card-header">
                   <span>🔍 检测结果</span>
-                  <el-badge :value="detectionResults.length" class="badge" />
+                  <el-badge :value="detectionResults?.length || 0" class="badge" />
                 </div>
               </template>
 
               <el-scrollbar height="300px">
                 <div class="detection-list">
                   <div
-                    v-for="result in detectionResults"
+                    v-for="result in detectionResults || []"
                     :key="result.timestamp"
                     class="detection-item"
                     :class="`type-${result.type}`"
@@ -396,7 +343,7 @@ import { useApi } from '@/api'
 import { useWebSocket } from '@/composables/useWebSocket'
 import AIAnalyzer from '@/components/AIAnalyzer.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Close, Cpu, VideoCamera, Plus, Search, Warning } from '@element-plus/icons-vue'
+import { Close, Cpu, VideoCamera } from '@element-plus/icons-vue'
 import flvjs from 'flv.js'
 import DPlayer from 'dplayer'
 
@@ -406,8 +353,6 @@ const api = useApi()
 // 视频相关引用
 const videoElement = ref(null)
 const videoRef = ref(null)
-const playerContainer = ref(null)
-const videoPlayerWrapper = ref(null)
 const aiAnalyzer = ref(null)
 const video = ref(null)
 const player = ref(null)
@@ -442,9 +387,6 @@ const performanceStats = ref({
   errorCount: 0
 })
 
-// 实时告警列表
-const realtimeAlerts = ref([])
-
 // 危险区域设置
 const dangerZones = ref([])
 const currentZonePoints = ref([])
@@ -454,8 +396,8 @@ const zoneName = ref('危险区域')
 
 // WebSocket连接
 const wsUrl = import.meta.env.VITE_APP_WS_URL || 'ws://localhost:8000/ws/alerts/'
-const {
-  isConnected: wsConnected,
+const { 
+  isConnected: wsConnected, 
   connect: connectWebSocket,
   disconnect: disconnectWebSocket,
   messages: wsMessages
@@ -465,28 +407,12 @@ const {
 watch(wsMessages, (newMessages) => {
   if (newMessages.length > 0) {
     const latestMessage = newMessages[newMessages.length - 1]
-
+    
     // 处理不同类型的WebSocket消息
     if (latestMessage.type === 'detection') {
       // 更新检测结果
       detectionResults.value = latestMessage.detections || []
     } else if (latestMessage.type === 'alert') {
-      // 添加到实时告警列表
-      if (latestMessage.alert) {
-        realtimeAlerts.value.push({
-          id: `alert_${Date.now()}`,
-          type: latestMessage.alert.type || 'warning',
-          title: latestMessage.alert.title || '异常事件告警',
-          description: latestMessage.message || latestMessage.alert.description || '检测到异常事件',
-          timestamp: new Date()
-        });
-
-        // 限制告警数量，保持最新的20条
-        if (realtimeAlerts.value.length > 20) {
-          realtimeAlerts.value = realtimeAlerts.value.slice(-20);
-        }
-      }
-
       // 显示告警通知
       ElMessage({
         type: 'warning',
@@ -529,7 +455,7 @@ const getStreamPlaceholder = () => {
 // 处理视频源类型变化
 const handleVideoSourceChange = () => {
   streamUrl.value = ''
-
+  
   if (videoSource.value === 'local') {
     // 获取可用的摄像头设备
     getVideoDevices()
@@ -561,13 +487,13 @@ const startStream = async () => {
       // 网络流
       await startNetworkStream()
     }
-
+    
     // 连接WebSocket
     connectWebSocket()
-
+    
     // 标记为流媒体已启动
     isStreaming.value = true
-
+    
     // 通知AI服务开始处理
     if (aiAnalysisEnabled.value) {
       await startAIAnalysis()
@@ -589,13 +515,13 @@ const startLocalCamera = async () => {
       },
       audio: false
     }
-
+    
     const stream = await navigator.mediaDevices.getUserMedia(constraints)
-
+    
     if (videoElement.value) {
       videoElement.value.srcObject = stream
       video.value = videoElement.value
-
+      
       // 等待视频加载
       await new Promise((resolve) => {
       videoElement.value.onloadedmetadata = () => {
@@ -603,7 +529,7 @@ const startLocalCamera = async () => {
         resolve()
         }
       })
-
+      
       ElMessage.success('本地摄像头启动成功')
     }
         } catch (error) {
@@ -612,134 +538,20 @@ const startLocalCamera = async () => {
   }
 }
 
-// 确保播放器容器初始化
-const ensurePlayerContainer = () => {
-  // 首先检查是否有通过ref获取的容器
-  if (playerContainer.value) {
-    console.log('通过ref找到播放器容器');
-    return playerContainer.value;
-  }
-  
-  // 其次，尝试通过DOM查询找到容器
-  let container = document.querySelector('.dplayer-container');
-  if (container) {
-    console.log('通过DOM查询找到播放器容器');
-    playerContainer.value = container; // 更新ref
-    return container;
-  }
-  
-  // 如果还找不到，尝试创建新容器
-  console.warn('找不到播放器容器，尝试创建新容器');
-  
-  // 首先检查是否有视频播放区域
-  const wrapper = videoPlayerWrapper.value || document.querySelector('.video-player-wrapper');
-  if (!wrapper) {
-    console.error('无法找到视频播放区域，无法创建播放器容器');
-    throw new Error('无法找到视频播放区域');
-  }
-  
-  // 清空现有内容
-  wrapper.innerHTML = '';
-  
-  // 创建新的播放器容器
-  container = document.createElement('div');
-  container.className = 'dplayer-container';
-  container.style.width = '100%';
-  container.style.height = '100%';
-  container.style.minHeight = '400px';
-  container.style.display = 'block';
-  container.style.position = 'relative';
-  
-  // 创建播放器盒子
-  const box = document.createElement('div');
-  box.className = 'dplayer-box';
-  box.style.width = '100%';
-  box.style.height = '100%';
-  
-  // 添加到DOM
-  container.appendChild(box);
-  wrapper.appendChild(container);
-  
-  // 更新引用
-  playerContainer.value = container;
-  videoRef.value = box;
-  globalPlayerContainer = container;
-  
-  console.log('成功创建新的播放器容器');
-  return container;
-}
-
-// 在startNetworkStream方法中调用
+// 启动网络流
 const startNetworkStream = async () => {
   if (!streamUrl.value) {
     throw new Error('请输入有效的流地址')
   }
-
+  
   try {
-    console.log(`开始连接网络流: ${streamUrl.value}, 类型: ${videoSource.value}`)
-    
     // 测试流连接
-    const isStreamAvailable = await testStreamConnection()
-    
-    if (!isStreamAvailable) {
-      throw new Error('无法连接到视频流，请检查流地址是否正确')
-    }
-
-    console.log('流连接测试成功，准备创建播放器')
-    
-    // 确保视频容器已渲染
-    await nextTick()
-    
-    // 确保播放器容器初始化
-    try {
-      const container = ensurePlayerContainer()
-      console.log('播放器容器已准备就绪:', container)
-    } catch (error) {
-      console.error('初始化播放器容器失败:', error)
-      throw new Error('初始化播放器容器失败: ' + error.message)
-    }
+    await testStreamConnection()
     
     // 创建播放器
-    try {
-      // 首先尝试使用DPlayer
-      console.log('尝试使用DPlayer创建播放器')
-      await createPlayer()
-      console.log('DPlayer创建成功')
-      ElMessage.success('网络流连接成功')
-    } catch (dplayerError) {
-      console.warn('DPlayer创建失败，尝试使用原生flv.js:', dplayerError)
-      
-      // 如果是RTMP或FLV流，尝试使用原生flv.js
-      if (['rtmp', 'flv'].includes(videoSource.value)) {
-        try {
-          // 确保DOM已更新
-          await nextTick()
-          
-          console.log('尝试使用原生flv.js创建播放器')
-          await createFlvPlayer()
-          console.log('flv.js播放器创建成功')
-          ElMessage.success('使用原生flv.js播放器连接成功')
-        } catch (flvError) {
-          console.error('原生flv.js播放器也失败:', flvError)
-          
-          // 最后尝试直接创建video元素
-          try {
-            console.log('尝试直接创建video元素播放')
-            await createNativeVideoPlayer()
-            console.log('原生video元素播放器创建成功')
-            ElMessage.success('使用原生video元素连接成功')
-          } catch (videoError) {
-            console.error('所有播放方式都失败:', videoError)
-            throw new Error('无法初始化播放器: ' + videoError.message)
-          }
-        }
-      } else {
-        // 其他类型的流，直接抛出原始错误
-        throw dplayerError
-      }
-    }
+    await createPlayer()
     
-    return true
+    ElMessage.success('网络流连接成功')
   } catch (error) {
     console.error('启动网络流失败:', error)
     throw error
@@ -750,19 +562,19 @@ const startNetworkStream = async () => {
 const testStreamConnection = async () => {
   try {
     ElMessage.info('正在测试流连接...')
+    
     const response = await api.ai.testStream(streamUrl.value, videoSource.value)
     
-    if (response && response.status === 'success') {
+    if (response && response.success) {
       ElMessage.success('流连接测试成功')
-      return true // 流可用时返回 true
-    } else {
-      ElMessage.warning(response?.message || '流连接测试失败')
-      return false // 流不可用时返回 false
+      return true
+      } else {
+      throw new Error(response?.message || '流连接测试失败')
     }
   } catch (error) {
     console.error('流连接测试失败:', error)
     ElMessage.error('流连接测试失败: ' + (error.message || '未知错误'))
-    return false // 出错时返回 false
+    throw error
   }
 }
 
@@ -772,44 +584,13 @@ const createPlayer = async () => {
     player.value.destroy()
     player.value = null
   }
-
+  
   return new Promise((resolve, reject) => {
     nextTick(() => {
       try {
-        // 确保容器元素已经渲染
-        let container;
-        try {
-          container = ensurePlayerContainer();
-        } catch (error) {
-          console.error('获取播放器容器失败:', error);
-          reject(new Error('获取播放器容器失败: ' + error.message));
-          return;
-        }
-
-        if (!container) {
-          console.error('播放器容器不存在');
-          reject(new Error('播放器容器不存在'));
-          return;
-        }
-
-        // 清空容器
-        container.innerHTML = '';
-        
-        // 创建新的div作为DPlayer容器
-        const playerBox = document.createElement('div');
-        playerBox.className = 'dplayer-box';
-        playerBox.style.width = '100%';
-        playerBox.style.height = '100%';
-        container.appendChild(playerBox);
-        
-        // 更新引用
-        videoRef.value = playerBox;
-
-        console.log('创建播放器，容器元素:', playerBox);
-        
         // 根据流类型选择不同的播放器配置
         const playerOptions = {
-          container: playerBox,
+          container: videoRef.value,
           autoplay: true,
           theme: '#42b883',
           loop: false,
@@ -827,8 +608,7 @@ const createPlayer = async () => {
                 if (flvjs.isSupported()) {
                   const flvPlayer = flvjs.createPlayer({
                     type: 'flv',
-                    url: video.src,
-                    isLive: true  // 添加这个参数表明是直播流
+                    url: video.src
                   })
                   flvPlayer.attachMediaElement(video)
                   flvPlayer.load()
@@ -837,183 +617,41 @@ const createPlayer = async () => {
             }
           }
         }
-
+        
         // 创建播放器实例
-        console.log('初始化DPlayer，配置:', playerOptions);
-        player.value = new DPlayer(playerOptions);
-
+        player.value = new DPlayer(playerOptions)
+        
         // 监听播放器事件
         player.value.on('loadedmetadata', () => {
-          console.log('DPlayer loadedmetadata 事件触发');
-          video.value = player.value.video;
-          resolve();
-        });
-
+          video.value = player.value.video
+          resolve()
+        })
+        
         player.value.on('error', (error) => {
-          console.error('播放器错误:', error);
-          reject(new Error('播放器加载失败: ' + error));
-        });
-
+          console.error('播放器错误:', error)
+          reject(new Error('播放器加载失败: ' + error))
+        })
+        
         // 5秒后如果还没有加载完成，也认为成功（某些流可能不会触发loadedmetadata事件）
         setTimeout(() => {
           if (player.value && player.value.video) {
-            console.log('DPlayer 5秒超时，但播放器已创建，视为成功');
-            video.value = player.value.video;
-            resolve();
-          } else {
-            console.warn('DPlayer 5秒超时，播放器未就绪');
-            reject(new Error('播放器加载超时'));
+            video.value = player.value.video
+            resolve()
           }
-        }, 5000);
-      } catch (error) {
-        console.error('创建播放器失败:', error);
-        reject(new Error('创建播放器失败: ' + (error.message || '未知错误')));
+        }, 5000)
+        } catch (error) {
+        console.error('创建播放器失败:', error)
+        reject(new Error('创建播放器失败: ' + (error.message || '未知错误')))
       }
-    });
-  });
-}
-
-// 使用原生flv.js创建播放器（备用方法）
-const createFlvPlayer = async () => {
-  if (!flvjs.isSupported()) {
-    throw new Error('当前浏览器不支持FLV.js，无法播放RTMP/FLV流');
+      })
+    })
   }
-  
-  // 获取播放器容器
-  let container;
-  try {
-    container = ensurePlayerContainer();
-  } catch (error) {
-    console.error('获取播放器容器失败:', error);
-    throw new Error('获取播放器容器失败: ' + error.message);
-  }
-  
-  if (!container) {
-    console.error('找不到播放器容器');
-    throw new Error('找不到播放器容器');
-  }
-  
-  // 清空容器
-  container.innerHTML = '';
-  console.log('找到播放器容器:', container);
-  
-  // 创建video元素
-  const videoElement = document.createElement('video');
-  videoElement.className = 'video-element';
-  videoElement.controls = true;
-  videoElement.autoplay = true;
-  videoElement.muted = false;
-  videoElement.style.width = '100%';
-  videoElement.style.height = '100%';
-  
-  // 添加到容器
-  container.appendChild(videoElement);
-  console.log('已创建video元素并添加到容器');
-  
-  // 创建flv播放器
-  console.log('初始化flv.js播放器, 流地址:', streamUrl.value);
-  const flvPlayer = flvjs.createPlayer({
-    type: 'flv',
-    url: streamUrl.value,
-    isLive: true,
-    hasAudio: true,
-    hasVideo: true
-  });
-  
-  // 保存flv.js实例到video元素，方便后续清理
-  videoElement._flvjs = flvPlayer;
-  
-  flvPlayer.attachMediaElement(videoElement);
-  flvPlayer.load();
-  flvPlayer.play();
-  
-  // 返回promise
-  return new Promise((resolve, reject) => {
-    videoElement.addEventListener('loadedmetadata', () => {
-      console.log('flv.js loadedmetadata 事件触发');
-      video.value = videoElement;
-      resolve(flvPlayer);
-    });
-    
-    videoElement.addEventListener('error', (e) => {
-      console.error('flv.js播放器错误:', e);
-      reject(new Error('FLV播放器加载失败: ' + e));
-    });
-    
-    // 5秒后如果还没有加载完成，也认为成功（某些流可能不会触发loadedmetadata事件）
-    setTimeout(() => {
-      if (videoElement.readyState > 0) {
-        console.log('flv.js 5秒超时，但视频元素已创建，视为成功');
-        video.value = videoElement;
-        resolve(flvPlayer);
-      } else {
-        console.warn('flv.js 5秒超时，视频元素未就绪');
-        reject(new Error('FLV播放器加载超时'));
-      }
-    }, 5000);
-  });
-}
-
-// 创建原生video元素播放器（备用方法）
-const createNativeVideoPlayer = async () => {
-  // 获取播放器容器
-  let container;
-  try {
-    container = ensurePlayerContainer();
-  } catch (error) {
-    console.error('获取播放器容器失败:', error);
-    throw new Error('获取播放器容器失败: ' + error.message);
-  }
-  
-  if (!container) {
-    console.error('找不到播放器容器');
-    throw new Error('找不到播放器容器');
-  }
-
-  // 清空容器
-  container.innerHTML = '';
-  console.log('找到播放器容器:', container);
-  
-  const videoEl = document.createElement('video');
-  videoEl.className = 'video-element';
-  videoEl.controls = true;
-  videoEl.autoplay = true;
-  videoEl.src = streamUrl.value;
-  videoEl.style.width = '100%';
-  videoEl.style.height = '100%';
-  container.appendChild(videoEl);
-
-  return new Promise((resolve, reject) => {
-    videoEl.addEventListener('loadedmetadata', () => {
-      console.log('原生video元素加载成功');
-      video.value = videoEl;
-      resolve();
-    });
-
-    videoEl.addEventListener('error', (e) => {
-      console.error('原生video元素加载失败:', e);
-      reject(new Error('视频加载失败'));
-    });
-
-    // 5秒后如果还没有加载完成，也认为成功
-    setTimeout(() => {
-      if (videoEl.readyState > 0) {
-        console.log('原生video元素5秒超时，但已创建，视为成功');
-        video.value = videoEl;
-        resolve();
-      } else {
-        console.warn('原生video元素5秒超时，未就绪');
-        reject(new Error('视频加载超时'));
-      }
-    }, 5000);
-  });
-}
 
 // 获取视频类型
 const getVideoType = () => {
   switch (videoSource.value) {
     case 'rtmp':
-      return 'customFlv'  // RTMP 流需要使用 flv.js 处理
+      return 'customFlv'
     case 'flv':
       return 'customFlv'
     case 'hls':
@@ -1032,47 +670,32 @@ const stopStream = async () => {
     if (aiAnalysisEnabled.value) {
       await stopAIAnalysis()
     }
-
+    
     // 断开WebSocket连接
     disconnectWebSocket()
-
+    
     // 停止本地摄像头
     if (videoSource.value === 'local' && videoElement.value && videoElement.value.srcObject) {
       const tracks = videoElement.value.srcObject.getTracks()
       tracks.forEach(track => track.stop())
       videoElement.value.srcObject = null
     }
-
+    
     // 销毁播放器
     if (player.value) {
-      // 检查是否有DPlayer实例
       player.value.destroy()
       player.value = null
-    } else if (video.value) {
-      // 检查是否有原生flv.js播放器
-      const flvPlayer = video.value._flvjs
-      if (flvPlayer) {
-        flvPlayer.pause()
-        flvPlayer.unload()
-        flvPlayer.detachMediaElement()
-        flvPlayer.destroy()
-      }
-      
-      // 清理video元素
-      if (videoRef.value) {
-        videoRef.value.innerHTML = ''
-      }
     }
-
+    
     // 重置视频引用
     video.value = null
-
+    
     // 标记为流媒体已停止
-    isStreaming.value = false
-
+          isStreaming.value = false
+    
     // 重置检测结果
     detectionResults.value = []
-
+    
     ElMessage.success('视频流已停止')
   } catch (error) {
     console.error('停止视频流失败:', error)
@@ -1084,35 +707,35 @@ const stopStream = async () => {
 const startAIAnalysis = async () => {
   try {
     // 通知AI服务开始处理
-    const response = await api.ai.startStream({
-      camera_id: cameraId.value,
+      const response = await api.ai.startStream({
+        camera_id: cameraId.value,
       stream_url: videoSource.value === 'local' ? 'webcam://' + selectedDeviceId.value : streamUrl.value,
-      enable_face_recognition: aiSettings.faceRecognition,
-      enable_object_detection: aiSettings.objectDetection,
-      enable_behavior_detection: aiSettings.behaviorAnalysis,
-      enable_fire_detection: aiSettings.fireDetection
-    })
-
-    if (response && response.status === 'success') {
-      aiAnalysisEnabled.value = true
+        enable_face_recognition: aiSettings.faceRecognition,
+        enable_object_detection: aiSettings.objectDetection,
+        enable_behavior_detection: aiSettings.behaviorAnalysis,
+        enable_fire_detection: aiSettings.fireDetection
+      })
+    
+    if (response && response.success) {
+        aiAnalysisEnabled.value = true
       ElMessage.success('AI分析已启动')
-    } else {
+      } else {
       throw new Error(response?.message || 'AI分析启动失败')
-    }
-  } catch (error) {
+      }
+    } catch (error) {
     console.error('启动AI分析失败:', error)
     ElMessage.error('启动AI分析失败: ' + (error.message || '未知错误'))
-    aiAnalysisEnabled.value = false
-  }
-}
+          aiAnalysisEnabled.value = false
+        }
+      }
 
 // 停止AI分析
 const stopAIAnalysis = async () => {
   try {
     // 通知AI服务停止处理
     const response = await api.ai.stopStream(cameraId.value)
-
-    if (response && response.status === 'success') {
+    
+    if (response && response.success) {
       ElMessage.success('AI分析已停止')
     } else {
       console.warn('AI分析停止响应异常:', response)
@@ -1137,14 +760,10 @@ const toggleAIAnalysis = async () => {
 // 更新AI设置
 const updateAISettings = async () => {
   if (!aiAnalysisEnabled.value || !isStreaming.value) return
-
+  
   try {
-    const response = await api.ai.updateSettings(cameraId.value, aiSettings)
-    if (response && response.status === 'success') {
-      ElMessage.success('AI设置已更新')
-    } else {
-      console.warn('更新AI设置响应异常:', response)
-    }
+    await api.ai.updateSettings(cameraId.value, aiSettings)
+    ElMessage.success('AI设置已更新')
   } catch (error) {
     console.error('更新AI设置失败:', error)
     ElMessage.error('更新AI设置失败: ' + (error.message || '未知错误'))
@@ -1154,7 +773,7 @@ const updateAISettings = async () => {
 // 切换本地跟踪状态
 const toggleLocalTracking = () => {
   localTrackingEnabled.value = !localTrackingEnabled.value
-
+  
         if (aiAnalyzer.value) {
         nextTick(() => {
       ElMessage.info(localTrackingEnabled.value ? '本地跟踪已启用' : '本地跟踪已禁用')
@@ -1176,7 +795,7 @@ const onVideoLoaded = () => {
 
 // 处理检测结果
 const handleDetectionResults = (results) => {
-  detectionResults.value = results.detections || []
+  detectionResults.value = (results && Array.isArray(results.detections)) ? results.detections : []
 }
 
 // 处理性能统计
@@ -1192,7 +811,7 @@ const handleCanvasClick = (event) => {
       x: event.x,
       y: event.y
     })
-
+    
     ElMessage.info(`已添加点 (${event.x.toFixed(2)}, ${event.y.toFixed(2)})`)
   }
 }
@@ -1233,13 +852,6 @@ const cancelDrawingZone = () => {
   ElMessage.info('已取消区域绘制')
 }
 
-// 从告警列表中移除告警
-const removeAlert = (index) => {
-  if (index >= 0 && index < realtimeAlerts.value.length) {
-    realtimeAlerts.value.splice(index, 1)
-  }
-}
-
 // 删除区域
 const deleteZone = (zoneId) => {
   ElMessageBox.confirm('确定要删除此区域吗?', '删除确认', {
@@ -1252,138 +864,26 @@ const deleteZone = (zoneId) => {
   }).catch(() => {})
 }
 
-// 获取告警图标
-const getAlertIcon = (type) => {
-  const iconMap = {
-    danger: '⚠️',
-    warning: '⚠️',
-    info: 'ℹ️',
-    success: '✅',
-    error: '❌',
-    fire: '🔥',
-    person: '👤',
-    face: '👤',
-    sound: '🔊',
-    behavior: '🏃',
-    default: '⚡'
-  }
-  return iconMap[type] || iconMap.default
-}
-
-// 获取检测图标
-const getDetectionIcon = (type) => {
-  const iconMap = {
-    person: '👤',
-    face: '👤',
-    face_unknown: '👤',
-    car: '🚗',
-    truck: '🚚',
-    bicycle: '🚲',
-    motorcycle: '🏍️',
-    bus: '🚌',
-    fire: '🔥',
-    smoke: '💨',
-    default: '📦'
-  }
-  return iconMap[type] || iconMap.default
-}
-
-// 格式化时间
-const formatTime = (timestamp) => {
-  if (!timestamp) return ''
-  
-  const date = new Date(timestamp)
-  const hours = date.getHours().toString().padStart(2, '0')
-  const minutes = date.getMinutes().toString().padStart(2, '0')
-  const seconds = date.getSeconds().toString().padStart(2, '0')
-  
-  return `${hours}:${minutes}:${seconds}`
-}
-
-// 全局变量，用于在任何情况下都能找到播放器容器
-let globalPlayerContainer = null
-
 // 组件挂载时初始化
 onMounted(() => {
-  // 检查flv.js支持
-  if (flvjs.isSupported()) {
-    console.log('flv.js 支持已检测到')
-  } else {
-    console.warn('flv.js 不受支持，RTMP和FLV流可能无法播放')
-  }
-  
   // 获取可用的视频设备
-  if (videoSource.value === 'local') {
+    if (videoSource.value === 'local') {
     getVideoDevices()
   }
   
-  // 测试AI服务连接
-  api.ai.testConnection().then(response => {
-    console.log('AI服务连接测试成功:', response)
-  }).catch(error => {
+  // 初始化时静默测试AI连接
+  api.ai.testConnection().catch(error => {
     console.warn('AI服务连接初始化测试失败:', error)
-  })
-
-  // 连接WebSocket
-  if (import.meta.env.VITE_APP_ENABLE_WS !== 'false') {
-    connectWebSocket()
-  }
-  
-  // 初始化全局播放器容器引用
-  nextTick(() => {
-    // 确保播放器容器引用始终存在
-    try {
-      // 如果videoPlayerWrapper已渲染，则初始化播放器容器
-      if (videoPlayerWrapper.value) {
-        const container = ensurePlayerContainer();
-        console.log('全局播放器容器引用已初始化:', container);
-      } else {
-        console.log('视频播放区域尚未渲染，将在需要时初始化播放器容器');
-      }
-    } catch (error) {
-      console.warn('初始化播放器容器失败，将在需要时重试:', error);
-    }
   })
 })
 
 // 组件卸载时清理资源
 onUnmounted(() => {
-  // 停止流媒体播放
-  if (isStreaming.value) {
-    stopStream()
-  }
-  
-  // 断开WebSocket连接
-  disconnectWebSocket()
-  
-  // 清理播放器实例
-  if (player.value) {
-    try {
-      player.value.destroy()
-      player.value = null
-    } catch (error) {
-      console.warn('清理播放器实例失败:', error)
-    }
-  }
-  
-  // 清理视频元素
-  if (video.value) {
-    try {
-      if (video.value._flvjs) {
-        video.value._flvjs.unload()
-        video.value._flvjs.detachMediaElement()
-        video.value._flvjs.destroy()
-      }
-      video.value.src = ''
-      video.value = null
-    } catch (error) {
-      console.warn('清理视频元素失败:', error)
-    }
-  }
-  
-  // 清理全局引用
-  globalPlayerContainer = null
-})
+  // 确保停止视频流
+        if (isStreaming.value) {
+                  stopStream()
+                }
+              })
 </script>
 
 <style scoped>
@@ -1423,56 +923,17 @@ onUnmounted(() => {
   position: relative;
   width: 100%;
   height: 100%;
-  min-height: 400px;
-  background-color: #000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-  border-radius: 4px;
 }
 
 .video-element {
   width: 100%;
   height: 100%;
-  object-fit: contain;
-}
-
-/* 确保播放器容器在所有情况下都正确显示 */
-.video-player-wrapper:empty::before {
-  content: "准备播放视频...";
-  color: #fff;
-  font-size: 16px;
-  text-align: center;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  height: 100%;
+  object-fit: cover;
 }
 
 .dplayer-container {
-  position: relative;
   width: 100%;
   height: 100%;
-  min-height: 400px;
-  display: block !important; /* 确保始终可见 */
-  z-index: 1;
-  background-color: #000;
-}
-
-.dplayer-box {
-  width: 100%;
-  height: 100%;
-}
-
-.dplayer-box-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  opacity: 0;
-  pointer-events: none;
 }
 
 .overlay-canvas {
@@ -1632,7 +1093,6 @@ onUnmounted(() => {
   line-height: 1.4;
   margin-bottom: 4px;
 }
-
 .alert-time {
   font-size: 11px;
   color: #909399;
@@ -1674,79 +1134,5 @@ onUnmounted(() => {
   background-color: #f0f9ff;
   border-radius: 4px;
   border-left: 3px solid #409eff;
-}
-
-/* 危险区域设置面板样式 */
-.zone-panel {
-  margin-bottom: 20px;
-}
-
-.zone-controls {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin-bottom: 10px;
-}
-
-.drawing-controls {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 10px;
-  background-color: #f5f7fa;
-  border-radius: 6px;
-}
-
-.zone-name-input {
-  margin-bottom: 8px;
-}
-
-.zone-buttons {
-  display: flex;
-  gap: 10px;
-  margin-top: 8px;
-}
-
-.zones-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.zone-item {
-  display: flex;
-  align-items: center;
-  padding: 8px 12px;
-  border-radius: 6px;
-  background-color: #f8f9fa;
-  border: 1px solid #ebeef5;
-}
-
-.zone-color {
-  width: 16px;
-  height: 16px;
-  border-radius: 4px;
-  margin-right: 10px;
-  flex-shrink: 0;
-}
-
-.zone-info {
-  flex: 1;
-  margin-right: 10px;
-}
-
-.zone-name {
-  font-weight: bold;
-  font-size: 14px;
-  color: #303133;
-}
-
-.zone-points {
-  font-size: 12px;
-  color: #909399;
-}
-
-.zone-delete {
-  flex-shrink: 0;
 }
 </style>

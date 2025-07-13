@@ -2515,3 +2515,28 @@
 2025/07/13 17:35:12 [info] 25188#12608: *22 WSARecv() failed (10054: An existing connection was forcibly closed by the remote host), client: 127.0.0.1, server: 0.0.0.0:1935
 2025/07/13 17:35:12 [info] 25188#12608: *22 disconnect, client: 127.0.0.1, server: 0.0.0.0:1935
 2025/07/13 17:35:12 [info] 25188#12608: *22 deleteStream, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/13 17:38:26 [info] 25188#12608: *17 deleteStream, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/13 17:38:26 [info] 25188#12608: *17 WSARecv() failed (10053: An established connection was aborted by the software in your host machine), client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/13 17:38:26 [info] 25188#12608: *17 disconnect, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/13 17:38:26 [info] 25188#12608: *17 deleteStream, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/13 17:39:03 [info] 25188#12608: *23 client connected '127.0.0.1'
+2025/07/13 17:39:03 [info] 25188#12608: *23 connect: app='live' args='' flashver='FMLE/3.0 (compatible; FMSc/1.0)' swf_url='rtmp://localhost:1935/live' tc_url='rtmp://localhost:1935/live' page_url='' acodecs=0 vcodecs=0 object_encoding=0, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/13 17:39:03 [info] 25188#12608: *23 createStream, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/13 17:39:03 [info] 25188#12608: *23 publish: name='test' args='' type=live silent=0, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/13 17:39:21 [info] 25188#12608: *24 client connected '127.0.0.1'
+2025/07/13 17:39:21 [info] 25188#12608: *24 connect: app='live' args='' flashver='LNX 9,0,124,2' swf_url='' tc_url='rtmp://localhost:1935/live' page_url='' acodecs=4071 vcodecs=252 object_encoding=0, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/13 17:39:21 [info] 25188#12608: *24 createStream, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/13 17:39:21 [info] 25188#12608: *24 play: name='test' args='' start=-2000 duration=0 reset=0 silent=0, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/13 17:39:24 [info] 25188#12608: *24 deleteStream, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/13 17:39:24 [info] 25188#12608: *24 WSASend() failed (10053: An established connection was aborted by the software in your host machine), client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/13 17:39:24 [info] 25188#12608: *24 WSARecv() failed (10053: An established connection was aborted by the software in your host machine), client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/13 17:39:24 [info] 25188#12608: *24 disconnect, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/13 17:39:24 [info] 25188#12608: *24 deleteStream, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/13 17:39:34 [info] 25188#12608: *23 deleteStream, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/13 17:39:34 [info] 25188#12608: *23 WSARecv() failed (10053: An established connection was aborted by the software in your host machine), client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/13 17:39:34 [info] 25188#12608: *23 disconnect, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/13 17:39:34 [info] 25188#12608: *23 deleteStream, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/13 18:24:33 [info] 25188#12608: *25 client connected '127.0.0.1'
+2025/07/13 18:24:33 [info] 25188#12608: *25 connect: app='live' args='' flashver='FMLE/3.0 (compatible; FMSc/1.0)' swf_url='rtmp://localhost:1935/live' tc_url='rtmp://localhost:1935/live' page_url='' acodecs=0 vcodecs=0 object_encoding=0, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/13 18:24:33 [info] 25188#12608: *25 createStream, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/13 18:24:33 [info] 25188#12608: *25 publish: name='test' args='' type=live silent=0, client: 127.0.0.1, server: 0.0.0.0:1935

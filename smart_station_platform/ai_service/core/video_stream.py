@@ -60,48 +60,22 @@ class VideoStream:
         """
         try:
             logger.info(f"测试视频流连接: {self.stream_url}")
-            
-            # 处理特殊流类型
-            if self.stream_url.startswith('webcam://'):
-                logger.info(f"检测到网络摄像头流: {self.stream_url}")
-                return True  # 网络摄像头流不需要测试连接
-                
-            # 对于RTMP/HLS/HTTP流，尝试连接但设置较短的超时
             cap = cv2.VideoCapture(self.stream_url)
-            
-            # 设置读取超时
-            if hasattr(cv2, 'CAP_PROP_OPEN_TIMEOUT'):
-                cap.set(cv2.CAP_PROP_OPEN_TIMEOUT, 3000)  # 3秒超时
-            
             if not cap.isOpened():
                 logger.error(f"无法打开视频流: {self.stream_url}")
                 return False
 
-            # 尝试读取一帧
-            start_time = time.time()
             ret, frame = cap.read()
-            elapsed = time.time() - start_time
-            
-            logger.info(f"视频流读取耗时: {elapsed:.2f}秒")
-            
             if not ret or frame is None:
                 logger.error(f"无法从视频流读取帧: {self.stream_url}")
                 cap.release()
                 return False
 
-            # 检查帧是否有效
-            if frame.size == 0 or frame.shape[0] == 0 or frame.shape[1] == 0:
-                logger.error(f"从视频流读取到无效帧: {self.stream_url}")
-                cap.release()
-                return False
-                
             cap.release()
-            logger.info(f"视频流连接成功: {self.stream_url}, 帧大小: {frame.shape}")
+            logger.info(f"视频流连接成功: {self.stream_url}")
             return True
         except Exception as e:
             logger.error(f"测试视频流连接时出错: {str(e)}")
-            import traceback
-            logger.error(traceback.format_exc())
             return False
 
     def _read_frames_thread(self):
@@ -264,35 +238,41 @@ class VideoStream:
 
     async def stop(self):
         """
-        停止视频流处理器。
+        停止视频流处理和音频提取进程，并清理资源。
         """
-        logger.info(f"正在停止视频流处理: {self.camera_id}")
-        self.is_running = False
-        
-        # 等待帧读取线程结束
+        logger.info(f"正在停止视频流: {self.stream_url} for {self.camera_id}")
+        self.is_running = False  # 停止帧读取线程
+
         if self.frame_read_thread and self.frame_read_thread.is_alive():
-            logger.info(f"等待帧读取线程结束: {self.camera_id}")
-            await asyncio.sleep(0.5)  # 给线程一点时间结束
-        
-        # 停止音频提取进程
+            self.frame_read_thread.join(timeout=5)  # 等待线程结束
+            if self.frame_read_thread.is_alive():
+                logger.warning(f"帧读取线程未能正常停止 for {self.camera_id}.")
+
+        if self.cap:
+            self.cap.release()
+            self.cap = None
+            logger.info(f"视频捕获器已释放 for {self.camera_id}.")
+
         if self.audio_extraction_process:
             try:
-                logger.info(f"正在终止音频提取进程: {self.camera_id}")
-                self.audio_extraction_process.terminate()
-                self.audio_extraction_process = None
+                self.audio_extraction_process.terminate()  # 尝试终止进程
+                await asyncio.sleep(0.5)  # 等待进程结束
+                if self.audio_extraction_process.poll() is None:
+                    self.audio_extraction_process.kill()  # 如果未终止，强制杀死
+                logger.info(f"FFmpeg 音频提取进程已终止 for {self.camera_id}.")
             except Exception as e:
-                logger.error(f"终止音频提取进程时出错: {str(e)}")
-        
-        # 清理音频文件
+                logger.error(f"终止FFmpeg进程时出错 for {self.camera_id}: {str(e)}")
+            self.audio_extraction_process = None
+
         if self.audio_file_path and os.path.exists(self.audio_file_path):
             try:
-                os.remove(self.audio_file_path)
-                logger.info(f"已删除临时音频文件: {self.audio_file_path}")
+                os.remove(self.audio_file_path)  # 清理临时音频文件
+                logger.info(f"临时音频文件已删除: {self.audio_file_path}")
             except Exception as e:
                 logger.error(f"删除临时音频文件时出错: {str(e)}")
-        
-        logger.info(f"视频流处理已停止: {self.camera_id}")
-        return True
+            self.audio_file_path = None
+
+        logger.info(f"视频流 {self.camera_id} 资源清理完成。")
 
     def update_settings(self, settings: Dict) -> bool:
         """
