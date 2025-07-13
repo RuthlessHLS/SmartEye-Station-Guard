@@ -32,6 +32,7 @@ const retryConfig = {
 // 请求拦截器 - 后端服务
 backendService.interceptors.request.use(
   config => {
+    // 每次请求时重新从localStorage获取最新的token
     const token = localStorage.getItem('access_token');
     if (token) {
       config.headers['Authorization'] = 'Bearer ' + token;

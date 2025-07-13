@@ -46,6 +46,7 @@ import { ElMessage } from 'element-plus';
 import api from '@/api'; // 导入API请求服务
 import * as echarts from 'echarts'; // 导入 ECharts
 import mapboxgl from 'mapbox-gl'; // 导入 Mapbox GL JS
+import 'mapbox-gl/dist/mapbox-gl.css'; // 导入Mapbox GL CSS
 
 // Mapbox token，请替换为你自己的
 mapboxgl.accessToken = 'YOUR_MAPBOX_ACCESS_TOKEN'; // <<<< IMPORTANT: 替换为你的 Mapbox Access Token
@@ -226,7 +227,7 @@ const updateCharts = () => {
           },
           pointer: {
             itemStyle: {
-              color: 'auto'
+              color: 'inherit'
             }
           },
           axisTick: {
@@ -246,14 +247,14 @@ const updateCharts = () => {
             }
           },
           axisLabel: {
-            color: 'auto',
+            color: 'inherit',
             distance: 40,
-            fontSize: 15
+            fontSize: 12
           },
           detail: {
             valueAnimation: true,
             formatter: '{value} km/h',
-            color: 'auto',
+            color: 'inherit',
             fontSize: 20
           },
           data: [{

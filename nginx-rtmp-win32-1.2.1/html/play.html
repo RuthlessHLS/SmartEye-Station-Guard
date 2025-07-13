@@ -1,74 +1,38 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>RTMP视频流测试</title>
-    <link href="https://vjs.zencdn.net/7.20.3/video-js.css" rel="stylesheet" />
+    <title>HLS Live Stream</title>
+    <link href="https://vjs.zencdn.net/8.6.0/video-js.css" rel="stylesheet" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/videojs-contrib-hls/5.15.0/videojs-contrib-hls.min.js"></script>
     <style>
-        body {
-            margin: 20px;
-            font-family: Arial, sans-serif;
-            background-color: #f0f0f0;
-        }
-        .container {
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 20px;
-            background: white;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        h1 {
-            text-align: center;
-            color: #333;
-        }
-        .player-container {
-            margin: 20px 0;
-        }
-        .button-container {
-            text-align: center;
-            margin-top: 20px;
-        }
-        button {
-            padding: 10px 20px;
-            margin: 0 10px;
-            border: none;
-            border-radius: 4px;
-            background-color: #4CAF50;
-            color: white;
-            cursor: pointer;
-        }
-        button:hover {
-            background-color: #45a049;
-        }
+        body { font-family: sans-serif; text-align: center; margin-top: 50px; }
+        .video-js { margin: 0 auto; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>RTMP视频流测试</h1>
-        <div class="player-container">
-            <video
-                id="my-video"
-                class="video-js vjs-default-skin"
-                controls
-                preload="auto"
-                width="640"
-                height="480"
-                data-setup="{}"
-            >
-                <source src="rtmp://localhost:1935/live/webcam" type="rtmp/flv" />
-                <p class="vjs-no-js">
-                    要查看此视频，请启用JavaScript，并考虑升级到支持HTML5视频的web浏览器
-                </p>
-            </video>
-        </div>
-        <div class="button-container">
-            <button onclick="window.location.href='http://localhost:8080/stat'">查看RTMP状态</button>
-        </div>
-    </div>
-    <script src="https://vjs.zencdn.net/7.20.3/video.min.js"></script>
+    <h1>我的HLS直播</h1>
+
+    <video
+        id="my-video"
+        class="video-js vjs-default-skin"
+        controls
+        preload="auto"
+        width="640"
+        height="360"
+        data-setup="{}"
+    >
+        <source src="http://localhost:8080/hls/test.m3u8" type="application/x-mpegURL">
+        <p class="vjs-no-js">
+            To view this video please enable JavaScript, and consider upgrading to a web browser that
+            <a href="https://videojs.com/html5-video-support/" target="_blank">supports HTML5 video</a>
+        </p>
+    </video>
+
+    <script src="https://vjs.zencdn.net/8.6.0/video.min.js"></script>
     <script>
+        // Initialize Video.js player
         var player = videojs('my-video');
-        player.play();
+        player.play(); // 尝试自动播放
     </script>
 </body>
-</html> 
+</html>

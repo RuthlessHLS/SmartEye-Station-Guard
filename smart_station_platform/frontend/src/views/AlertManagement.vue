@@ -136,10 +136,12 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onUnmounted } from 'vue';
+import { ref, reactive, onMounted, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import api from '../api'; // 导入API请求服务
 import { useRouter } from 'vue-router'; // 导入路由实例
+import { useAuthStore } from '../stores/auth'; // 导入认证store
+import { useWebSocket } from '../composables/useWebSocket'; // 导入WebSocket composable
 
 const alerts = ref([]);
 const loading = ref(false);
@@ -156,8 +158,33 @@ const pagination = reactive({
 
 const dialogVisible = ref(false);
 const currentAlert = reactive({});
+const authStore = useAuthStore(); // 使用认证store
+const router = useRouter();
 
-let ws = null; // WebSocket 实例
+// WebSocket状态和配置
+const token = localStorage.getItem('access_token');
+const wsUrl = `ws://127.0.0.1:8000/ws/alerts/?token=${token}`;
+const {
+  isConnected: wsConnected,
+  connect: connectWs,
+  messages: wsMessages
+} = useWebSocket(wsUrl, {
+  reconnectInterval: 5000,
+  reconnectAttempts: 20,
+  autoReconnect: true,
+  debug: true
+});
+
+// 监听WebSocket连接状态
+watch(wsConnected, (isConnected) => {
+  if (isConnected) {
+    console.log('Alert Management WebSocket connected');
+    ElMessage.success('告警实时推送已连接');
+  } else {
+    console.log('Alert Management WebSocket disconnected');
+    ElMessage.warning('告警实时推送连接已断开，正在尝试重新连接...');
+  }
+});
 
 // 告警类型映射 (用于显示)
 const alertTypeMap = {
@@ -176,77 +203,60 @@ const alertStatusMap = {
   resolved: '已解决',
 };
 
-const router = useRouter(); // 获取路由实例
-
-onMounted(async () => {
-  // 检查登录状态
-  const token = localStorage.getItem('access_token');
-  if (!token) {
-    ElMessage.warning('请先登录后再查看告警信息');
-    await router.push('/login');
-    return;
-  }
-  
-  await fetchAlerts();
-  connectWebSocket();
-});
-
-onUnmounted(() => {
-  if (ws) {
-    ws.close();
-  }
-});
-
-const connectWebSocket = () => {
-  ws = new WebSocket('ws://127.0.0.1:8000/ws/alerts/');
-
-  ws.onopen = () => {
-    console.log('Alert Management WebSocket connected');
-  };
-
-  ws.onmessage = (event) => {
-    const data = JSON.parse(event.data);
-    if (data.type === 'alert' && data.data) {
+// 监听WebSocket消息
+watch(wsMessages, (newMessages) => {
+  if (newMessages && newMessages.length > 0) {
+    const latestMessage = newMessages[newMessages.length - 1];
+    if (latestMessage.type === 'alert' && latestMessage.data) {
       const newAlert = {
-        ...data.data,
-        alert_time: new Date(data.data.timestamp).toLocaleString(), // 转换时间格式
-        event_type_display: alertTypeMap[data.data.event_type] || data.data.event_type,
-        status_display: alertStatusMap[data.data.status || 'pending'], // 默认待确认
-        status: data.data.status || 'pending',
-        location_desc: JSON.stringify(data.data.location), // 简化位置描述
+        ...latestMessage.data,
+        alert_time: new Date(latestMessage.data.timestamp).toLocaleString(), // 转换时间格式
+        event_type_display: alertTypeMap[latestMessage.data.event_type] || latestMessage.data.event_type,
+        status_display: alertStatusMap[latestMessage.data.status || 'pending'], // 默认待确认
+        status: latestMessage.data.status || 'pending',
+        location_desc: JSON.stringify(latestMessage.data.location), // 简化位置描述
       };
       alerts.value.unshift(newAlert); // 将新告警添加到列表顶部
       pagination.total++; // 总数增加
       ElMessage.info(`收到新告警：${newAlert.event_type_display} - ${newAlert.alert_time}`);
     }
-  };
+  }
+});
 
-  ws.onclose = () => {
-    console.log('Alert Management WebSocket disconnected. Attempting reconnect...');
-    setTimeout(connectWebSocket, 5000);
-  };
+onMounted(async () => {
+  // 检查登录状态
+  if (!authStore.isAuthenticated) {
+    ElMessage.warning('请先登录后再查看告警信息');
+    await router.push('/login');
+    return;
+  }
 
-  ws.onerror = (error) => {
-    console.error('Alert Management WebSocket error:', error);
-  };
-};
+  await fetchAlerts();
+  connectWs(); // 使用useWebSocket的connect方法
+});
+
+// 显示WebSocket连接状态
+watch(wsConnected, (isConnected) => {
+  console.log('WebSocket连接状态:', isConnected ? '已连接' : '已断开');
+});
+
+
 
 
 const fetchAlerts = async () => {
   loading.value = true;
   try {
-    // 检查认证状态
-    const token = localStorage.getItem('access_token');
-    if (!token) {
+    // 使用auth store检查认证状态
+    if (!authStore.isAuthenticated) {
       ElMessage.warning('请先登录后再查看告警信息');
       await router.push('/login');
       return;
     }
-    
+
     const params = {
       page: pagination.currentPage,
       page_size: pagination.pageSize,
-      event_type: filterForm.type, // 修改参数名为 event_type
+      event_type: filterForm.type,
       status: filterForm.status,
       start_time: filterForm.dateRange && filterForm.dateRange[0] ? filterForm.dateRange[0] : '',
       end_time: filterForm.dateRange && filterForm.dateRange[1] ? filterForm.dateRange[1] : '',
@@ -255,11 +265,11 @@ const fetchAlerts = async () => {
     console.log('发送告警请求，参数:', params); // 调试日志
     const response = await api.alerts.getList(params);
     console.log('API响应数据:', response); // 调试日志
-    
+
     // 处理不同的响应数据格式
     let alertsData = [];
     let totalCount = 0;
-    
+
     if (response && response.results) {
       // DRF标准分页响应格式
       alertsData = response.results;
@@ -273,9 +283,9 @@ const fetchAlerts = async () => {
       alertsData = [];
       totalCount = 0;
     }
-    
+
     console.log('处理后的数据:', { alertsCount: alertsData.length, totalCount }); // 调试日志
-    
+
     alerts.value = alertsData.map(alert => {
       return {
         ...alert,
@@ -286,17 +296,15 @@ const fetchAlerts = async () => {
       };
     });
     pagination.total = totalCount;
-    
+
     console.log('最终设置的告警数据:', alerts.value.length, '条'); // 调试日志
   } catch (error) {
     console.error('Fetch alerts error:', error);
-    
+
     // 根据错误类型给出不同的提示
     if (error.response?.status === 401) {
       ElMessage.error('认证失败，请重新登录');
-      localStorage.removeItem('access_token');
-      localStorage.removeItem('refresh_token');
-      await router.push('/login');
+      authStore.logout(); // 使用auth store的logout方法
     } else if (error.response?.status === 403) {
       ElMessage.error('没有权限查看告警信息');
     } else if (error.response?.status === 500) {
@@ -304,7 +312,7 @@ const fetchAlerts = async () => {
     } else {
       ElMessage.error('获取告警列表失败：' + (error.message || '未知错误'));
     }
-    
+
     // 设置空数据避免界面错误
     alerts.value = [];
     pagination.total = 0;

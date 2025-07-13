@@ -1466,7 +1466,10 @@ async def test_stream_connection_endpoint(url: str = Body(...), type: str = Body
     is_available = await stream.test_connection()
     return {"status": "success" if is_available else "error",
             "message": "视频流可用" if is_available else "无法连接到视频流"}
-
+# 添加一个健康检查接口
+@app.get("/system/status/")
+async def get_system_status():
+    return {"status": "ok", "message": "AI service is running"}
 
 # 启动Uvicorn
 if __name__ == "__main__":
