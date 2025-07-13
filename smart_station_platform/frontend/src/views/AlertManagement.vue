@@ -178,8 +178,16 @@ const alertStatusMap = {
 
 const router = useRouter(); // 获取路由实例
 
-onMounted(() => {
-  fetchAlerts();
+onMounted(async () => {
+  // 检查登录状态
+  const token = localStorage.getItem('access_token');
+  if (!token) {
+    ElMessage.warning('请先登录后再查看告警信息');
+    await router.push('/login');
+    return;
+  }
+  
+  await fetchAlerts();
   connectWebSocket();
 });
 

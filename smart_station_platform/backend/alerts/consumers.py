@@ -5,21 +5,24 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 
 class AlertConsumer(AsyncWebsocketConsumer):
     async def connect(self):
-        # 将新的连接加入到名为 'alerts_group' 的组中
+        self.camera_id = self.scope['url_route']['kwargs'].get('camera_id')
+        if self.camera_id:
+            self.group_name = f'alerts_{self.camera_id}'
+        else:
+            self.group_name = 'alerts_group'
         await self.channel_layer.group_add(
-            'alerts_group',
+            self.group_name,
             self.channel_name
         )
         await self.accept()
-        print(f"WebSocket连接已建立: {self.channel_name}")
+        print(f"WebSocket连接已建立: {self.channel_name} (group: {self.group_name})")
 
     async def disconnect(self, close_code):
-        # 当连接关闭时，将其从组中移除
         await self.channel_layer.group_discard(
-            'alerts_group',
+            self.group_name,
             self.channel_name
         )
-        print(f"WebSocket连接已断开: {self.channel_name} (关闭代码: {close_code})")
+        print(f"WebSocket连接已断开: {self.channel_name} (group: {self.group_name}, 关闭代码: {close_code})")
 
     # 接收新告警消息
     async def alert_message(self, event):

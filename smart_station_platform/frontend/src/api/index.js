@@ -11,7 +11,7 @@ const backendService = axios.create({
 // AI服务实例
 const aiService = axios.create({
   baseURL: import.meta.env.VITE_APP_AI_SERVICE_URL || 'http://127.0.0.1:8001',
-  timeout: 60000,  // 增加超时时间到60秒
+  timeout: 120000,  // 增加超时时间到120秒
   withCredentials: false, // AI服务不需要携带凭证
 });
 
@@ -66,7 +66,6 @@ backendService.interceptors.response.use(
     ) {
       return response;
     }
-    // 对于其他API请求，返回response.data
     return response.data;
   },
   async error => {
@@ -168,7 +167,18 @@ backendService.interceptors.response.use(
 
 // 响应拦截器 - AI服务
 aiService.interceptors.response.use(
-  response => response.data,
+  response => {
+    // 确保返回的数据包含 success 字段
+    if (response.data && !response.data.hasOwnProperty('success')) {
+      // 如果返回数据中没有 success 字段，根据状态添加
+      if (response.data.status === 'success') {
+        response.data.success = true;
+      } else if (response.data.status === 'error') {
+        response.data.success = false;
+      }
+    }
+    return response.data;
+  },
   async error => {
     if (!error.response) {
       console.error('AI service connection error:', error.message);
@@ -246,29 +256,72 @@ const api = {
         method: 'post'
       });
     },
-    testStreamConnection: (config) => {
+    updateSettings: (camera_id, settings) => {
       return requestWithRetry(aiService, {
-        url: '/stream/test/',
+        url: `/frame/analyze/settings/${camera_id}`,
         method: 'post',
-        data: {
-          url: config.url,
-          type: config.type
-        }
+        data: settings
       });
     },
-    analyzeFrame: (data) => {
+    analyzeFrame: (formData, config = {}) => {
       return requestWithRetry(aiService, {
         url: '/frame/analyze/',
         method: 'post',
-        data: data,
-        timeout: 20000  // 减少到20秒超时，避免阻塞
-      }, {
-        retries: 1,  // 只重试1次
-        retryDelay: 1000  // 重试延迟1秒
+        data: formData,
+        headers: {
+          'Content-Type': 'multipart/form-data'
+        },
+        ...config
       });
     },
-    getSystemStatus: () => aiService.get('/system/status/'),
-    getStreamStatus: () => aiService.get('/system/status/'),
+    testStream: (url, type) => {
+      return requestWithRetry(aiService, {
+        url: '/stream/test/',
+        method: 'post',
+        data: { url, type }
+      });
+    },
+    testConnection: () => {
+      return requestWithRetry(aiService, {
+        url: '/system/status/',
+        method: 'get'
+      });
+    },
+    clearDetectionCache: (camera_id) => {
+      return requestWithRetry(aiService, {
+        url: `/detection/cache/clear/${camera_id}`,
+        method: 'post'
+      });
+    },
+    getStabilizationConfig: (camera_id) => {
+      return requestWithRetry(aiService, {
+        url: `/detection/stabilization/config/${camera_id}`,
+        method: 'get'
+      });
+    },
+    updateStabilizationConfig: (camera_id, config) => {
+      return requestWithRetry(aiService, {
+        url: '/detection/stabilization/config/',
+        method: 'post',
+        data: {
+          camera_id,
+          ...config
+        }
+      });
+    },
+    applyStabilizationPreset: (preset, camera_id) => {
+      return requestWithRetry(aiService, {
+        url: `/detection/stabilization/preset/${preset}`,
+        method: 'post',
+        data: { camera_id }
+      });
+    },
+    getSystemStatus: () => {
+      return requestWithRetry(aiService, {
+        url: '/system/status/',
+        method: 'get'
+      });
+    }
   }
 };
 

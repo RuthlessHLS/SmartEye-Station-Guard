@@ -11,6 +11,8 @@
     "format": "prettier --write src/"
   },
   "dependencies": {
+    "@tensorflow-models/coco-ssd": "^2.2.3",
+    "@tensorflow/tfjs": "^4.22.0",
     "@videojs/http-streaming": "^3.17.0",
     "axios": "^1.10.0",
     "dplayer": "^1.27.1",
