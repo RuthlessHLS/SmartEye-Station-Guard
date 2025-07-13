@@ -257,7 +257,7 @@ class FaceRecognizer:
             for known_name, known_encodings in self.known_faces.items():
                 if known_encodings:  # 确保有已知编码
                     # 计算人脸特征向量的欧氏距离
-                    distances = face_recognition.face_distances(known_encodings, face_encoding)
+                    distances = face_recognition.face_distance(known_encodings, face_encoding)
                     all_distances[known_name] = distances.tolist()  # 转换为列表
 
             best_matches = []

@@ -39,6 +39,17 @@ class VideoStream:
             face_recognizer: 已初始化的人脸识别器实例 (仅为兼容性传入)
             fire_detector: 已初始化的火焰烟雾检测器实例 (仅为兼容性传入)
         """
+        # --- 新增代码：为RTMP/RTSP流设置FFMPEG选项 ---
+        # 强制OpenCV使用TCP连接，解决在Windows上常见的UDP丢包或连接问题
+        if stream_url.startswith('rtmp') or stream_url.startswith('rtsp'):
+            logger.info("检测到RTMP/RTSP流，设置FFMPEG选项为 'rtsp_transport;tcp'")
+            os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'rtsp_transport;tcp'
+        else:
+            # 如果不是RTMP/RTSP，确保环境变量被清除，以免影响其他类型的流
+            if 'OPENCV_FFMPEG_CAPTURE_OPTIONS' in os.environ:
+                del os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS']
+        # --- 新增代码结束 ---
+
         self.stream_url = stream_url
         self.camera_id = camera_id
         self.cap: Optional[cv2.VideoCapture] = None
@@ -83,18 +94,27 @@ class VideoStream:
         独立的线程，负责从视频流中持续读取帧并放入缓冲区。
         """
         logger.info(f"帧读取线程启动 for {self.camera_id}.")
-        self.cap = cv2.VideoCapture(self.stream_url)
+        # 【修改点 1 START】 将 self.cap = ... 移到这里，并使用局部变量 cap_thread
+        # 线程内部尝试打开视频流
+        cap_thread = cv2.VideoCapture(self.stream_url)
 
-        if not self.cap.isOpened():
+        if not cap_thread.isOpened():
             logger.error(f"帧读取线程无法打开视频流: {self.stream_url}")
             self.is_running = False
             return
+
+        # 成功打开后，将局部变量赋值给 self.cap
+        # 这确保了主线程在检查 self.cap.isOpened() 时，它已经被正确初始化
+        self.cap = cap_thread
+        # 【修改点 1 END】
 
         while self.is_running:
             ret, frame = self.cap.read()
             if not ret:
                 logger.warning(f"从视频流读取帧失败，可能流已结束或中断 for {self.camera_id}。尝试重新连接...")
-                self.cap.release()
+                # 检查 self.cap 是否仍处于打开状态，避免重复释放已关闭的捕获器
+                if self.cap and self.cap.isOpened():  # 新增对 self.cap.isOpened() 的检查，更安全地释放
+                    self.cap.release()
                 time.sleep(1)  # 等待一秒后尝试重新连接
                 self.cap = cv2.VideoCapture(self.stream_url)
                 if not self.cap.isOpened():
@@ -114,7 +134,9 @@ class VideoStream:
             # 根据实际需要调整，这里假设帧率由读取速度决定，可以增加一个sleep来限制FPS
             # time.sleep(0.01) # 例如，限制为100 FPS的读取速度
 
-        self.cap.release()
+        # 确保在线程结束时释放捕获器
+        if self.cap:  # 确保 cap 不为 None 再释放
+            self.cap.release()
         logger.info(f"帧读取线程停止 for {self.camera_id}.")
 
     def get_raw_frame(self) -> Tuple[bool, Optional[np.ndarray]]:
@@ -145,9 +167,12 @@ class VideoStream:
         self.frame_read_thread = threading.Thread(target=self._read_frames_thread, daemon=True)
         self.frame_read_thread.start()
 
-        # 启动后稍作等待，确保视频捕获器初始化
-        await asyncio.sleep(0.5)
+        # 【修改点 3 START】 启动后稍作等待，确保视频捕获器初始化
+        # 将等待时间从 0.5 秒增加到 2.0 秒，给 cv2.VideoCapture 更多时间来打开流
+        await asyncio.sleep(2.0)
+        # 【修改点 3 END】
 
+        # 再次检查 self.cap 是否已经成功打开
         if not self.cap or not self.cap.isOpened():
             logger.error(f"启动视频流失败，捕获器未成功打开 for {self.camera_id}.")
             self.is_running = False
@@ -284,4 +309,3 @@ class VideoStream:
         """
         logger.info(f"VideoStream收到了更新AI分析设置的请求，但本类不直接处理AI逻辑。设置: {settings}")
         return True
-

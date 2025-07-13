@@ -494,7 +494,7 @@ class AIServiceManager:
             limit_factor = 25 / center_change
             final_center_x = old_center[0] + (new_center[0] - old_center[0]) * limit_factor
             final_center_y = old_center[1] + (new_center[1] - old_center[1]) * limit_factor
-            smoothed_bbox = [int(final_center_x - w / 2), int(final_center_y - h / 2), int(final_center_x + w / 2),
+            smoothed_bbox = [int(final_center_y - h / 2), int(final_center_x + w / 2),int(final_center_x + w / 2),
                              int(final_center_y + h / 2)]
         return smoothed_bbox
 
@@ -517,7 +517,7 @@ class AIServiceManager:
             last_pos = positions[-1]
             prev_pos = positions[-2]
             last_time = timestamps[-1]
-            prev_time = timestamps["-2"]
+            prev_time = timestamps[-2]
             dt = last_time - prev_time
             if dt > 0:
                 vx = (last_pos[0] - prev_pos[0]) / dt
@@ -640,8 +640,9 @@ class AIServiceManager:
         return new_bbox
 
     def _process_face_recognition_with_stabilization(self, camera_id: str, frame: np.ndarray) -> List[Dict]:
-        current_tolerance = self._face_recognition_config.get('tolerance', 0.65)
-        recognized_faces = self._detectors["face"].detect_and_recognize(frame, tolerance=current_tolerance)
+        # current_tolerance = self._face_recognition_config.get('tolerance', 0.65) # 这个值 FaceRecognizer 内部应该会处理
+        # 【修改点 4】 移除 tolerance 参数
+        recognized_faces = self._detectors["face"].detect_and_recognize(frame) # 之前: recognized_faces = self._detectors["face"].detect_and_recognize(frame, tolerance=current_tolerance)
 
         face_detections = []
         for face in recognized_faces:
@@ -844,7 +845,8 @@ class AIServiceManager:
         if enable_fire_detection and "fire" in self._detectors:
             try:
                 fire_detector = self._detectors["fire"]
-                fire_results = fire_detector.detect(frame, confidence_threshold=0.25)
+                # 【修改点 1】 移除 confidence_threshold 参数
+                fire_results = fire_detector.detect(frame) # 之前: fire_detector.detect(frame, confidence_threshold=0.25)
                 for fire_obj in fire_results:
                     bbox = [int(float(coord)) for coord in fire_obj["coordinates"]]
                     detection = {
@@ -874,9 +876,9 @@ class AIServiceManager:
                 obj_scale = strategy["object_scale_factor"]
                 obj_height, obj_width = int(height * obj_scale), int(width * obj_scale)
                 obj_image = cv2.resize(frame, (obj_width, obj_height))
-                confidence_threshold = self._object_detection_config.get('confidence_threshold', 0.35)
-                detected_objects = self._detectors["object"].predict(obj_image,
-                                                                     confidence_threshold=confidence_threshold)
+                # confidence_threshold = self._object_detection_config.get('confidence_threshold', 0.35) # 这个值 GenericPredictor 内部应该会处理
+                # 【修改点 2】 移除 confidence_threshold 参数
+                detected_objects = self._detectors["object"].predict(obj_image) # 之前: self._detectors["object"].predict(obj_image, confidence_threshold=confidence_threshold)
 
                 scale_back_x, scale_back_y = width / obj_width, height / obj_height
                 object_detections = []
@@ -905,6 +907,8 @@ class AIServiceManager:
                 face_height, face_width = int(height * face_scale), int(width * face_scale)
                 face_image = cv2.resize(frame, (face_width, face_height))
 
+                # 【修改点 3】 _process_face_recognition_with_stabilization 内部会处理 tolerance，这里无需重复传递
+                # 这里调用的是 AIServiceManager 自己的方法，该方法内部会调用 FaceRecognizer
                 stabilized_faces = self._process_face_recognition_with_stabilization(camera_id, face_image)
 
                 scale_back_x, scale_back_y = width / face_width, height / face_height
