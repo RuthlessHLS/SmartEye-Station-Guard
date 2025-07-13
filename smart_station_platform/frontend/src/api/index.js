@@ -167,18 +167,7 @@ backendService.interceptors.response.use(
 
 // 响应拦截器 - AI服务
 aiService.interceptors.response.use(
-  response => {
-    // 确保返回的数据包含 success 字段
-    if (response.data && !response.data.hasOwnProperty('success')) {
-      // 如果返回数据中没有 success 字段，根据状态添加
-      if (response.data.status === 'success') {
-        response.data.success = true;
-      } else if (response.data.status === 'error') {
-        response.data.success = false;
-      }
-    }
-    return response.data;
-  },
+  response => response.data,
   async error => {
     if (!error.response) {
       console.error('AI service connection error:', error.message);
