@@ -1,12 +1,16 @@
 # 文件: ai_service/core/face_recognition.py
-# 描述: 人脸识别器，用于检测、编码和识别人脸。
+# 描述: 智能人脸识别器，用于检测、编码和识别人脸，支持动态灵敏度配置和新面孔注册。
 
 import face_recognition
 import numpy as np
 import os
 import cv2
-from typing import List, Dict
+from typing import List, Dict, Any, Optional, Tuple
+import logging
 from datetime import datetime
+
+# 获取logger实例
+logger = logging.getLogger(__name__)
 
 
 class FaceRecognizer:
@@ -18,238 +22,316 @@ class FaceRecognizer:
             known_faces_dir (str): 包含已知人脸图片的目录路径。
                                 目录结构应为：known_faces_dir/person_name/image_files
         """
-        self.known_faces = {}  # 使用字典存储每个人的人脸编码 {name: [encodings]}
-        
-        if not os.path.exists(known_faces_dir):
-            print(f"警告: 已知人脸目录不存在: {known_faces_dir}")
+        self.known_faces = {}  # 存储每个人的人脸编码 {name: [encodings]}
+        self.enabled = True  # 控制检测器是否启用
+
+        # 内部默认检测参数 (可被外部配置覆盖)
+        self._default_config = {
+            'tolerance': 0.65,  # 默认人脸比对容忍度
+            'detection_model': 'auto',  # 默认人脸检测模型: 'hog', 'cnn', 'auto'
+            'number_of_times_to_upsample': 2,  # 检测前对图像进行上采样次数
+            'min_face_size': 40,  # 最小人脸尺寸 (像素)，小于此尺寸的人脸将被忽略
+        }
+        self.current_config = self._default_config.copy()  # 当前生效的配置
+
+        self.known_faces_dir = known_faces_dir
+        self._load_known_faces()
+
+    def _load_known_faces(self):
+        """内部方法：从指定目录加载已知人脸。"""
+        self.known_faces.clear()  # 清除现有数据，以便重新加载
+
+        if not os.path.exists(self.known_faces_dir):
+            logger.warning(f"已知人脸目录不存在: {self.known_faces_dir}。人脸识别功能可能受限。")
             return
 
-        # 遍历目录加载已知人脸
-        print(f"\n=== 开始加载已知人脸数据库 ===")
-        print(f"目录路径: {known_faces_dir}")
-        
-        for person_name in os.listdir(known_faces_dir):
-            person_dir = os.path.join(known_faces_dir, person_name)
+        logger.info(f"=== 开始加载已知人脸数据库 ===")
+        logger.info(f"目录路径: {self.known_faces_dir}")
+
+        for person_name in os.listdir(self.known_faces_dir):
+            person_dir = os.path.join(self.known_faces_dir, person_name)
             if os.path.isdir(person_dir):
-                print(f"\n📁 处理人员目录: {person_name}")
+                logger.info(f"📁 处理人员目录: {person_name}")
                 self.known_faces[person_name] = []
-                
-                image_files = [f for f in os.listdir(person_dir) 
-                             if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
-                print(f"  找到 {len(image_files)} 个图片文件")
-                
+
+                image_files = [f for f in os.listdir(person_dir)
+                               if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+                logger.info(f"  找到 {len(image_files)} 个图片文件")
+
                 for image_name in image_files:
                     image_path = os.path.join(person_dir, image_name)
                     try:
-                        print(f"  - 处理图片: {image_name}")
-                        # 加载图片
+                        logger.debug(f"  - 处理图片: {image_name}")
                         face_image = face_recognition.load_image_file(image_path)
-                        # 检测人脸
-                        face_locations = face_recognition.face_locations(face_image)
+                        # 在加载时使用默认模型和上采样
+                        face_locations = face_recognition.face_locations(
+                            face_image,
+                            model=self._default_config['detection_model'] if self._default_config[
+                                                                                 'detection_model'] != 'auto' else 'hog',
+                            number_of_times_to_upsample=self._default_config['number_of_times_to_upsample']
+                        )
                         if not face_locations:
-                            print(f"    ⚠️ 警告: 未检测到人脸")
+                            logger.warning(f"    ⚠️ 警告: 图片 '{image_name}' 未检测到人脸")
                             continue
-                        # 提取人脸特征
+
                         face_encodings = face_recognition.face_encodings(face_image, face_locations)
                         if face_encodings:
                             self.known_faces[person_name].extend(face_encodings)
-                            print(f"    ✅ 成功提取人脸特征")
+                            logger.debug(f"    ✅ 成功提取人脸特征 from {image_name}")
                         else:
-                            print(f"    ⚠️ 警告: 无法提取人脸特征")
+                            logger.warning(f"    ⚠️ 警告: 无法从图片 '{image_name}' 提取人脸特征")
                     except Exception as e:
-                        print(f"    ❌ 错误: {str(e)}")
-                
-                # 显示该人员的统计信息
+                        logger.error(f"    ❌ 错误处理图片 '{image_name}': {str(e)}", exc_info=True)
+
                 encodings_count = len(self.known_faces[person_name])
                 if encodings_count > 0:
-                    print(f"  ✅ {person_name} 总共提取了 {encodings_count} 个人脸特征")
+                    logger.info(f"  ✅ {person_name} 总共提取了 {encodings_count} 个人脸特征")
                 else:
-                    print(f"  ⚠️ {person_name} 没有提取到任何有效的人脸特征，将被移除")
+                    logger.warning(f"  ⚠️ {person_name} 没有提取到任何有效的人脸特征，将被移除")
                     del self.known_faces[person_name]
-        
-        # 显示最终统计信息
-        print("\n=== 人脸数据库加载完成 ===")
-        print(f"总共加载了 {len(self.known_faces)} 个人员:")
-        for name, encodings in self.known_faces.items():
-            print(f"- {name}: {len(encodings)} 个特征")
-        print("=========================")
 
-    def detect_and_recognize(self, frame: np.ndarray, tolerance=0.6) -> List[Dict]:
+        logger.info("\n=== 人脸数据库加载完成 ===")
+        logger.info(f"总共加载了 {len(self.known_faces)} 个人员:")
+        for name, encodings in self.known_faces.items():
+            logger.info(f"- {name}: {len(encodings)} 个特征")
+        logger.info("=========================")
+
+    def update_config(self, new_config: Dict[str, Any]):
+        """
+        更新人脸识别器的配置参数。
+        Args:
+            new_config (Dict[str, Any]): 包含要更新的配置项的字典。
+        """
+        for key, value in new_config.items():
+            if key in self.current_config:
+                self.current_config[key] = value
+                logger.info(f"更新人脸识别配置: {key} = {value}")
+            else:
+                logger.warning(f"尝试更新不存在的配置项: {key}")
+        logger.info(f"人脸识别器当前配置: {self.current_config}")
+
+    def set_enabled(self, enabled: bool):
+        """启用或禁用人脸识别器"""
+        self.enabled = enabled
+        logger.info(f"人脸识别器已{'启用' if enabled else '禁用'}")
+
+    def add_face(self, image: np.ndarray, person_name: str) -> bool:
+        """
+        在运行时添加新的人脸到已知人脸数据库。
+        Args:
+            image (np.ndarray): 包含新人脸的图像 (BGR格式)。
+            person_name (str): 新人脸的名称。
+        Returns:
+            bool: 如果成功添加人脸返回 True，否则返回 False。
+        """
+        if not self.enabled:
+            logger.warning("人脸识别器已禁用，无法添加新面孔。")
+            return False
+
+        try:
+            # 转换为RGB格式（face_recognition库要求）
+            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+            # 使用当前配置检测人脸
+            face_locations = face_recognition.face_locations(
+                rgb_image,
+                model=self.current_config['detection_model'] if self.current_config[
+                                                                    'detection_model'] != 'auto' else 'hog',
+                number_of_times_to_upsample=self.current_config['number_of_times_to_upsample']
+            )
+
+            if not face_locations:
+                logger.warning(f"未在提供的图像中检测到人脸，无法注册 '{person_name}'。")
+                return False
+
+            # 过滤掉过小的人脸
+            filtered_locations = [
+                loc for loc in face_locations
+                if (loc[2] - loc[0]) >= self.current_config['min_face_size'] and
+                   (loc[1] - loc[3]) >= self.current_config['min_face_size']
+            ]
+
+            if not filtered_locations:
+                logger.warning(
+                    f"检测到的人脸尺寸过小，无法注册 '{person_name}' (最小尺寸要求: {self.current_config['min_face_size']}px)。")
+                return False
+
+            face_encodings = face_recognition.face_encodings(rgb_image, filtered_locations)
+
+            if not face_encodings:
+                logger.warning(f"无法从图像中提取人脸特征，无法注册 '{person_name}'。")
+                return False
+
+            # 将新提取的编码添加到内存中的已知人脸字典
+            if person_name not in self.known_faces:
+                self.known_faces[person_name] = []
+            self.known_faces[person_name].extend(face_encodings)
+
+            # 可选：将新注册的人脸图片保存到 known_faces_dir 对应的子目录
+            person_dir = os.path.join(self.known_faces_dir, person_name)
+            os.makedirs(person_dir, exist_ok=True)
+            # 保存一个副本，用于持久化
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_image_path = os.path.join(person_dir, f"{person_name}_{timestamp}.jpg")
+            cv2.imwrite(output_image_path, image)
+
+            logger.info(f"成功注册人脸 '{person_name}'，提取 {len(face_encodings)} 个特征，保存到 {output_image_path}")
+            return True
+
+        except Exception as e:
+            logger.error(f"注册人脸 '{person_name}' 时发生错误: {str(e)}", exc_info=True)
+            return False
+
+    def detect_and_recognize(self, frame: np.ndarray) -> List[Dict]:
         """
         在单帧图像中检测并识别人脸。
-
         Args:
             frame (np.ndarray): BGR格式的视频帧。
-            tolerance (float): 人脸比对的容忍度，值越小比对越严格。
-                             建议范围：0.5-0.7，小于0.5可能过于严格，大于0.7可能过于宽松。
-
         Returns:
             List[Dict]: 一个包含检测到的所有人脸信息的字典列表。
         """
+        if not self.enabled:
+            return []
+
         results = []
 
-        # 🎯 优化人脸检测：提高检测灵敏度和小人脸检测能力
-        # 尝试不同的检测模型和参数组合
+        # 获取当前配置
+        tolerance = self.current_config['tolerance']
+        detection_model = self.current_config['detection_model']
+        upsample_times = self.current_config['number_of_times_to_upsample']
+        min_face_size = self.current_config['min_face_size']
+
+        # 转换为RGB格式（face_recognition库要求）
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
         face_locations = []
-        
-        # 方法1：使用CNN模型 (更准确但较慢) - 提高灵敏度
+
+        # 🎯 优化人脸检测：根据配置选择模型和参数
         try:
-            face_locations = face_recognition.face_locations(frame, model="cnn", number_of_times_to_upsample=2)
+            if detection_model == "cnn":
+                face_locations = face_recognition.face_locations(rgb_frame, model="cnn",
+                                                                 number_of_times_to_upsample=upsample_times)
+            elif detection_model == "hog":
+                face_locations = face_recognition.face_locations(rgb_frame, model="hog",
+                                                                 number_of_times_to_upsample=upsample_times)
+            else:  # auto 或其他未指定模型时，尝试多模型策略
+                # 优先使用hog，因为它通常更快
+                face_locations = face_recognition.face_locations(rgb_frame, model="hog",
+                                                                 number_of_times_to_upsample=upsample_times)
+                if not face_locations and upsample_times < 3:  # 如果hog没检测到且上采样次数不高，尝试更高的上采样
+                    face_locations = face_recognition.face_locations(rgb_frame, model="hog",
+                                                                     number_of_times_to_upsample=upsample_times + 1)
+                if not face_locations:  # 如果hog仍没检测到，尝试cnn
+                    face_locations = face_recognition.face_locations(rgb_frame, model="cnn",
+                                                                     number_of_times_to_upsample=upsample_times)
+
             if face_locations:
-                print(f"🎯 CNN模型检测到 {len(face_locations)} 个人脸")
-        except:
-            pass
-        
-        # 方法2：如果CNN没检测到，使用HOG模型 (更快但可能漏检) - 提高灵敏度
-        if not face_locations:
-            face_locations = face_recognition.face_locations(frame, model="hog", number_of_times_to_upsample=3)
-            if face_locations:
-                print(f"🎯 HOG模型检测到 {len(face_locations)} 个人脸")
-        
-        # 方法3：如果还是没有，尝试缩放图像再检测
-        if not face_locations and frame.shape[0] > 480:
-            # 对于大图像，先缩小再检测可能更有效
-            scale_factor = 480 / frame.shape[0]
-            small_frame = cv2.resize(frame, None, fx=scale_factor, fy=scale_factor)
-            small_face_locations = face_recognition.face_locations(small_frame, model="hog", number_of_times_to_upsample=2)
-            
-            # 将小图上的坐标转换回原图
-            face_locations = []
-            for (top, right, bottom, left) in small_face_locations:
-                face_locations.append((
-                    int(top / scale_factor),
-                    int(right / scale_factor), 
-                    int(bottom / scale_factor),
-                    int(left / scale_factor)
-                ))
-            if face_locations:
-                print(f"🎯 缩放检测到 {len(face_locations)} 个人脸")
-        
-        # 方法4：新增 - 尝试更小的缩放比例检测微小人脸
-        if not face_locations:
-            try:
-                # 尝试检测更小的人脸
-                smaller_frame = cv2.resize(frame, None, fx=0.8, fy=0.8)
-                small_face_locations = face_recognition.face_locations(smaller_frame, model="hog", number_of_times_to_upsample=4)
-                
-                # 将坐标转换回原图
-                face_locations = []
-                for (top, right, bottom, left) in small_face_locations:
-                    face_locations.append((
-                        int(top / 0.8),
-                        int(right / 0.8), 
-                        int(bottom / 0.8),
-                        int(left / 0.8)
-                    ))
-                if face_locations:
-                    print(f"🎯 高灵敏度检测到 {len(face_locations)} 个人脸")
-            except:
-                pass
-        
-        if not face_locations:
-            print("⚠️ 未检测到任何人脸")
+                logger.debug(f"🎯 检测模型 '{detection_model}' 检测到 {len(face_locations)} 个人脸")
+        except Exception as e:
+            logger.error(f"人脸检测失败: {str(e)}", exc_info=True)
+            return []  # 如果检测失败，直接返回空列表
+
+        # 过滤掉过小的人脸
+        filtered_face_locations = []
+        for (top, right, bottom, left) in face_locations:
+            face_height = bottom - top
+            face_width = right - left
+            if face_height >= min_face_size and face_width >= min_face_size:
+                filtered_face_locations.append((top, right, bottom, left))
+            else:
+                logger.debug(f"  过滤掉过小人脸: H={face_height}, W={face_width} (Min size: {min_face_size}px)")
+
+        if not filtered_face_locations:
+            logger.debug("⚠️ 未检测到满足尺寸要求的人脸")
             return results
-            
+
         # 提取人脸特征
-        face_encodings = face_recognition.face_encodings(frame, face_locations)
-        
+        face_encodings = face_recognition.face_encodings(rgb_frame, filtered_face_locations)
+
         # 对每个检测到的人脸进行识别
-        for face_idx, (face_location, face_encoding) in enumerate(zip(face_locations, face_encodings)):
+        for face_idx, (face_location, face_encoding) in enumerate(zip(filtered_face_locations, face_encodings)):
             top, right, bottom, left = face_location
-            
+
             # 与所有已知人脸进行比对
             all_distances = {}  # {name: [distances]}
             for known_name, known_encodings in self.known_faces.items():
-                all_distances[known_name] = []
-                for known_encoding in known_encodings:
+                if known_encodings:  # 确保有已知编码
                     # 计算人脸特征向量的欧氏距离
-                    distance = face_recognition.face_distance([known_encoding], face_encoding)[0]
-                    all_distances[known_name].append(distance)
-            
-            # 输出调试信息
-            print(f"\n🔍 人脸 #{face_idx + 1} 识别结果:")
-            print(f"  位置: 上={top}, 右={right}, 下={bottom}, 左={left}")
-            
-            # 计算每个人的最小距离（最佳匹配）和平均距离
+                    distances = face_recognition.face_distances(known_encodings, face_encoding)
+                    all_distances[known_name] = distances.tolist()  # 转换为列表
+
             best_matches = []
             for name, distances in all_distances.items():
                 if distances:
                     min_distance = min(distances)
                     avg_distance = sum(distances) / len(distances)
                     best_matches.append((name, min_distance, avg_distance))
-            
-            # 按最小距离排序
-            best_matches.sort(key=lambda x: x[1])
-            
+
+            best_matches.sort(key=lambda x: x[1])  # 按最小距离排序
+
+            identity = {"name": "unknown", "known": False, "confidence": 0.0}
+            confidence_score = 0.0
+
             if best_matches:
-                print("  匹配分数 (越小越相似):")
-                for name, min_dist, avg_dist in best_matches:
-                    print(f"    - {name}: 最佳={min_dist:.3f}, 平均={avg_dist:.3f}")
-                
-                # 选择最佳匹配作为识别结果
                 best_name, best_distance, avg_distance = best_matches[0]
-                
+
                 # 🎯 优化后的识别判断：更灵敏但仍准确
-                
                 # 1. 基础阈值检查：最佳匹配必须小于基础阈值
                 passes_base_threshold = best_distance <= tolerance
-                
+
                 # 2. 简化的差异度检查：如果有其他候选人，确保有一定差距
+                # 避免被第二相似的人脸干扰
+                passes_distinction = True
                 if len(best_matches) > 1:
                     second_best_distance = best_matches[1][1]
-                    distance_gap = (second_best_distance - best_distance) / best_distance
-                    passes_distinction = distance_gap > 0.12  # 降低差距要求从15%到12%
-                else:
-                    passes_distinction = True
-                
+                    # 确保最佳匹配与次佳匹配之间有足够的距离差异
+                    if best_distance > 0:  # 避免除以零
+                        distance_gap_ratio = (second_best_distance - best_distance) / best_distance
+                        if distance_gap_ratio < 0.12:  # 降低差距要求从15%到12%
+                            passes_distinction = False
+
                 # 3. 适中的绝对阈值检查：进一步放宽硬性上限
                 passes_absolute = best_distance <= 0.75  # 放宽从0.65到0.75
-                
+
                 # 🔥 扩展：高置信度快速通道 - 扩大快速通道范围
                 is_high_confidence = best_distance <= 0.45  # 从0.35扩展到0.45
-                
+
                 # 🌟 新增：中等置信度通道 - 在高置信度和标准检查之间增加中间层
                 is_medium_confidence = (best_distance <= 0.55 and passes_base_threshold)
-                
+
                 # 综合判断：多级通道提高识别率
                 is_confident = (
-                    is_high_confidence or      # 高置信度快速通道
-                    is_medium_confidence or    # 中等置信度通道
-                    (passes_base_threshold and passes_distinction and passes_absolute)
+                        is_high_confidence or  # 高置信度快速通道
+                        is_medium_confidence or  # 中等置信度通道
+                        (passes_base_threshold and passes_distinction and passes_absolute)
                 )
-                
+
                 if is_confident:
-                    identity = {"name": best_name, "known": True, "confidence": 1 - best_distance}
-                    print(f"  ✅ 识别为: {best_name}")
+                    confidence_score = max(0.0, 1.0 - best_distance)  # 距离越小，置信度越高
+                    identity = {"name": best_name, "known": True, "confidence": confidence_score}
+                    logger.debug(f"  ✅ 识别为: {best_name} (距离: {best_distance:.3f}, 置信度: {confidence_score:.3f})")
                     if is_high_confidence:
-                        print(f"    🚀 高置信度快速通道: {best_distance:.3f} ≤ 0.45")
+                        logger.debug(f"    🚀 高置信度快速通道: {best_distance:.3f} <= 0.45")
                     elif is_medium_confidence:
-                        print(f"    🎯 中等置信度通道: {best_distance:.3f} ≤ 0.55")
+                        logger.debug(f"    🎯 中等置信度通道: {best_distance:.3f} <= 0.55")
                     else:
-                        print(f"    📊 标准检查通过:")
-                        print(f"    - 基础阈值: {'✓' if passes_base_threshold else '✗'} ({best_distance:.3f} vs {tolerance})")
-                        print(f"    - 差异程度: {'✓' if passes_distinction else '✗'}")
-                        print(f"    - 绝对阈值: {'✓' if passes_absolute else '✗'} ({best_distance:.3f} vs 0.75)")
+                        logger.debug(
+                            f"    📊 标准检查通过: 基础阈值={passes_base_threshold}, 差异={passes_distinction}, 绝对={passes_absolute}")
                 else:
-                    identity = {"name": "unknown", "known": False, "confidence": 0}
-                    print(f"  ❌ 未知人员 (距离: {best_distance:.3f})")
-                    print(f"    🔍 检查结果:")
-                    print(f"    - 高置信度: {'✗' if not is_high_confidence else '✓'} ({best_distance:.3f} > 0.45)")
-                    print(f"    - 中等置信度: {'✗' if not is_medium_confidence else '✓'} ({best_distance:.3f} > 0.55)")
-                    print(f"    - 基础阈值: {'✗' if not passes_base_threshold else '✓'} ({best_distance:.3f} vs {tolerance})")
-                    print(f"    - 差异程度: {'✗' if not passes_distinction else '✓'}")
-                    print(f"    - 绝对阈值: {'✗' if not passes_absolute else '✓'} ({best_distance:.3f} vs 0.75)")
+                    identity = {"name": "unknown", "known": False, "confidence": 0.0}
+                    logger.debug(f"  ❌ 未知人员 (最佳距离: {best_distance:.3f})")
+                    logger.debug(
+                        f"    🔍 检查未通过: 高置信度={is_high_confidence}, 中等置信度={is_medium_confidence}, 基础阈值={passes_base_threshold}, 差异={passes_distinction}, 绝对={passes_absolute}")
             else:
-                identity = {"name": "unknown", "known": False, "confidence": 0}
-            
-            # 添加到结果列表
+                logger.debug("  没有已知人脸匹配。")
+
             results.append({
                 "location": {"top": top, "right": right, "bottom": bottom, "left": left},
                 "identity": identity,
-                "confidence": 1 - best_matches[0][1] if best_matches else 0,
-                "alert_needed": identity["name"] == "unknown",  # 添加是否需要报警的标志
-                "best_match": best_matches[0] if best_matches else None,  # 添加最佳匹配信息
-                "detection_time": datetime.now().isoformat()  # 添加检测时间
+                "confidence": confidence_score,
+                "alert_needed": identity["name"] == "unknown",
+                "best_match": best_matches[0] if best_matches else None,
+                "detection_time": datetime.now().isoformat()
             })
-        
+
         return results
