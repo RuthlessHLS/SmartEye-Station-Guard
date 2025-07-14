@@ -3,14 +3,6 @@ import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import router from '@/router';
 import api from '@/api';
-import axios, {request} from "axios";
-
-
-// 创建一个 Axios 实例 (保持私有，不直接导出)
-const apiClient = axios.create({
-  baseURL: 'http://127.0.0.1:8000/api',
-  timeout: 10000,
-});
 
 
 // localStorage key 定义
@@ -222,7 +214,6 @@ export const useAuthStore = defineStore('auth', () => {
     isAuthenticated,
     isAdmin,
     userId,
-    request,
     login,
     logout,
     fetchUser,

@@ -96,7 +96,7 @@
 </template>
 
 <script setup>
-import { ref, reactive } from 'vue'
+import { ref, reactive, nextTick } from 'vue'
 import { Plus, Camera } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import api from '@/api'
@@ -157,15 +157,23 @@ const removeImage = () => {
 // 打开摄像头
 const startCamera = async () => {
   try {
+    // 1. 先把对话框显示出来
+    showCamera.value = true
+
+    // 2. 等待下一次DOM更新，确保 <video> 元素已存在
+    await nextTick()
+
+    // 3. 现在 video.value 肯定不是 null 了，可以安全操作
     stream.value = await navigator.mediaDevices.getUserMedia({
       video: true,
       audio: false
     })
     video.value.srcObject = stream.value
-    showCamera.value = true
   } catch (error) {
     ElMessage.error('无法访问摄像头')
     console.error('Camera error:', error)
+    // 如果出错，记得把对话框关掉
+    showCamera.value = false
   }
 }
 

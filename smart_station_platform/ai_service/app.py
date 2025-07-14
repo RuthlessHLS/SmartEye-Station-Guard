@@ -17,7 +17,7 @@ import numpy as np
 import uvicorn
 import requests
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Body, File, UploadFile, Form, Query
+from fastapi import FastAPI, HTTPException, Body, File, UploadFile, Form, Query, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, ConfigDict
 from requests.adapters import HTTPAdapter
@@ -1251,6 +1251,27 @@ class AIServiceManager:
 
     def remove_danger_zone(self, camera_id: str, zone_id: str):
         danger_zone_detector.remove_danger_zone(camera_id, zone_id)
+
+    def get_status(self):
+        # ... existing code ...
+        return status_info
+
+    async def reload_face_recognizer(self):
+        """
+        重新加载人脸识别器中的已知人脸数据。
+        """
+        if not self.face_recognizer:
+            logger.warning("人脸识别器未初始化，无法重新加载。")
+            return {"status": "failed", "message": "Face recognizer not initialized."}
+        
+        try:
+            logger.info("=== 正在通过API请求重新加载人脸数据库 ===")
+            await self.face_recognizer.reload_known_faces()
+            logger.info("=== 人脸数据库重新加载成功 ===")
+            return {"status": "success", "message": "Known faces reloaded successfully."}
+        except Exception as e:
+            logger.error(f"重新加载人脸数据库时出错: {e}", exc_info=True)
+            return {"status": "failed", "message": str(e)}
 
 
 # 创建服务管理器实例

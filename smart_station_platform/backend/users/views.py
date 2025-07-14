@@ -48,6 +48,8 @@ from .serializers import (
 )
 from .models import FaceData, RegisteredFace
 from PIL import Image
+import os
+import shutil
 
 User = get_user_model()
 
@@ -480,6 +482,45 @@ class RegisteredFaceViewSet(viewsets.ModelViewSet):
     queryset = RegisteredFace.objects.all()
     permission_classes = [IsAuthenticated]
     
+    def perform_create(self, serializer):
+        """
+        在创建新的人脸记录后，自动将图片同步到AI人脸库并通知AI服务刷新。
+        """
+        registered_face = serializer.save()
+
+        try:
+            source_path = registered_face.face_image.path
+            person_name = registered_face.name
+
+            ai_assets_dir = getattr(settings, 'AI_ASSETS_DIR', None)
+            if not ai_assets_dir:
+                print("错误：settings.py 中未配置 AI_ASSETS_DIR")
+                return
+            
+            destination_dir = os.path.join(ai_assets_dir, 'known_faces', person_name)
+            os.makedirs(destination_dir, exist_ok=True)
+            destination_path = os.path.join(destination_dir, os.path.basename(source_path))
+            shutil.copy2(source_path, destination_path)
+            print(f"成功将人脸图片复制到: {destination_path}")
+
+            ai_service_url = getattr(settings, 'AI_SERVICE_URL', None)
+            ai_service_api_key = getattr(settings, 'AI_SERVICE_API_KEY', None)
+
+            if not ai_service_url or not ai_service_api_key:
+                print("错误：settings.py 中未配置 AI_SERVICE_URL 或 AI_SERVICE_API_KEY")
+                return
+
+            reload_endpoint = f"{ai_service_url}/faces/reload"
+            headers = {"X-API-Key": ai_service_api_key}
+            
+            response = requests.post(reload_endpoint, headers=headers, timeout=60)
+            response.raise_for_status()
+            
+            print(f"成功调用AI服务重新加载人脸: {response.json()}")
+
+        except Exception as e:
+            print(f"注册后同步人脸到AI服务时发生错误: {e}")
+
     def get_permissions(self):
         """只有管理员可以执行创建、更新和删除操作"""
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
