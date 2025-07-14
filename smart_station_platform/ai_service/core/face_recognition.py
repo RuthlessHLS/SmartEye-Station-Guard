@@ -8,9 +8,13 @@ import cv2
 from typing import List, Dict, Any, Optional, Tuple
 import logging
 from datetime import datetime
+# from concurrent.futures import ThreadPoolExecutor  # 【移除】不再需要线程池
 
 # 获取logger实例
 logger = logging.getLogger(__name__)
+
+# 【移除】不再需要全局线程池
+# _face_loading_thread_pool = ThreadPoolExecutor(max_workers=os.cpu_count() or 4)
 
 
 class FaceRecognizer:
@@ -51,50 +55,69 @@ class FaceRecognizer:
         for person_name in os.listdir(self.known_faces_dir):
             person_dir = os.path.join(self.known_faces_dir, person_name)
             if os.path.isdir(person_dir):
-                logger.info(f"📁 处理人员目录: {person_name}")
-                self.known_faces[person_name] = []
-
-                image_files = [f for f in os.listdir(person_dir)
+                image_files = [os.path.join(person_dir, f) for f in os.listdir(person_dir)
                                if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
-                logger.info(f"  找到 {len(image_files)} 个图片文件")
 
-                for image_name in image_files:
-                    image_path = os.path.join(person_dir, image_name)
-                    try:
-                        logger.debug(f"  - 处理图片: {image_name}")
-                        face_image = face_recognition.load_image_file(image_path)
-                        # 在加载时使用默认模型和上采样
-                        face_locations = face_recognition.face_locations(
-                            face_image,
-                            model=self._default_config['detection_model'] if self._default_config[
-                                                                                 'detection_model'] != 'auto' else 'hog',
-                            number_of_times_to_upsample=self._default_config['number_of_times_to_upsample']
-                        )
-                        if not face_locations:
-                            logger.warning(f"    ⚠️ 警告: 图片 '{image_name}' 未检测到人脸")
-                            continue
+                if not image_files:
+                    logger.warning(f"📁 警告: 人员目录 '{person_name}' 中没有找到图片文件。")
+                    continue
 
-                        face_encodings = face_recognition.face_encodings(face_image, face_locations)
-                        if face_encodings:
-                            self.known_faces[person_name].extend(face_encodings)
-                            logger.debug(f"    ✅ 成功提取人脸特征 from {image_name}")
-                        else:
-                            logger.warning(f"    ⚠️ 警告: 无法从图片 '{image_name}' 提取人脸特征")
-                    except Exception as e:
-                        logger.error(f"    ❌ 错误处理图片 '{image_name}': {str(e)}", exc_info=True)
+                logger.info(f"📁 处理人员目录: {person_name}，找到 {len(image_files)} 个图片文件")
 
-                encodings_count = len(self.known_faces[person_name])
-                if encodings_count > 0:
-                    logger.info(f"  ✅ {person_name} 总共提取了 {encodings_count} 个人脸特征")
+                # 【修改】直接调用处理函数，而不是提交到线程池
+                _, encodings_list = self._process_person_images(person_name, image_files)
+
+                if encodings_list:
+                    if person_name not in self.known_faces:
+                        self.known_faces[person_name] = []
+                    self.known_faces[person_name].extend(encodings_list)
+                    logger.info(f"  ✅ {person_name} 总共提取了 {len(encodings_list)} 个人脸特征")
                 else:
-                    logger.warning(f"  ⚠️ {person_name} 没有提取到任何有效的人脸特征，将被移除")
-                    del self.known_faces[person_name]
+                    logger.warning(f"  ⚠️ {person_name} 没有提取到任何有效的人脸特征")
 
         logger.info("\n=== 人脸数据库加载完成 ===")
         logger.info(f"总共加载了 {len(self.known_faces)} 个人员:")
         for name, encodings in self.known_faces.items():
             logger.info(f"- {name}: {len(encodings)} 个特征")
         logger.info("=========================")
+
+    def _process_person_images(self, person_name: str, image_paths: List[str]) -> Tuple[str, List[np.ndarray]]:
+        """
+        辅助方法：由线程池调用，用于处理单个用户的所有图片并提取人脸编码。
+        Args:
+            person_name: 人员名称。
+            image_paths: 该人员所有图片的路径列表。
+        Returns:
+            Tuple[str, List[np.ndarray]]: (人员名称, 提取到的人脸编码列表)。
+        """
+        person_encodings = []
+        for image_path in image_paths:
+            try:
+                logger.debug(f"  - 处理图片: {os.path.basename(image_path)}")
+                face_image = face_recognition.load_image_file(image_path)
+
+                # 使用默认配置进行人脸检测和编码
+                face_locations = face_recognition.face_locations(
+                    face_image,
+                    model=self._default_config['detection_model'] if self._default_config[
+                                                                         'detection_model'] != 'auto' else 'hog',
+                    number_of_times_to_upsample=self._default_config['number_of_times_to_upsample']
+                )
+
+                if not face_locations:
+                    logger.warning(f"    ⚠️ 警告: 图片 '{os.path.basename(image_path)}' 未检测到人脸")
+                    continue
+
+                face_encodings = face_recognition.face_encodings(face_image, face_locations)
+
+                if face_encodings:
+                    person_encodings.extend(face_encodings)
+                    logger.debug(f"    ✅ 成功提取人脸特征 from {os.path.basename(image_path)}")
+                else:
+                    logger.warning(f"    ⚠️ 警告: 无法从图片 '{os.path.basename(image_path)}' 提取人脸特征")
+            except Exception as e:
+                logger.error(f"    ❌ 错误处理图片 '{os.path.basename(image_path)}': {str(e)}", exc_info=True)
+        return person_name, person_encodings
 
     def update_config(self, new_config: Dict[str, Any]):
         """
@@ -257,6 +280,7 @@ class FaceRecognizer:
             for known_name, known_encodings in self.known_faces.items():
                 if known_encodings:  # 确保有已知编码
                     # 计算人脸特征向量的欧氏距离
+                    # 【修复 3.1】将 face_recognition.face_distances 更正为 face_recognition.face_distance
                     distances = face_recognition.face_distance(known_encodings, face_encoding)
                     all_distances[known_name] = distances.tolist()  # 转换为列表
 

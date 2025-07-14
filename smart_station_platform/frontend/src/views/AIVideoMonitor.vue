@@ -146,6 +146,7 @@
                     :video="video"
                     :camera-id="cameraId"
                     :enabled="aiAnalysisEnabled"
+                    :local-tracking-enabled="localTrackingEnabled"
                     :realtime-mode="aiSettings.realtimeMode"
                     :danger-zones="dangerZones"
                     :current-zone-points="currentZonePoints"
@@ -357,7 +358,6 @@ const cameraId = ref(`camera_${Date.now()}`)
 
 // AI分析设置
 const aiAnalysisEnabled = ref(false)
-const localTrackingEnabled = ref(false)
 const aiSettings = reactive({
   faceRecognition: true,
   objectDetection: true,
@@ -595,14 +595,13 @@ const testStreamConnection = async () => {
     // 【修改】向后端发送 rawInputStreamUrl 进行测试
     const response = await api.ai.testStream(rawInputStreamUrl.value, videoSource.value)
 
-    // 修改后的判断逻辑：只要 response 存在，就认为是成功的
-    // 这样可以同时兼容 { success: true } 和其他表示成功的响应格式
-    if (response) {
+    // 【修复 4.1】根据后端返回的 status 字段判断成功，而不是 response 是否存在
+    if (response && response.status === 'success') {
       ElMessage.success(response.message || '流连接测试成功')
       return true
     } else {
-      // 只有在 response 为空或不存在时，才认为是失败
-      throw new Error('流连接测试失败: 无效的后端响应')
+      // 只有在 response 为空或不存在，或者 status 不为 'success' 时，才认为是失败
+      throw new Error(response?.message || '流连接测试失败: 无效的后端响应')
     }
   } catch (error) {
     console.error('流连接测试失败:', error)
@@ -794,7 +793,8 @@ const startAIAnalysis = async () => {
       enable_fire_detection: aiSettings.fireDetection
     })
 
-    if (response && response.success) {
+    // 【修复 4.2】根据后端返回的 status 字段判断成功
+    if (response && response.status === 'success') {
       aiAnalysisEnabled.value = true
       ElMessage.success('AI分析已启动')
     } else {
@@ -815,7 +815,8 @@ const stopAIAnalysis = async () => {
     // 通知AI服务停止处理
     const response = await api.ai.stopStream(cameraId.value)
 
-    if (response && response.success) {
+    // 【修复 4.3】根据后端返回的 status 字段判断成功
+    if (response && response.status === 'success') {
       ElMessage.success('AI分析已停止')
     } else {
       console.warn('AI分析停止响应异常:', response)

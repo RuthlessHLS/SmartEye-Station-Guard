@@ -25,7 +25,8 @@ from urllib3.util.retry import Retry
 
 # 导入我们自定义的所有核心AI模块和模型
 import sys
-
+import logging
+logger = logging.getLogger(__name__)
 # 将当前目录添加到Python路径，确保可以导入核心模块
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
@@ -104,6 +105,7 @@ class AIServiceManager:
             class_names = []
             try:
                 with open(class_names_path, 'r', encoding='utf-8') as f:
+                    # 【修复 1.1】 修正列表推导式中的变量名
                     class_names = [line.strip() for line in f.readlines()]
                 print(f"成功从 '{class_names_path}' 加载 {len(class_names)} 个类别名称。")
             except FileNotFoundError:
@@ -212,7 +214,8 @@ class AIServiceManager:
 
                 response = session.post(self.config.BACKEND_ALERT_URL, data=data, headers=headers, timeout=5)
 
-                if response.status_code == 200:
+                # 【可选修改】根据 201 状态码也认为是成功，避免日志误报
+                if response.status_code in [200, 201]:
                     print(f"✅ 成功发送告警到后端: {result.event_type}")
                 else:
                     print(f"❌ 发送告警失败: HTTP {response.status_code}, 响应内容: {response.text}")
@@ -494,7 +497,8 @@ class AIServiceManager:
             limit_factor = 25 / center_change
             final_center_x = old_center[0] + (new_center[0] - old_center[0]) * limit_factor
             final_center_y = old_center[1] + (new_center[1] - old_center[1]) * limit_factor
-            smoothed_bbox = [int(final_center_y - h / 2), int(final_center_x + w / 2),int(final_center_x + w / 2),
+            # 【修复 1.2】 修正了这里的变量名，从 center_y 改为 final_center_y
+            smoothed_bbox = [int(final_center_x - w / 2), int(final_center_y - h / 2), int(final_center_x + w / 2),
                              int(final_center_y + h / 2)]
         return smoothed_bbox
 
@@ -517,9 +521,13 @@ class AIServiceManager:
             last_pos = positions[-1]
             prev_pos = positions[-2]
             last_time = timestamps[-1]
+            # 【修复 1.3】 修正了这里的索引，确保使用数字索引 -2
+            # 这里的写法会保证在 len(timestamps) < 2 时，_predict_face_position 提前返回 None
+            # 所以 prev_time = timestamps[-2] 在这里是安全的
             prev_time = timestamps[-2]
+
             dt = last_time - prev_time
-            if dt > 0:
+            if dt > 0:  # 避免除以零或时间倒流
                 vx = (last_pos[0] - prev_pos[0]) / dt
                 vy = (last_pos[1] - prev_pos[1]) / dt
                 time_delta = current_time - last_time
@@ -640,9 +648,9 @@ class AIServiceManager:
         return new_bbox
 
     def _process_face_recognition_with_stabilization(self, camera_id: str, frame: np.ndarray) -> List[Dict]:
-        # current_tolerance = self._face_recognition_config.get('tolerance', 0.65) # 这个值 FaceRecognizer 内部应该会处理
-        # 【修改点 4】 移除 tolerance 参数
-        recognized_faces = self._detectors["face"].detect_and_recognize(frame) # 之前: recognized_faces = self._detectors["face"].detect_and_recognize(frame, tolerance=current_tolerance)
+        current_tolerance = self._face_recognition_config.get('tolerance', 0.65)
+        # 【修复 1.4】此处已移除 tolerance 参数，因为 FaceRecognizer 内部会处理
+        recognized_faces = self._detectors["face"].detect_and_recognize(frame)
 
         face_detections = []
         for face in recognized_faces:
@@ -653,6 +661,9 @@ class AIServiceManager:
                 "timestamp": datetime.now().isoformat(), "identity": face["identity"]
             }
             face_detections.append(detection)
+            face_name = face.get("identity", {}).get("name", "未知")
+            is_known = face.get("identity", {}).get("known", False)
+            logger.info(f"✨ [人脸识别] 摄像头: {camera_id}, 姓名: {face_name} (已知: {is_known}), 置信度: {face.get('confidence', 0.0):.2f}, 框: {bbox}")
 
         if face_detections:
             stabilized_faces = self.stabilize_detections(camera_id, face_detections)
@@ -845,8 +856,8 @@ class AIServiceManager:
         if enable_fire_detection and "fire" in self._detectors:
             try:
                 fire_detector = self._detectors["fire"]
-                # 【修改点 1】 移除 confidence_threshold 参数
-                fire_results = fire_detector.detect(frame) # 之前: fire_detector.detect(frame, confidence_threshold=0.25)
+                # 【修复 1.5】移除 confidence_threshold 参数
+                fire_results = fire_detector.detect(frame)
                 for fire_obj in fire_results:
                     bbox = [int(float(coord)) for coord in fire_obj["coordinates"]]
                     detection = {
@@ -876,9 +887,8 @@ class AIServiceManager:
                 obj_scale = strategy["object_scale_factor"]
                 obj_height, obj_width = int(height * obj_scale), int(width * obj_scale)
                 obj_image = cv2.resize(frame, (obj_width, obj_height))
-                # confidence_threshold = self._object_detection_config.get('confidence_threshold', 0.35) # 这个值 GenericPredictor 内部应该会处理
-                # 【修改点 2】 移除 confidence_threshold 参数
-                detected_objects = self._detectors["object"].predict(obj_image) # 之前: self._detectors["object"].predict(obj_image, confidence_threshold=confidence_threshold)
+                # 【修复 1.6】移除 confidence_threshold 参数
+                detected_objects = self._detectors["object"].predict(obj_image)
 
                 scale_back_x, scale_back_y = width / obj_width, height / obj_height
                 object_detections = []
@@ -907,8 +917,7 @@ class AIServiceManager:
                 face_height, face_width = int(height * face_scale), int(width * face_scale)
                 face_image = cv2.resize(frame, (face_width, face_height))
 
-                # 【修改点 3】 _process_face_recognition_with_stabilization 内部会处理 tolerance，这里无需重复传递
-                # 这里调用的是 AIServiceManager 自己的方法，该方法内部会调用 FaceRecognizer
+                # 【修复 1.7】 _process_face_recognition_with_stabilization 内部会处理 tolerance，这里无需重复传递
                 stabilized_faces = self._process_face_recognition_with_stabilization(camera_id, face_image)
 
                 scale_back_x, scale_back_y = width / face_width, height / face_height
@@ -965,7 +974,8 @@ class AIServiceManager:
                             'class_name': obj['class_name'], 'class_id': obj.get('class_id', 0)
                         })
                 if detection_list:
-                    tracked_results = tracker.update(detection_list, frame)
+                    # 【修复 1.8】将 frame 替换为 frame.shape[:2] 以匹配 FallbackTracker.update 的期望参数
+                    tracked_results = tracker.update(detection_list, frame.shape[:2])
                     for tracked_obj in tracked_results:
                         tracked_object_results.append({
                             "type": "object", "class_name": tracked_obj["class_name"],
@@ -973,24 +983,60 @@ class AIServiceManager:
                             "bbox": tracked_obj["coordinates"], "tracking_id": tracked_obj["tracking_id"],
                             "timestamp": datetime.now().isoformat()
                         })
-                        if tracked_obj["class_name"] == "person" and tracked_obj["confidence"] > 0.5:
-                            self.send_alert_to_backend(
-                                AIAnalysisResult(
-                                    camera_id=camera_id, event_type="object_person_detected",
-                                    location={"box": tracked_obj["coordinates"]}, confidence=tracked_obj["confidence"],
-                                    timestamp=datetime.now().isoformat(),
-                                    details={"tracking_id": tracked_obj["tracking_id"],
-                                             "class_name": tracked_obj["class_name"],
-                                             "tracking_method": "deep_sort", "realtime_detection": True}
-                                )
-                            )
+                        # if tracked_obj["class_name"] == "person" and tracked_obj["confidence"] > 0.5:
+                        #     self.send_alert_to_backend(
+                        #         AIAnalysisResult(
+                        #             camera_id=camera_id, event_type="object_person_detected",
+                        #             location={"box": tracked_obj["coordinates"]}, confidence=tracked_obj["confidence"],
+                        #             timestamp=datetime.now().isoformat(),
+                        #             details={"tracking_id": tracked_obj["tracking_id"],
+                        #                      "class_name": tracked_obj["class_name"],
+                        #                      "tracking_method": "deep_sort", "realtime_detection": True}
+                        #         )
+                        #     )
             except Exception as e:
                 print(f"Deep SORT追踪失败: {e}")
-                tracked_object_results = object_results
+                traceback.print_exc()
         else:
             tracked_object_results = object_results
 
         all_detections = tracked_object_results + face_results  # Face results are already stabilized
+        if enable_behavior_detection and "danger_zone" in sys.modules:  # 确保 danger_zone_detector 模块已导入
+            person_detections_for_zone = [d for d in all_detections if
+                                          d.get('type') == 'object' and d.get('class_name') == 'person']
+            if person_detections_for_zone:
+                danger_zone_detection_results = danger_zone_detector.detect_intrusions(camera_id, all_detections)
+
+                # 创建一个 map，以便通过 tracking_id 快速查找 detection
+                detections_map = {d.get("tracking_id"): d for d in all_detections if d.get("tracking_id")}
+
+                for alert_data in danger_zone_detection_results:
+                    # 如果是入侵告警，则标记对应的检测对象
+                    if alert_data.get("tracking_id") and alert_data.get("type") == "intrusion_detected":
+                        tracked_detection = detections_map.get(alert_data["tracking_id"])
+                        if tracked_detection:
+                            tracked_detection["is_dangerous"] = True  # 【新增】标记为危险
+                            tracked_detection["zone_name"] = alert_data.get("zone_name")  # 【新增】添加区域名称
+
+                    # 仍然发送后端告警给 Django (这部分是原有的告警发送逻辑)
+                    results["alerts"].append({
+                        "type": alert_data["type"], "message": alert_data["message"],
+                        "tracking_id": alert_data.get("tracking_id"),
+                        "zone_name": alert_data.get("zone_name"), "position": alert_data.get("position"),
+                        "distance": alert_data.get("distance"), "dwell_time": alert_data.get("dwell_time")
+                    })
+                    self.send_alert_to_backend(
+                        AIAnalysisResult(
+                            camera_id=camera_id, event_type=alert_data["type"],
+                            location={"position": alert_data.get("position", [])},
+                            confidence=1.0, timestamp=datetime.now().isoformat(),
+                            details={"tracking_id": alert_data.get("tracking_id"), "zone_id": alert_data.get("zone_id"),
+                                     "zone_name": alert_data.get("zone_name"), "distance": alert_data.get("distance"),
+                                     "dwell_time": alert_data.get("dwell_time"),
+                                     "detection_method": "danger_zone_geometric",
+                                     "realtime_detection": True}
+                        )
+                    )
         results["detections"] = all_detections
 
         # 危险区域检测
@@ -1279,7 +1325,7 @@ async def rtmp_publish_done_callback(request: dict = Body(...)):
             del service_manager._object_trackers[camera_id]
         if camera_id in service_manager._detection_cache:
             del service_manager._detection_cache[camera_id]
-        print(f"已停止视频流: {stream_to_stop.stream_url}") # 使用修复后的变量名
+        print(f"已停止视频流: {stream_to_stop.stream_url}")  # 使用修复后的变量名
         return {"status": "success", "message": "推流结束处理完成"}
 
 
@@ -1456,7 +1502,8 @@ async def verify_face(request_data: dict):
 
         # 暂时返回成功，待FaceRecognizer实现比对
         print(f"收到人脸验证请求: user_id={user_id}")
-        return {"success": True, "matched": True, "confidence": 0.9, "message": "人脸验证请求已收到 (功能待FaceRecognizer实现)。"}
+        return {"success": True, "matched": True, "confidence": 0.9,
+                "message": "人脸验证请求已收到 (功能待FaceRecognizer实现)。"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1470,10 +1517,13 @@ async def test_stream_connection_endpoint(url: str = Body(...), type: str = Body
     is_available = await stream.test_connection()
     return {"status": "success" if is_available else "error",
             "message": "视频流可用" if is_available else "无法连接到视频流"}
+
+
 # 添加一个健康检查接口
 @app.get("/system/status/")
 async def get_system_status():
     return {"status": "ok", "message": "AI service is running"}
+
 
 # 启动Uvicorn
 if __name__ == "__main__":

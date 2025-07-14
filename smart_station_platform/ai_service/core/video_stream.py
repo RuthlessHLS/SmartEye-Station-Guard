@@ -94,8 +94,8 @@ class VideoStream:
         独立的线程，负责从视频流中持续读取帧并放入缓冲区。
         """
         logger.info(f"帧读取线程启动 for {self.camera_id}.")
-        # 【修改点 1 START】 将 self.cap = ... 移到这里，并使用局部变量 cap_thread
-        # 线程内部尝试打开视频流
+        # 【修复 2.1】在线程内部创建并尝试打开 cv2.VideoCapture
+        # 使用一个局部变量 cap_thread 来打开视频流
         cap_thread = cv2.VideoCapture(self.stream_url)
 
         if not cap_thread.isOpened():
@@ -106,14 +106,14 @@ class VideoStream:
         # 成功打开后，将局部变量赋值给 self.cap
         # 这确保了主线程在检查 self.cap.isOpened() 时，它已经被正确初始化
         self.cap = cap_thread
-        # 【修改点 1 END】
+        # 【修复 2.1 结束】
 
         while self.is_running:
             ret, frame = self.cap.read()
             if not ret:
                 logger.warning(f"从视频流读取帧失败，可能流已结束或中断 for {self.camera_id}。尝试重新连接...")
                 # 检查 self.cap 是否仍处于打开状态，避免重复释放已关闭的捕获器
-                if self.cap and self.cap.isOpened():  # 新增对 self.cap.isOpened() 的检查，更安全地释放
+                if self.cap and self.cap.isOpened():
                     self.cap.release()
                 time.sleep(1)  # 等待一秒后尝试重新连接
                 self.cap = cv2.VideoCapture(self.stream_url)
@@ -167,10 +167,8 @@ class VideoStream:
         self.frame_read_thread = threading.Thread(target=self._read_frames_thread, daemon=True)
         self.frame_read_thread.start()
 
-        # 【修改点 3 START】 启动后稍作等待，确保视频捕获器初始化
-        # 将等待时间从 0.5 秒增加到 2.0 秒，给 cv2.VideoCapture 更多时间来打开流
+        # 【修复 2.2】启动后稍作等待，确保视频捕获器初始化。增加等待时间。
         await asyncio.sleep(2.0)
-        # 【修改点 3 END】
 
         # 再次检查 self.cap 是否已经成功打开
         if not self.cap or not self.cap.isOpened():
