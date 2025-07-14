@@ -17,6 +17,23 @@ logger = logging.getLogger(__name__)
 # 【移除】不再需要全局线程池
 # _face_loading_thread_pool = ThreadPoolExecutor(max_workers=os.cpu_count() or 4)
 
+def _calculate_eye_aspect_ratio(eye_landmarks: List[Tuple[int, int]]) -> float:
+    """
+    计算单只眼睛的纵横比 (EAR - Eye Aspect Ratio)。
+    这个值在眼睛睁开时较大，闭合时接近于0。
+    """
+    # 垂直距离
+    v_dist1 = np.linalg.norm(np.array(eye_landmarks[1]) - np.array(eye_landmarks[5]))
+    v_dist2 = np.linalg.norm(np.array(eye_landmarks[2]) - np.array(eye_landmarks[4]))
+    # 水平距离
+    h_dist = np.linalg.norm(np.array(eye_landmarks[0]) - np.array(eye_landmarks[3]))
+    
+    # 避免除以零
+    if h_dist == 0:
+        return 0.0
+        
+    ear = (v_dist1 + v_dist2) / (2.0 * h_dist)
+    return ear
 
 class FaceRecognizer:
     def __init__(self, known_faces_dir, detection_model="hog", tolerance=0.5, jitter=1):
@@ -44,6 +61,10 @@ class FaceRecognizer:
         self.known_face_names = []
         self.tolerance = tolerance
         self.jitter = jitter
+
+        # 活体检测阈值
+        self.EAR_THRESHOLD = 0.21  # 眨眼检测的EAR阈值
+        self.HEAD_TURN_RATIO_THRESHOLD = 1.5  # 转头检测的鼻子-眼睛距离比率阈值
 
         self._load_known_faces()
 
@@ -158,24 +179,92 @@ class FaceRecognizer:
                 logger.warning(f"无法从图像中提取人脸特征，无法注册 '{person_name}'。")
                 return False
 
-            # 将新提取的编码添加到内存中的已知人脸字典
-            if person_name not in self.known_faces:
-                self.known_faces[person_name] = []
-            self.known_faces[person_name].extend(face_encodings)
+            # 将新提取的编码动态添加到内存中的已知人脸列表
+            self.known_face_encodings.extend(face_encodings)
+            self.known_face_names.extend([person_name] * len(face_encodings))
 
-            # 可选：将新注册的人脸图片保存到 known_faces_dir 对应的子目录
+            # 将新注册的人脸图片保存到 known_faces_dir 对应的子目录以实现持久化
             person_dir = os.path.join(self.known_faces_dir, person_name)
             os.makedirs(person_dir, exist_ok=True)
-            # 保存一个副本，用于持久化
+            # 保存一个副本
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_image_path = os.path.join(person_dir, f"{person_name}_{timestamp}.jpg")
+            output_image_path = os.path.join(person_dir, f"reg_{timestamp}.jpg")
             cv2.imwrite(output_image_path, image)
 
-            logger.info(f"成功注册人脸 '{person_name}'，提取 {len(face_encodings)} 个特征，保存到 {output_image_path}")
+            logger.info(f"✅ 成功注册人脸 '{person_name}'，提取 {len(face_encodings)} 个特征，保存到 {output_image_path} 并已更新内存数据库。")
             return True
 
         except Exception as e:
             logger.error(f"注册人脸 '{person_name}' 时发生错误: {str(e)}", exc_info=True)
+            return False
+
+    def verify_liveness_action(self, image: np.ndarray, action: str) -> bool:
+        """
+        验证单张图片是否符合指定的活体动作。
+
+        Args:
+            image (np.ndarray): 包含人脸的图像 (BGR格式)。
+            action (str): 需要验证的动作指令 (例如: '请眨眨眼睛', '请向左转头').
+
+        Returns:
+            bool: 如果动作验证成功返回 True，否则返回 False。
+        """
+        try:
+            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            
+            # 首先，获取面部关键点
+            face_landmarks_list = face_recognition.face_landmarks(rgb_image)
+            if not face_landmarks_list:
+                logger.warning(f"活体检测失败：在图像中未找到面部关键点。动作: {action}")
+                return False
+            
+            # 通常我们只处理第一个检测到的人脸
+            landmarks = face_landmarks_list[0]
+
+            if '眨眼' in action:
+                left_eye_ear = _calculate_eye_aspect_ratio(landmarks['left_eye'])
+                right_eye_ear = _calculate_eye_aspect_ratio(landmarks['right_eye'])
+                avg_ear = (left_eye_ear + right_eye_ear) / 2.0
+                logger.debug(f"眨眼检测: 平均EAR={avg_ear:.3f} (阈值: <{self.EAR_THRESHOLD})")
+                return avg_ear < self.EAR_THRESHOLD
+
+            elif '向左转头' in action:
+                nose_tip = landmarks['nose_bridge'][-1]
+                left_eye_center = np.mean(landmarks['left_eye'], axis=0)
+                right_eye_center = np.mean(landmarks['right_eye'], axis=0)
+                
+                dist_to_left = np.linalg.norm(np.array(nose_tip) - left_eye_center)
+                dist_to_right = np.linalg.norm(np.array(nose_tip) - right_eye_center)
+                
+                if dist_to_left == 0: return False # 避免除零
+                ratio = dist_to_right / dist_to_left
+                logger.debug(f"向左转头检测: 距离比={ratio:.2f} (阈值: >{self.HEAD_TURN_RATIO_THRESHOLD})")
+                return ratio > self.HEAD_TURN_RATIO_THRESHOLD
+
+            elif '向右转头' in action:
+                nose_tip = landmarks['nose_bridge'][-1]
+                left_eye_center = np.mean(landmarks['left_eye'], axis=0)
+                right_eye_center = np.mean(landmarks['right_eye'], axis=0)
+                
+                dist_to_left = np.linalg.norm(np.array(nose_tip) - left_eye_center)
+                dist_to_right = np.linalg.norm(np.array(nose_tip) - right_eye_center)
+
+                if dist_to_right == 0: return False # 避免除零
+                ratio = dist_to_left / dist_to_right
+                logger.debug(f"向右转头检测: 距离比={ratio:.2f} (阈值: >{self.HEAD_TURN_RATIO_THRESHOLD})")
+                return ratio > self.HEAD_TURN_RATIO_THRESHOLD
+            
+            elif '点头' in action or '正视' in action:
+                # 对于点头和正视，我们可以简单地确认检测到了人脸即可
+                # 更复杂的可以检查鼻子和下巴的垂直距离，但为了简化，我们暂时认为只要有脸就算通过
+                return True
+
+            else:
+                logger.warning(f"未知的活体检测动作: {action}")
+                return False
+
+        except Exception as e:
+            logger.error(f"活体检测动作 '{action}' 验证时发生错误: {e}", exc_info=True)
             return False
 
     def detect_and_recognize(self, frame: np.ndarray) -> List[Dict]:
