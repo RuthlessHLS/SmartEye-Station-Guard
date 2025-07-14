@@ -8,7 +8,6 @@
       </div>
       <nav class="main-nav">
         <router-link to="/dashboard">首页</router-link>
-        <router-link to="/monitor">智能监控</router-link>
         <router-link to="/ai-monitor">AI监控</router-link>
         <router-link to="/alerts">告警中心</router-link>
         <router-link to="/reports">AI日报</router-link>
@@ -30,11 +29,15 @@
             </el-dropdown-menu>
           </template>
         </el-dropdown>
+        <template v-else>
+          <router-link to="/login" class="login-link">登录</router-link>
+          <router-link to="/register" class="register-link">注册</router-link>
+        </template>
       </div>
     </header>
 
     <main class="main-content">
-      <router-view />
+      <slot></slot>
     </main>
 
     <footer class="main-footer">
@@ -48,9 +51,11 @@ import { useAuthStore } from '@/stores/auth';
 import { useRouter } from 'vue-router';
 import { ArrowDown } from '@element-plus/icons-vue';
 import myLogo from '@/assets/my-logo.png';
+
 const authStore = useAuthStore();
 const router = useRouter();
 const logoUrl = myLogo;
+
 const goToProfile = () => {
   router.push('/profile');
 };
@@ -68,16 +73,15 @@ const handleLogout = () => {
   background-color: #f0f2f5;
 }
 
-/* --- 白色导航栏样式 --- */
 .main-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0 24px;
   height: 64px;
-  background-color: #ffffff; /* 改为白色 */
-  border-bottom: 1px solid #f0f0f0; /* 添加一条细线分隔 */
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06); /* 添加轻微阴影增加质感 */
+  background-color: #ffffff;
+  border-bottom: 1px solid #f0f0f0;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
   position: sticky;
   top: 0;
   z-index: 100;
@@ -87,51 +91,82 @@ const handleLogout = () => {
   display: flex;
   align-items: center;
 }
+
 .logo-img {
   height: 32px;
   margin-right: 12px;
 }
+
 .logo-text {
   font-size: 20px;
   font-weight: 600;
-  color: #1f2d3d; /* 深色文字 */
+  color: #1f2d3d;
+}
+
+.main-nav {
+  display: flex;
+  align-items: center;
+  gap: 20px;
 }
 
 .main-nav a {
-  color: #333; /* 导航链接文字颜色 */
+  color: #333;
   text-decoration: none;
-  margin: 0 20px;
-  padding: 0 4px 8px 4px; /* 调整 padding 使下划线位置合适 */
+  padding: 0 4px 8px 4px;
   border-bottom: 2px solid transparent;
   transition: all 0.3s;
   font-weight: 500;
 }
+
 .main-nav a:hover {
-  color: #409eff; /* 鼠标悬浮时颜色 */
+  color: #409eff;
 }
-.main-nav a.router-link-exact-active {
-  color: #409eff; /* 激活时颜色 */
-  border-bottom-color: #409eff; /* 激活时下划线 */
+
+.main-nav a.router-link-active {
+  color: #409eff;
+  border-bottom-color: #409eff;
+}
+
+.user-profile-section {
+  display: flex;
+  align-items: center;
+  gap: 16px;
 }
 
 .user-profile-section .el-dropdown-link {
   cursor: pointer;
-  color: #333; /* 用户名颜色 */
+  color: #333;
   display: flex;
   align-items: center;
+  gap: 8px;
 }
-.user-profile-section .username {
-  margin: 0 8px;
+
+.login-link,
+.register-link {
+  color: #333;
+  text-decoration: none;
+  padding: 6px 12px;
+  border-radius: 4px;
+  transition: all 0.3s;
+}
+
+.login-link:hover,
+.register-link:hover {
+  color: #409eff;
+  background-color: rgba(64, 158, 255, 0.1);
 }
 
 .main-content {
-  flex-grow: 1;
+  flex: 1;
   padding: 24px;
+  overflow-y: auto;
 }
 
 .main-footer {
   text-align: center;
   padding: 15px;
   color: #888;
+  background-color: #fff;
+  border-top: 1px solid #f0f0f0;
 }
 </style>

@@ -191,6 +191,22 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
 
         # 调用父类验证逻辑 (验证用户名密码，生成tokens)
         data = super().validate(attrs)
+
+        # 重命名token字段以匹配前端期望的格式
+        data['token'] = data.pop('access')
+        data['refresh_token'] = data.pop('refresh')
+
+        # 添加用户信息到响应中
+        user = self.user
+        data['user'] = {
+            'id': user.id,
+            'username': user.username,
+            'email': user.email,
+            'is_staff': user.is_staff,
+            'nickname': getattr(user, 'nickname', None),
+            'phone_number': getattr(user, 'phone_number', None),
+        }
+
         return data
 
 
@@ -352,4 +368,20 @@ class PasswordChangeSerializer(serializers.Serializer):
         if not user.check_password(value):
             raise serializers.ValidationError("当前密码不正确。")
         return value
+
+#  类 9: PasswordChangeSerializer
+# ==========================================================
+class PasswordChangeSerializer(serializers.Serializer):
+    """
+    修改密码序列化器
+    """
+    current_password = serializers.CharField(style={"input_type": "password"}, required=True)
+    new_password = serializers.CharField(style={"input_type": "password"}, required=True, min_length=8)
+
+    def validate_current_password(self, value):
+        user = self.context['request'].user
+        if not user.check_password(value):
+            raise serializers.ValidationError("当前密码不正确。")
+        return value
+
 

@@ -49,8 +49,11 @@
 </template>
 
 <script setup>
-import { ref, reactive, watch } from 'vue';
+import { ref, reactive, watch, onMounted } from 'vue';
 import axios from 'axios';
+// 导入 API 客户端
+import api from '@/api';
+import { ElMessage } from 'element-plus'; // 导入 ElMessage
 
 // --- Props and Emits ---
 // `v-model:visible` 用于父组件控制此模态框的显示/隐藏
@@ -77,25 +80,112 @@ const sliderLeft = ref(0);
 const isDragging = ref(false);
 let startX = 0; // 拖动开始时的鼠标X坐标
 
+const imageWidth = ref(320); // 图片实际宽度
+const trackWidth = ref(0); // 轨道宽度
+
+// 添加重试相关的状态
+const maxRetries = 3;
+const retryCount = ref(0);
+const retryDelay = 1000; // 1秒
+
+// 计算滑块位置相对于原图的比例
+const calculateActualPosition = (trackPosition) => {
+  if (!trackWidth.value) return 0;
+  
+  // 滑块宽度
+  const SLIDER_WIDTH = 40;
+  
+  // 计算可滑动区域的宽度（轨道宽度减去滑块宽度）
+  const slidableWidth = trackWidth.value - SLIDER_WIDTH;
+  
+  // 计算图片可用宽度（图片宽度减去滑块宽度）
+  const usableImageWidth = imageWidth.value - SLIDER_WIDTH;
+  
+  // 计算比例
+  const ratio = usableImageWidth / slidableWidth;
+  
+  // 计算实际位置，并确保在有效范围内
+  const actualPosition = Math.round(trackPosition * ratio);
+  
+  // 确保位置在有效范围内
+  return Math.max(0, Math.min(actualPosition, usableImageWidth));
+};
+
+// 在组件挂载后获取轨道宽度
+onMounted(() => {
+  if (trackRef.value) {
+    trackWidth.value = trackRef.value.clientWidth;
+  }
+});
+
 // --- Core Logic ---
 
 // 从后端API获取验证码数据
 const fetchCaptcha = async () => {
   loading.value = true;
   resetSlider(); // 重置滑块状态
+  
   try {
-    // 【重要】请将 URL 替换为你的后端 API 地址
-    const response = await axios.get('http://127.0.0.1:8000/api/users/captcha/generate/');
+    const response = await api.auth.getCaptcha();
+    console.log('验证码响应数据:', response); // 调试日志
+    
+    if (!response || !response.data) {
+      throw new Error('未收到验证码数据');
+    }
+
     const data = response.data;
-    captcha.backgroundImage = data.background_image;
-    captcha.sliderImage = data.slider_image;
-    captcha.sliderY = data.slider_y;
-    captcha.captchaKey = data.captcha_key;
+
+    // 检查必需字段
+    const requiredFields = ['background_image', 'slider_image', 'slider_y', 'captcha_key'];
+    const missingFields = requiredFields.filter(field => !data[field]);
+    
+    if (missingFields.length > 0) {
+      throw new Error(`验证码数据缺少必需字段: ${missingFields.join(', ')}`);
+    }
+
+    // 重置重试计数
+    retryCount.value = 0;
+
+    // 创建图片对象以获取实际尺寸
+    const img = new Image();
+    img.onload = () => {
+      imageWidth.value = img.width;
+      // 更新验证码数据
+      captcha.backgroundImage = data.background_image;
+      captcha.sliderImage = data.slider_image;
+      captcha.sliderY = data.slider_y;
+      captcha.captchaKey = data.captcha_key;
+      loading.value = false;
+    };
+    img.onerror = () => {
+      throw new Error('验证码图片加载失败');
+    };
+    img.src = data.background_image;
+
   } catch (error) {
     console.error('获取验证码失败:', error);
-    // 这里可以添加用户友好的错误提示
-  } finally {
-    loading.value = false;
+    let errorMessage = '获取验证码失败';
+    
+    if (error.response) {
+      if (error.response.status === 500) {
+        errorMessage = '服务器内部错误，请稍后重试';
+      } else {
+        errorMessage = error.response.data?.detail || error.response.data?.error || '请求验证码失败';
+      }
+    } else if (error.message) {
+      errorMessage = error.message;
+    }
+    
+    // 处理重试逻辑
+    if (retryCount.value < maxRetries) {
+      retryCount.value++;
+      console.log(`验证码获取失败，${retryDelay/1000}秒后进行第${retryCount.value}次重试`);
+      setTimeout(fetchCaptcha, retryDelay);
+    } else {
+      ElMessage.error(errorMessage);
+      loading.value = false;
+      closeModal();
+    }
   }
 };
 
@@ -153,27 +243,40 @@ const onDragEnd = () => {
   window.removeEventListener('mouseup', onDragEnd);
   window.removeEventListener('touchend', onDragEnd);
 
-  // [新增] 计算拖动耗时
+  // 计算拖动耗时
   const endTime = Date.now();
-  const duration = (endTime - startTime) / 1000; // 转换为秒
-  // 定义前端的最小耗时（可以比后端略短，给网络延迟留出空间）
-  const minDuration = 0.8; // 例如，0.8秒
+  const duration = (endTime - startTime) / 1000;
+  const minDuration = 1.0; // 与后端保持一致
+  
   if (duration < minDuration) {
-    alert('操作过快，请拖动滑块完成验证！');
-    // 操作过快时，重置滑块位置，并重新获取验证码以增加破解难度
-    fetchCaptcha();
-    // 不关闭模态框，也不触发 success 事件
+    ElMessage.warning('请稍慢一些完成验证');
+    resetSlider();
     return;
   }
 
-  // 触发 `success` 事件，将验证所需的数据传递给父组件
+  // 计算实际的验证位置
+  const actualPosition = calculateActualPosition(sliderLeft.value);
+  
+  // 触发 success 事件
   emit('success', {
     captcha_key: captcha.captchaKey,
-    captcha_position: sliderLeft.value,
+    captcha_position: actualPosition,
   });
 
   // 验证成功后自动关闭模态框
   closeModal();
+};
+
+// 重置验证码
+const resetCaptcha = () => {
+  resetSlider();
+  fetchCaptcha();
+};
+
+// 监听验证失败事件
+const onValidationFailed = () => {
+  resetSlider();
+  fetchCaptcha();
 };
 
 // 关闭模态框

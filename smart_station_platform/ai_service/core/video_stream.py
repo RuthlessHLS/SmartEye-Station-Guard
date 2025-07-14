@@ -1,347 +1,311 @@
 # 文件: ai_service/core/video_stream.py
+# 描述: 负责视频流的捕获、帧的缓存、以及音频的提取。
+
 import cv2
 import time
 import threading
 import numpy as np
-from typing import List, Callable, Optional, Dict
-from datetime import datetime
-import traceback
-from models.alert_models import AIAnalysisResult  # 修改为绝对导入
-import logging
-import ffmpeg
+import ffmpeg  # 确保安装 ffmpeg-python
 import tempfile
 import os
 import asyncio
-from typing import Optional, Tuple, Dict
+import subprocess
+import logging
+import queue  # 用于帧缓存
+from typing import Optional, Dict, Tuple, Any
 
+# 设置日志
 logger = logging.getLogger(__name__)
-
-
-def process_video_stream(video_url: str):
-    """
-    连接到视频流并逐帧产生图像。
-    这是一个生成器函数，可以被循环调用。
-    """
-    # 如果是webcam字符串，转换为默认摄像头索引
-    if video_url.lower() == 'webcam':
-        video_url = 0
-    
-    # 对于本地摄像头，使用DirectShow后端以避免MSMF问题
-    if isinstance(video_url, int):
-        cap = cv2.VideoCapture(video_url, cv2.CAP_DSHOW)
-    else:
-        cap = cv2.VideoCapture(video_url)
-        
-    if not cap.isOpened():
-        print(f"错误: 无法打开视频流 {video_url}")
-        return  # 如果打不开，就结束
-
-    print(f"成功连接到视频流: {video_url}")
-    while True:
-        ret, frame = cap.read()
-        # 如果读取失败 (ret is False)
-        if not ret:
-            print("视频流结束或发生错误，5秒后尝试重连...")
-            time.sleep(5)
-            cap.release()  # 释放旧的连接
-            cap = cv2.VideoCapture(video_url)  # 尝试重新连接
-            continue  # 继续下一次循环
-
-        # 如果读取成功，使用 yield 将这一帧图像"生产"出去
-        yield frame
-
-    # 循环结束后（理论上对于实时流不会结束），释放资源
-    cap.release()
+# 配置日志级别和格式，确保能在控制台看到详细信息
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 
 class VideoStream:
     """
-    视频流处理类，负责管理视频流的捕获和AI处理
+    视频流处理类，负责管理视频流的捕获、帧的缓存和音频的提取。
+    它将原始帧提供给外部AI分析器，自身不直接执行复杂的AI处理。
     """
-    
-    def __init__(self, stream_url: str, camera_id: str):
+
+    def __init__(self, stream_url: str, camera_id: str,
+                 predictor: Optional[Any] = None,  # 传入的AI检测器实例，但在此类中不再直接使用
+                 face_recognizer: Optional[Any] = None,
+                 fire_detector: Optional[Any] = None):
         """
-        初始化视频流
-        
+        初始化视频流处理器。
         Args:
-            stream_url (str): 视频流URL
-            acoustic_detector: 声音检测器实例
+            stream_url: 视频流URL (e.g., rtmp://localhost/live/stream_name)
+            camera_id: 唯一的摄像头ID
+            predictor: 已初始化的目标检测器实例 (仅为兼容性传入，此处不再直接调用)
+            face_recognizer: 已初始化的人脸识别器实例 (仅为兼容性传入)
+            fire_detector: 已初始化的火焰烟雾检测器实例 (仅为兼容性传入)
         """
+        # --- 新增代码：为RTMP/RTSP流设置FFMPEG选项 ---
+        # 强制OpenCV使用TCP连接，解决在Windows上常见的UDP丢包或连接问题
+        if stream_url.startswith('rtmp') or stream_url.startswith('rtsp'):
+            logger.info("检测到RTMP/RTSP流，设置FFMPEG选项为 'rtsp_transport;tcp'")
+            os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'rtsp_transport;tcp'
+        else:
+            # 如果不是RTMP/RTSP，确保环境变量被清除，以免影响其他类型的流
+            if 'OPENCV_FFMPEG_CAPTURE_OPTIONS' in os.environ:
+                del os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS']
+        # --- 新增代码结束 ---
+
         self.stream_url = stream_url
         self.camera_id = camera_id
-        self.cap = None
-        self.is_running = False
-        self.temp_audio_file = None
-        self.audio_process = None
-        self.processors: List[Callable[[np.ndarray], None]] = []
-        self.lock = threading.Lock()
-        self.acoustic_detector = None # This attribute is no longer used for audio processing
-    
-    def add_processor(self, processor: Callable[[np.ndarray], None]):
+        self.cap: Optional[cv2.VideoCapture] = None
+        self.is_running: bool = False
+        self.frame_read_thread: Optional[threading.Thread] = None
+        self.audio_extraction_process: Optional[subprocess.Popen] = None
+        self.audio_file_path: Optional[str] = None  # 用于存储提取的音频文件路径
+
+        # 使用线程安全的队列来缓存最新帧，供外部读取
+        self._frame_buffer: queue.Queue[np.ndarray] = queue.Queue(maxsize=1)  # 只保留最新一帧
+
+        logger.info(f"VideoStream 初始化: Camera ID={self.camera_id}, URL={self.stream_url}")
+
+    async def test_connection(self) -> bool:
         """
-        添加帧处理器
-        
-        Args:
-            processor: 接受frame作为参数的处理函数
-        """
-        with self.lock:
-            self.processors.append(processor)
-    
-    async def start(self) -> bool:
-        """
-        启动视频流处理
-        
+        测试视频流连接是否可用。
         Returns:
-            bool: 是否成功启动
+            bool: 如果连接成功返回 True，否则返回 False。
         """
-        if self.is_running:
-            print(f"视频流 {self.stream_url} 已在运行中")
+        try:
+            logger.info(f"测试视频流连接: {self.stream_url}")
+            cap = cv2.VideoCapture(self.stream_url)
+            if not cap.isOpened():
+                logger.error(f"无法打开视频流: {self.stream_url}")
+                return False
+
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                logger.error(f"无法从视频流读取帧: {self.stream_url}")
+                cap.release()
+                return False
+
+            cap.release()
+            logger.info(f"视频流连接成功: {self.stream_url}")
             return True
-        
-        # 如果是webcam字符串，转换为默认摄像头索引
-        stream_url = self.stream_url
-        if isinstance(stream_url, str) and stream_url.lower() == 'webcam':
-            stream_url = 0
-        
-        # 尝试连接视频流，对于本地摄像头使用DirectShow后端
-        if isinstance(stream_url, int):
-            self.cap = cv2.VideoCapture(stream_url, cv2.CAP_DSHOW)
-        else:
-            self.cap = cv2.VideoCapture(stream_url)
-            
-        if not self.cap.isOpened():
-            print(f"错误: 无法打开视频流 {stream_url}")
-            return False
-        
-        # 如果是本地视频文件且有声音检测器，启动音频处理
-        # if self.acoustic_detector and self.stream_url.startswith(('G:/', 'C:/', 'D:/', 'E:/', 'F:/')):
-        #     print("检测到本地视频文件，启动音频处理...")
-        #     self.acoustic_detector.start_video_audio_processing(self.stream_url)
-        
-        # 启动处理线程
-        self.is_running = True
-        # self.thread = threading.Thread(target=self._process_loop, daemon=True) # This line is removed
-        # self.thread.start() # This line is removed
-        
-        print(f"成功启动视频流: {self.stream_url}")
-        return True
-    
-    async def start_audio_extraction(self):
-        """启动音频提取过程"""
-        try:
-            # 创建项目内的音频临时目录
-            current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 获取ai_service目录
-            audio_temp_dir = os.path.join(current_dir, "audio_temp")
-            os.makedirs(audio_temp_dir, exist_ok=True)
-            
-            self.temp_audio_file = os.path.join(audio_temp_dir, f"audio_{self.camera_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.wav")
-            
-            # 检查是否是本地文件
-            is_local_file = self.stream_url.startswith(('file:///', 'G:/', 'C:/', 'D:/', 'E:/', 'F:/'))
-            if is_local_file:
-                stream_url = self.stream_url.replace('file:///', '')
-            else:
-                stream_url = self.stream_url
-            
-            print(f"开始从 {stream_url} 提取音频...")
-            print(f"音频将保存到: {self.temp_audio_file}")
-            
-            # 使用ffmpeg提取音频
-            stream = ffmpeg.input(stream_url)
-            audio = stream.audio
-            stream = ffmpeg.output(audio, self.temp_audio_file, 
-                                 acodec='pcm_s16le',  # 16位PCM格式
-                                 ac=1,                # 单声道
-                                 ar='44100',          # 44.1kHz采样率
-                                 loglevel='error')    # 只显示错误日志
-                                 
-            # 启动ffmpeg进程
-            self.audio_process = await asyncio.create_subprocess_exec(
-                *ffmpeg.compile(stream),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            print("✅ 音频提取进程已启动")
-            
         except Exception as e:
-            print(f"❌ 启动音频提取时发生错误: {str(e)}")
-            traceback.print_exc()
-            self.temp_audio_file = None
-            
-    def get_audio_file(self) -> Optional[str]:
-        """获取当前正在写入的音频文件路径"""
-        return self.temp_audio_file
-            
-    async def read_frame(self) -> Tuple[bool, Optional[np.ndarray]]:
-        if not self.is_running or not self.cap:
-            return False, None
-            
-        try:
+            logger.error(f"测试视频流连接时出错: {str(e)}")
+            return False
+
+    def _read_frames_thread(self):
+        """
+        独立的线程，负责从视频流中持续读取帧并放入缓冲区。
+        """
+        logger.info(f"帧读取线程启动 for {self.camera_id}.")
+        # 【修改点 1 START】 将 self.cap = ... 移到这里，并使用局部变量 cap_thread
+        # 线程内部尝试打开视频流
+        cap_thread = cv2.VideoCapture(self.stream_url)
+
+        if not cap_thread.isOpened():
+            logger.error(f"帧读取线程无法打开视频流: {self.stream_url}")
+            self.is_running = False
+            return
+
+        # 成功打开后，将局部变量赋值给 self.cap
+        # 这确保了主线程在检查 self.cap.isOpened() 时，它已经被正确初始化
+        self.cap = cap_thread
+        # 【修改点 1 END】
+
+        while self.is_running:
             ret, frame = self.cap.read()
             if not ret:
-                logger.warning(f"无法读取视频帧: {self.stream_url}")
-                return False, None
+                logger.warning(f"从视频流读取帧失败，可能流已结束或中断 for {self.camera_id}。尝试重新连接...")
+                # 检查 self.cap 是否仍处于打开状态，避免重复释放已关闭的捕获器
+                if self.cap and self.cap.isOpened():  # 新增对 self.cap.isOpened() 的检查，更安全地释放
+                    self.cap.release()
+                time.sleep(1)  # 等待一秒后尝试重新连接
+                self.cap = cv2.VideoCapture(self.stream_url)
+                if not self.cap.isOpened():
+                    logger.error(f"重新连接视频流失败 for {self.camera_id}，停止帧读取线程。")
+                    self.is_running = False
+                continue
+
+            # 清空旧帧，放入新帧
+            if not self._frame_buffer.empty():
+                try:
+                    self._frame_buffer.get_nowait()  # 移除旧帧
+                except queue.Empty:
+                    pass  # 队列已空
+            self._frame_buffer.put(frame)  # 放入新帧
+
+            # 控制帧率，避免过度消耗CPU
+            # 根据实际需要调整，这里假设帧率由读取速度决定，可以增加一个sleep来限制FPS
+            # time.sleep(0.01) # 例如，限制为100 FPS的读取速度
+
+        # 确保在线程结束时释放捕获器
+        if self.cap:  # 确保 cap 不为 None 再释放
+            self.cap.release()
+        logger.info(f"帧读取线程停止 for {self.camera_id}.")
+
+    def get_raw_frame(self) -> Tuple[bool, Optional[np.ndarray]]:
+        """
+        获取最新读取的原始视频帧。
+        Returns:
+            Tuple[bool, Optional[np.ndarray]]: (是否成功获取帧, 视频帧)。
+        """
+        try:
+            # get_nowait() 非阻塞获取，如果队列为空会抛出 Empty 异常
+            frame = self._frame_buffer.get_nowait()
             return True, frame
-        except Exception as e:
-            logger.error(f"读取视频帧时发生错误: {str(e)}")
+        except queue.Empty:
             return False, None
-    
-    def stop(self):
+
+    async def start(self) -> bool:
         """
-        停止视频流处理
+        启动视频流处理器。
+        Returns:
+            bool: 如果启动成功返回 True，否则返回 False。
         """
-        self.is_running = False
-        
-        # 停止音频处理
-        if self.acoustic_detector:
-            self.acoustic_detector.stop_video_audio_processing()
-        
-        # The following lines are removed as per the new_code:
-        # if self.thread and self.thread.is_alive():
-        #     self.thread.join(timeout=5)
-        
+        if self.is_running:
+            logger.info(f"视频流 {self.camera_id} 已经在运行。")
+            return True
+
+        self.is_running = True
+        # 启动独立的帧读取线程
+        self.frame_read_thread = threading.Thread(target=self._read_frames_thread, daemon=True)
+        self.frame_read_thread.start()
+
+        # 【修改点 3 START】 启动后稍作等待，确保视频捕获器初始化
+        # 将等待时间从 0.5 秒增加到 2.0 秒，给 cv2.VideoCapture 更多时间来打开流
+        await asyncio.sleep(2.0)
+        # 【修改点 3 END】
+
+        # 再次检查 self.cap 是否已经成功打开
+        if not self.cap or not self.cap.isOpened():
+            logger.error(f"启动视频流失败，捕获器未成功打开 for {self.camera_id}.")
+            self.is_running = False
+            return False
+
+        logger.info(f"视频流处理任务已启动: {self.stream_url} for {self.camera_id}")
+        return True
+
+    async def start_audio_extraction(self):
+        """
+        启动音频提取任务，使用FFmpeg从视频流中提取音频并保存到临时文件。
+        该临时文件将不断被覆盖更新，以提供实时音频数据。
+        """
+        if self.audio_extraction_process and self.audio_extraction_process.poll() is None:
+            logger.info(f"音频提取进程已在运行 for {self.camera_id}。")
+            return
+
+        # 创建临时文件来存储音频流
+        # 使用 mkstemp 创建一个唯一的文件名，并立即关闭文件描述符，只保留路径
+        fd, path = tempfile.mkstemp(suffix=".aac", prefix=f"audio_{self.camera_id}_", dir=None)
+        os.close(fd)  # 关闭文件描述符
+
+        self.audio_file_path = path
+        logger.info(f"音频将提取到临时文件: {self.audio_file_path}")
+
+        try:
+            # 使用 ffmpeg 持续提取音频并覆盖到临时文件
+            # -i input_url: 输入流
+            # -vn: 不包含视频流
+            # -acodec aac: 音频编码为 AAC
+            # -ar 44100: 采样率 44100 Hz
+            # -b:a 128k: 音频比特率 128 kbps
+            # -f adts: 输出格式为 ADTS (AAC的传输流格式)
+            # -y: 覆盖输出文件
+            # -map 0:a: 只映射第一个输入流的音频部分
+            # -loglevel quiet: 减少 ffmpeg 的输出信息
+            # -copyts: 复制时间戳，避免pts问题
+            # -vsync 0: 不强制视频同步，以保持音频连续性
+            command = [
+                'ffmpeg',
+                '-i', self.stream_url,
+                '-vn',  # no video
+                '-acodec', 'aac',
+                '-ar', '44100',
+                '-b:a', '128k',
+                '-f', 'adts',  # ADTS格式以便于实时写入和读取
+                '-y',  # overwrite output file
+                '-map', '0:a',  # only map audio stream from input
+                '-loglevel', 'error',  # only show errors from ffmpeg
+                '-copyts',  # copy timestamps
+                '-vsync', '0',  # Disable video sync, just stream audio
+                self.audio_file_path
+            ]
+
+            # 使用 subprocess.Popen 启动 ffmpeg 进程
+            self.audio_extraction_process = subprocess.Popen(command,
+                                                             stdout=subprocess.PIPE,
+                                                             stderr=subprocess.PIPE)
+            logger.info(f"FFmpeg 音频提取进程已启动 for {self.camera_id}。PID: {self.audio_extraction_process.pid}")
+
+            # 启动一个独立协程来监控 FFmpeg 错误输出
+            asyncio.create_task(self._monitor_ffmpeg_stderr())
+
+        except Exception as e:
+            logger.error(f"启动FFmpeg音频提取时出错 for {self.camera_id}: {str(e)}")
+            self.audio_extraction_process = None
+            self.audio_file_path = None
+            return False
+        return True
+
+    async def _monitor_ffmpeg_stderr(self):
+        """监控FFmpeg进程的错误输出"""
+        if self.audio_extraction_process and self.audio_extraction_process.stderr:
+            for line in self.audio_extraction_process.stderr:
+                decoded_line = line.decode(errors='ignore').strip()
+                if decoded_line:
+                    logger.warning(f"FFmpeg stderr ({self.camera_id}): {decoded_line}")
+            await self.audio_extraction_process.wait()  # 等待进程结束
+            logger.info(f"FFmpeg stderr 监控器停止 for {self.camera_id}.")
+
+    def get_audio_file(self) -> Optional[str]:
+        """
+        获取当前音频文件的路径。
+        Returns:
+            Optional[str]: 音频文件的路径，如果未启动则为 None。
+        """
+        return self.audio_file_path
+
+    async def stop(self):
+        """
+        停止视频流处理和音频提取进程，并清理资源。
+        """
+        logger.info(f"正在停止视频流: {self.stream_url} for {self.camera_id}")
+        self.is_running = False  # 停止帧读取线程
+
+        if self.frame_read_thread and self.frame_read_thread.is_alive():
+            self.frame_read_thread.join(timeout=5)  # 等待线程结束
+            if self.frame_read_thread.is_alive():
+                logger.warning(f"帧读取线程未能正常停止 for {self.camera_id}.")
+
         if self.cap:
             self.cap.release()
             self.cap = None
-        
-        print(f"已停止视频流: {self.stream_url}")
-    
-    def _process_loop(self):
-        """
-        视频处理主循环
-        """
-        retry_count = 0
-        max_retries = 5
-        
-        while self.is_running:
+            logger.info(f"视频捕获器已释放 for {self.camera_id}.")
+
+        if self.audio_extraction_process:
             try:
-                ret, frame = self.cap.read()
-                
-                if not ret:
-                    retry_count += 1
-                    print(f"视频流读取失败，重试 {retry_count}/{max_retries}")
-                    
-                    if retry_count >= max_retries:
-                        print("达到最大重试次数，尝试重新连接...")
-                        self.cap.release()
-                        
-                        # 如果是webcam字符串，转换为默认摄像头索引
-                        stream_url = self.stream_url
-                        if isinstance(stream_url, str) and stream_url.lower() == 'webcam':
-                            stream_url = 0
-                        
-                        # 重新连接，对于本地摄像头使用DirectShow后端
-                        if isinstance(stream_url, int):
-                            self.cap = cv2.VideoCapture(stream_url, cv2.CAP_DSHOW)
-                        else:
-                            self.cap = cv2.VideoCapture(stream_url)
-                        retry_count = 0
-                    
-                    time.sleep(1)
-                    continue
-                
-                # 重置重试计数
-                retry_count = 0
-                
-                # 处理帧
-                with self.lock:
-                    for processor in self.processors:
-                        try:
-                            processor(frame)
-                        except Exception as e:
-                            print(f"处理器执行错误: {e}")
-                
-                # 控制帧率，避免过度消耗CPU
-                time.sleep(0.033)  # 约30fps
-                
+                self.audio_extraction_process.terminate()  # 尝试终止进程
+                await asyncio.sleep(0.5)  # 等待进程结束
+                if self.audio_extraction_process.poll() is None:
+                    self.audio_extraction_process.kill()  # 如果未终止，强制杀死
+                logger.info(f"FFmpeg 音频提取进程已终止 for {self.camera_id}.")
             except Exception as e:
-                print(f"视频流处理循环错误: {e}")
-                time.sleep(1)
-    
-    def get_stream_info(self) -> dict:
+                logger.error(f"终止FFmpeg进程时出错 for {self.camera_id}: {str(e)}")
+            self.audio_extraction_process = None
+
+        if self.audio_file_path and os.path.exists(self.audio_file_path):
+            try:
+                os.remove(self.audio_file_path)  # 清理临时音频文件
+                logger.info(f"临时音频文件已删除: {self.audio_file_path}")
+            except Exception as e:
+                logger.error(f"删除临时音频文件时出错: {str(e)}")
+            self.audio_file_path = None
+
+        logger.info(f"视频流 {self.camera_id} 资源清理完成。")
+
+    def update_settings(self, settings: Dict) -> bool:
         """
-        获取视频流信息
-        
+        更新AI分析设置（此方法在此类中不再有直接作用，但为兼容性保留）。
+        Args:
+            settings: 包含AI分析设置的字典
         Returns:
-            dict: 包含视频流状态信息的字典
+            bool: 更新是否成功
         """
-        info = {
-            "stream_url": self.stream_url,
-            "is_running": self.is_running,
-            "processors_count": len(self.processors),
-            "has_audio_processing": self.acoustic_detector is not None
-        }
-        
-        if self.cap and self.cap.isOpened():
-            info.update({
-                "width": int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
-                "height": int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
-                "fps": self.cap.get(cv2.CAP_PROP_FPS)
-            })
-        
-        return info
-
-    def process_frame(self, frame: np.ndarray) -> Dict:
-        """处理单帧图像。"""
-        results = {
-            "faces": [],
-            "objects": [],
-            "behaviors": [],
-            "alerts": []
-        }
-        
-        try:
-            # 1. 人脸检测和识别
-            if self.face_recognizer:
-                face_results = self.face_recognizer.detect_and_recognize(frame)
-                results["faces"] = face_results
-                
-                # 检查每个未知人脸并生成告警
-                for face in face_results:
-                    if face["alert_needed"]:
-                        alert = AIAnalysisResult(
-                            camera_id=self.camera_id,
-                            event_type="unknown_face_detected",
-                            timestamp=face["detection_time"],
-                            location={
-                                "box": [
-                                    face["location"]["left"],
-                                    face["location"]["top"],
-                                    face["location"]["right"],
-                                    face["location"]["bottom"]
-                                ],
-                                "description": "摄像头视野内"
-                            },
-                            confidence=face["confidence"],
-                            details={
-                                "best_match_info": face["best_match"] if face["best_match"] else None,
-                                "face_location": face["location"]
-                            }
-                        )
-                        
-                        # 发送报警到后端
-                        try:
-                            self.alert_sender.send_alert(alert)
-                            print(f"🚨 未知人员报警已发送! 位置: {face['location']}")
-                        except Exception as e:
-                            print(f"发送未知人员报警失败: {str(e)}")
-                            traceback.print_exc()
-            
-            # 2. 行为检测（如果需要）
-            if self.behavior_detector:
-                behavior_results = self.behavior_detector.detect(frame)
-                results["behaviors"] = behavior_results
-            
-            # 3. 目标检测（如果需要）
-            if self.object_detector:
-                object_results = self.object_detector.detect(frame)
-                results["objects"] = object_results
-                
-        except Exception as e:
-            print(f"处理帧时发生错误: {str(e)}")
-            traceback.print_exc()
-        
-        return results
-
-# 全局视频流管理器
-active_streams: Dict[str, VideoStream] = {}
+        logger.info(f"VideoStream收到了更新AI分析设置的请求，但本类不直接处理AI逻辑。设置: {settings}")
+        return True

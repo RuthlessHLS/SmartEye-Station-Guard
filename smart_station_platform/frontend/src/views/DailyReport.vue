@@ -80,7 +80,7 @@
 <script setup>
 import { ref, reactive, onMounted, nextTick } from 'vue';
 import { ElMessage } from 'element-plus';
-import api from '../api'; // 导入API请求服务
+import api from '@/api'; // 导入API请求服务
 import * as echarts from 'echarts'; // 导入 ECharts
 
 const loading = ref(false);
@@ -102,15 +102,19 @@ onMounted(() => {
   fetchReport(); // 页面加载时自动获取今天报告
 });
 
-const fetchReport = async () => {
+async function fetchReport() {
   if (!reportFilterForm.date) {
     ElMessage.warning('请选择一个日期！');
     return;
   }
   loading.value = true;
   try {
-    // 假设后端日报接口为 /api/reports/daily/
-    const response = await api.get(`/reports/daily/${reportFilterForm.date}/`);
+    const response = await api.alerts.getList({
+      start_time: reportFilterForm.date,
+      end_time: reportFilterForm.date,
+      page: 1,
+      page_size: 100
+    });
     if (response.data) {
       Object.assign(report, response.data); // 赋值报告数据
       report.date = reportFilterForm.date; // 确保日期显示正确

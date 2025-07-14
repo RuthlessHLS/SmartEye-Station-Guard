@@ -84,46 +84,57 @@ const handleLoginAttempt = () => {
 };
 
 // 监听验证码组件的 `success` 事件
-const onCaptchaSuccess = (result) => {
-  captchaResult.captcha_key = result.captcha_key;
-  captchaResult.captcha_position = result.captcha_position;
-  showCaptcha.value = false;
-  // 验证码成功后，调用最终的提交函数
-  submitLogin();
-};
-
-// 3. 重写最终提交函数，使用 authStore
-const submitLogin = async () => {
-  // loading 状态已在 handleLoginAttempt 中设置为 true
-  errorMessage.value = '';
-
+const onCaptchaSuccess = async (result) => {
   try {
-    const payload = {
+    // 保存验证码结果
+    const loginData = {
       username: form.username,
       password: form.password,
-      captcha_key: captchaResult.captcha_key,
-      captcha_position: captchaResult.captcha_position.toString(),
+      captcha_key: result.captcha_key,
+      captcha_position: Math.round(result.captcha_position).toString(), // 确保是整数字符串
     };
 
+    console.log('验证码验证成功，准备登录');
+    showCaptcha.value = false;
+
     // 调用 authStore 中的 login action，并等待它完成
-    // authStore.login 内部已经处理了：存token, 获取用户信息, 更新state, 路由跳转
-    await authStore.login(payload);
+    await authStore.login(loginData);
 
   } catch (error) {
+    console.error('登录过程中发生错误:', error);
+    
     // 从 action 中抛出的错误会被这里捕获
-    const errorData = error.response?.data;
     let msg = '登录失败，请重试。';
-    if (errorData) {
-        // 提取后端返回的详细错误信息
-        msg = errorData.detail || errorData.captcha || (errorData.username && `用户名: ${errorData.username[0]}`) || (errorData.password && `密码: ${errorData.password[0]}`) || JSON.stringify(errorData);
+    
+    if (error.response?.data) {
+      const errorData = error.response.data;
+      console.log('服务器返回的错误数据:', errorData);
+      
+      if (typeof errorData === 'string') {
+        msg = errorData;
+      } else if (errorData.detail) {
+        msg = errorData.detail;
+      } else if (errorData.captcha) {
+        msg = errorData.captcha;
+      } else if (errorData.username) {
+        msg = `用户名: ${errorData.username[0]}`;
+      } else if (errorData.password) {
+        msg = `密码: ${errorData.password[0]}`;
+      } else if (errorData.non_field_errors) {
+        msg = errorData.non_field_errors[0];
+      }
+    } else if (error.message) {
+      msg = error.message;
     }
+
     errorMessage.value = msg;
-    console.error('登录失败:', errorData || error);
-    // 添加更详细的错误信息输出
-    console.log('请求数据:', payload);
-    console.log('错误响应:', error.response);
+    
+    // 如果是验证码错误，重新显示验证码
+    if (msg.includes('验证码') || msg.includes('captcha')) {
+      console.log('验证码错误，重新显示验证码组件');
+      showCaptcha.value = true;
+    }
   } finally {
-    // 无论成功或失败，结束加载状态
     loading.value = false;
   }
 };
@@ -223,3 +234,4 @@ const submitLogin = async () => {
   text-align: center;
 }
 </style>
+
