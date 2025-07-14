@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 class FaceRecognizer:
-    def __init__(self, known_faces_dir: str):
+    def __init__(self, known_faces_dir, detection_model="hog", tolerance=0.5, jitter=1):
         """
         初始化人脸识别器。
 
@@ -42,20 +42,20 @@ class FaceRecognizer:
         self.known_faces_dir = known_faces_dir
         self.known_face_encodings = []
         self.known_face_names = []
-        self.tolerance = self.current_config['tolerance']
-        self.jitter = 1 # 默认jitter值
+        self.tolerance = tolerance
+        self.jitter = jitter
 
         self._load_known_faces()
 
     def _load_known_faces(self):
         """
-        从指定目录加载已知人脸并生成编码。
+        核心的加载函数：扫描目录，计算编码。这是一个耗时操作。
         """
-        logger.info("=== 开始加载已知人脸数据库 ===")
+        logger.info("=== 开始扫描人脸库并生成编码... ===")
         logger.info(f"目录路径: {self.known_faces_dir}")
 
-        self.known_face_encodings = []
-        self.known_face_names = []
+        temp_encodings = []
+        temp_names = []
 
         if not os.path.isdir(self.known_faces_dir):
             logger.warning(f"已知人脸目录 '{self.known_faces_dir}' 不存在，跳过加载。")
@@ -66,29 +66,28 @@ class FaceRecognizer:
             if not os.path.isdir(person_dir):
                 continue
             
-            image_files = [f for f in os.listdir(person_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
-            logger.info(f"📁 处理人员目录: {person_name}，找到 {len(image_files)} 个图片文件")
-
-            for image_file in image_files:
-                try:
-                    image_path = os.path.join(person_dir, image_file)
-                    image = face_recognition.load_image_file(image_path)
-                    face_locations = face_recognition.face_locations(image, model=self.current_config['detection_model'])
-                    
-                    if face_locations:
-                        face_encoding = face_recognition.face_encodings(image, known_face_locations=face_locations, num_jitters=self.jitter)[0]
-                        self.known_face_encodings.append(face_encoding)
-                        self.known_face_names.append(person_name)
-                    else:
-                        logger.warning(f"在图片 '{image_file}' 中未找到人脸，已跳过。")
-                except Exception as e:
-                    logger.error(f"处理图片 '{image_file}' 时出错: {e}", exc_info=True)
+            for image_file in os.listdir(person_dir):
+                if image_file.lower().endswith(('.png', '.jpg', '.jpeg')):
+                    try:
+                        image_path = os.path.join(person_dir, image_file)
+                        image = face_recognition.load_image_file(image_path)
+                        encodings = face_recognition.face_encodings(image)
+                        if encodings:
+                            temp_encodings.append(encodings[0])
+                            temp_names.append(person_name)
+                        else:
+                            logger.warning(f"在图片 '{image_file}' 中未找到人脸，已跳过。")
+                    except Exception as e:
+                        logger.error(f"处理图片 '{image_file}' 时出错: {e}", exc_info=True)
         
-        logger.info(f"✅ 人脸数据库加载完成。共加载 {len(self.known_face_encodings)} 个已知人脸。")
+        # 原子替换，确保服务不会在加载过程中使用不完整的数据
+        self.known_face_encodings = temp_encodings
+        self.known_face_names = temp_names
+        logger.info(f"✅ 人脸库加载完成。共加载 {len(self.known_face_encodings)} 个已知人脸。")
 
     async def reload_known_faces(self):
         """
-        异步接口，在后台线程中安全地重新加载人脸数据。
+        异步接口，在后台线程中安全地执行耗时的加载任务。
         """
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self._load_known_faces)
@@ -249,87 +248,31 @@ class FaceRecognizer:
         for face_idx, (face_location, face_encoding) in enumerate(zip(filtered_face_locations, face_encodings)):
             top, right, bottom, left = face_location
 
-            # 与所有已知人脸进行比对
-            all_distances = {}  # {name: [distances]}
-            for known_name, known_encodings in self.known_faces.items():
-                if known_encodings:  # 确保有已知编码
-                    # 计算人脸特征向量的欧氏距离
-                    # 【修复 3.1】将 face_recognition.face_distances 更正为 face_recognition.face_distance
-                    distances = face_recognition.face_distance(known_encodings, face_encoding)
-                    all_distances[known_name] = distances.tolist()  # 转换为列表
+            # 【修复】添加缺失的人脸比对核心逻辑
+            matches = face_recognition.compare_faces(self.known_face_encodings, face_encoding, tolerance=tolerance)
+            name = "unknown"
+            confidence = 0.0
+            is_known = False
 
-            best_matches = []
-            for name, distances in all_distances.items():
-                if distances:
-                    min_distance = min(distances)
-                    avg_distance = sum(distances) / len(distances)
-                    best_matches.append((name, min_distance, avg_distance))
-
-            best_matches.sort(key=lambda x: x[1])  # 按最小距离排序
-
-            identity = {"name": "unknown", "known": False, "confidence": 0.0}
-            confidence_score = 0.0
-
-            if best_matches:
-                best_name, best_distance, avg_distance = best_matches[0]
-
-                # 🎯 优化后的识别判断：更灵敏但仍准确
-                # 1. 基础阈值检查：最佳匹配必须小于基础阈值
-                passes_base_threshold = best_distance <= tolerance
-
-                # 2. 简化的差异度检查：如果有其他候选人，确保有一定差距
-                # 避免被第二相似的人脸干扰
-                passes_distinction = True
-                if len(best_matches) > 1:
-                    second_best_distance = best_matches[1][1]
-                    # 确保最佳匹配与次佳匹配之间有足够的距离差异
-                    if best_distance > 0:  # 避免除以零
-                        distance_gap_ratio = (second_best_distance - best_distance) / best_distance
-                        if distance_gap_ratio < 0.12:  # 降低差距要求从15%到12%
-                            passes_distinction = False
-
-                # 3. 适中的绝对阈值检查：进一步放宽硬性上限
-                passes_absolute = best_distance <= 0.75  # 放宽从0.65到0.75
-
-                # 🔥 扩展：高置信度快速通道 - 扩大快速通道范围
-                is_high_confidence = best_distance <= 0.45  # 从0.35扩展到0.45
-
-                # 🌟 新增：中等置信度通道 - 在高置信度和标准检查之间增加中间层
-                is_medium_confidence = (best_distance <= 0.55 and passes_base_threshold)
-
-                # 综合判断：多级通道提高识别率
-                is_confident = (
-                        is_high_confidence or  # 高置信度快速通道
-                        is_medium_confidence or  # 中等置信度通道
-                        (passes_base_threshold and passes_distinction and passes_absolute)
-                )
-
-                if is_confident:
-                    confidence_score = max(0.0, 1.0 - best_distance)  # 距离越小，置信度越高
-                    identity = {"name": best_name, "known": True, "confidence": confidence_score}
-                    logger.debug(f"  ✅ 识别为: {best_name} (距离: {best_distance:.3f}, 置信度: {confidence_score:.3f})")
-                    if is_high_confidence:
-                        logger.debug(f"    🚀 高置信度快速通道: {best_distance:.3f} <= 0.45")
-                    elif is_medium_confidence:
-                        logger.debug(f"    🎯 中等置信度通道: {best_distance:.3f} <= 0.55")
-                    else:
-                        logger.debug(
-                            f"    📊 标准检查通过: 基础阈值={passes_base_threshold}, 差异={passes_distinction}, 绝对={passes_absolute}")
-                else:
-                    identity = {"name": "unknown", "known": False, "confidence": 0.0}
-                    logger.debug(f"  ❌ 未知人员 (最佳距离: {best_distance:.3f})")
-                    logger.debug(
-                        f"    🔍 检查未通过: 高置信度={is_high_confidence}, 中等置信度={is_medium_confidence}, 基础阈值={passes_base_threshold}, 差异={passes_distinction}, 绝对={passes_absolute}")
-            else:
-                logger.debug("  没有已知人脸匹配。")
+            face_distances = face_recognition.face_distance(self.known_face_encodings, face_encoding)
+            if len(face_distances) > 0:
+                best_match_index = np.argmin(face_distances)
+                if matches[best_match_index]:
+                    name = self.known_face_names[best_match_index]
+                    # 将距离转换为置信度 (0.0 -> 100%, 0.6 -> 0%)
+                    confidence = 1.0 - (face_distances[best_match_index] / tolerance)
+                    confidence = max(0, min(1, confidence)) # 确保在0-1之间
+                    is_known = True
 
             results.append({
-                "location": {"top": top, "right": right, "bottom": bottom, "left": left},
-                "identity": identity,
-                "confidence": confidence_score,
-                "alert_needed": identity["name"] == "unknown",
-                "best_match": best_matches[0] if best_matches else None,
-                "detection_time": datetime.now().isoformat()
+                "type": "face",
+                "bbox": [left, top, right, bottom],
+                "identity": {
+                    "name": name,
+                    "is_known": is_known,
+                    "confidence": confidence,
+                    "face_id": f"face_{face_idx}" # 添加一个唯一的标识符
+                }
             })
 
         return results

@@ -1,18 +1,23 @@
 # 文件: ai_service/core/object_detection.py
 # 描述: 使用YOLOv8的通用目标检测器，支持动态配置和过滤。
 
+import os
 import torch
 import numpy as np
+from PIL import Image
+import cv2  # <-- 确保导入了 cv2
 from typing import List, Dict, Optional, Any
 from ultralytics import YOLO
-import os
 import logging
+
+# 【修改】从正确的工具文件中导入
+from .ai_models.torch_utils import non_max_suppression, select_device
 
 # 获取logger实例
 logger = logging.getLogger(__name__)
 
 
-class GenericPredictor:
+class ObjectDetector:
     """
     使用YOLOv8的通用目标检测器。
     相比Faster R-CNN，具有更好的性能和更快的速度。
@@ -160,3 +165,24 @@ class GenericPredictor:
         """启用或禁用检测器"""
         self.enabled = enabled
         logger.info(f"通用目标检测器已{'启用' if enabled else '禁用'}")
+
+    # 【新增】一个辅助函数，用于正确地还原坐标
+    def scale_coords(self, img1_shape, coords, img0_shape, ratio_pad=None):
+        """
+        Rescale coords (xyxy) from img1_shape to img0_shape.
+        """
+        if ratio_pad is None:  # calculate from img0_shape
+            gain = min(img1_shape[0] / img0_shape[0], img1_shape[1] / img0_shape[1])  # gain  = old / new
+            pad = (img1_shape[1] - img0_shape[1] * gain) / 2, (img1_shape[0] - img0_shape[0] * gain) / 2  # wh padding
+        else:
+            gain = ratio_pad[0][0]
+            pad = ratio_pad[1]
+
+        coords[:, [0, 2]] -= pad[0]  # x padding
+        coords[:, [1, 3]] -= pad[1]  # y padding
+        coords[:, :4] /= gain
+        
+        # 限制坐标在图像边界内
+        coords[:, [0, 2]] = coords[:, [0, 2]].clamp(0, img0_shape[1])  # x1, x2
+        coords[:, [1, 3]] = coords[:, [1, 3]].clamp(0, img0_shape[0])  # y1, y2
+        return coords

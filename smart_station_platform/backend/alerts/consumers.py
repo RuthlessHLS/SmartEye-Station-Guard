@@ -44,8 +44,24 @@ class AlertConsumer(AsyncWebsocketConsumer):
         await self.send(text_data=json.dumps(message_to_send))
         print(f"已向 {self.channel_name} 发送告警更新: {update_data.get('alert', {}).get('id', 'unknown')} - {update_data.get('action', 'update')}")
 
+    async def broadcast_message(self, event):
+        """
+        处理从后端视图（例如 WebSocketBroadcastView）发来的通用广播消息。
+        """
+        message_data = event['message']
+        # 将收到的完整消息直接发送到前端
+        await self.send(text_data=json.dumps(message_data))
+        # 可选：在后端日志中打印一条确认信息
+        message_type = message_data.get("type", "unknown")
+        print(f"已向 {self.channel_name} 广播实时消息: {message_type}")
+
     # 接收来自WebSocket的消息（前端发送的）
     async def receive(self, text_data):
+        # 【修复】处理前端可能发送的纯文本 "ping"
+        if text_data == "ping":
+            await self.send(text_data=json.dumps({'type': 'pong'}))
+            return
+
         try:
             text_data_json = json.loads(text_data)
             message_type = text_data_json.get('type', '')

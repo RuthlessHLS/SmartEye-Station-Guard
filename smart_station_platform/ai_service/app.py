@@ -26,19 +26,25 @@ from urllib3.util.retry import Retry
 # 导入我们自定义的所有核心AI模块和模型
 import sys
 import logging
+
 logger = logging.getLogger(__name__)
 # 将当前目录添加到Python路径，确保可以导入核心模块
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from core.video_stream import VideoStream
-from core.object_detection import GenericPredictor
+from core.object_detection import ObjectDetector
 from core.behavior_detection import BehaviorDetector
 from core.face_recognition import FaceRecognizer
+from core.fire_smoke_detection import FlameSmokeDetector
+from core.multi_object_tracker import DeepSORTTracker
+from core.danger_zone_detection import DangerZoneDetector
+from models.alert_models import AIAnalysisResult, CameraConfig, SystemStatus  # 确保这些文件存在且结构正确
 from core.acoustic_detection import AcousticEventDetector
 from core.fire_smoke_detection import FlameSmokeDetector
 from core.multi_object_tracker import DeepSORTTracker
 from core.danger_zone_detection import danger_zone_detector
-from models.alert_models import AIAnalysisResult, CameraConfig, SystemStatus  # 确保这些文件存在且结构正确
+from core.object_detection import ObjectDetector
+from core.danger_zone_detection import DangerZoneDetector
 
 
 # --- 配置管理 ---
@@ -112,7 +118,7 @@ class AIServiceManager:
                 print(f"警告: 找不到类别名称文件 at '{class_names_path}'。")
                 class_names = ["background", "person"]
 
-            self._detectors["object"] = GenericPredictor(
+            self._detectors["object"] = ObjectDetector(
                 model_weights_path=model_weights_path,
                 num_classes=len(class_names),
                 class_names=class_names
@@ -239,28 +245,36 @@ class AIServiceManager:
 
         def task():
             try:
+                # 【修复】修正发送到WebSocket的数据结构
                 websocket_data = {
                     "type": "detection_result",
                     "data": {
                         "camera_id": camera_id,
-                        "timestamp": datetime.now().isoformat(),
-                        "detections": detection_results.get("detections", []),
-                        "performance_info": detection_results.get("performance_info", {})
+                        "detections": detection_results  # 之前这里缺少了 "detections" 这个key
                     }
                 }
+
+                headers = {
+                    'Content-Type': 'application/json',
+                    'X-API-Key': self.config.AI_SERVICE_API_KEY
+                }
+
                 response = requests.post(
                     self.config.BACKEND_WEBSOCKET_BROADCAST_URL,
-                    json=websocket_data,
-                    headers={'Content-Type': 'application/json'},
+                    data=json.dumps(websocket_data),
+                    headers=headers,
                     timeout=2
                 )
+
                 if response.status_code == 200:
                     print(f"✅ 检测数据已发送到WebSocket: {camera_id}")
                 else:
-                    print(f"⚠️ WebSocket数据发送失败: {response.status_code}")
-            except Exception as e:
-                print(f"发送检测数据到WebSocket失败: {e}")
+                    print(f"❌ 发送检测数据到WebSocket失败: {response.status_code}, {response.text}")
 
+            except Exception as e:
+                print(f"发送WebSocket任务出错: {e}")
+
+        # 使用线程池异步执行，避免阻塞主循环
         self._thread_pool.submit(task)
 
     async def shutdown_services(self):
@@ -663,7 +677,8 @@ class AIServiceManager:
             face_detections.append(detection)
             face_name = face.get("identity", {}).get("name", "未知")
             is_known = face.get("identity", {}).get("known", False)
-            logger.info(f"✨ [人脸识别] 摄像头: {camera_id}, 姓名: {face_name} (已知: {is_known}), 置信度: {face.get('confidence', 0.0):.2f}, 框: {bbox}")
+            logger.info(
+                f"✨ [人脸识别] 摄像头: {camera_id}, 姓名: {face_name} (已知: {is_known}), 置信度: {face.get('confidence', 0.0):.2f}, 框: {bbox}")
 
         if face_detections:
             stabilized_faces = self.stabilize_detections(camera_id, face_detections)
@@ -881,6 +896,7 @@ class AIServiceManager:
 
         # 目标检测任务
         def optimized_object_detection():
+            """内部函数，负责执行对象检测并返回格式化结果。"""
             if not (enable_object_detection and strategy["run_object_detection"]):
                 return []
             try:
@@ -903,51 +919,62 @@ class AIServiceManager:
                     })
                 return object_detections
             except Exception as e:
-                print(f"目标检测失败: {e}")
+                logger.error(f"目标检测失败: {e}", exc_info=True)
                 return []
 
         # 人脸识别任务
         def optimized_face_recognition():
-            if not (enable_face_recognition and strategy["run_face_recognition"]):
-                return []
+            """内部函数，负责执行人脸识别并处理结果。"""
             try:
-                face_scale = strategy["face_scale_factor"]
-                if performance_mode == "fast":
-                    face_scale = min(0.5, face_scale)
-                face_height, face_width = int(height * face_scale), int(width * face_scale)
-                face_image = cv2.resize(frame, (face_width, face_height))
+                face_results = self._detectors["face"].detect_and_recognize(frame)
+                processed_results = []
+                # 【重要修复】在使用前获取当前摄像头的AI设置
+                ai_settings = self.get_ai_settings(camera_id)
 
-                # 【修复 1.7】 _process_face_recognition_with_stabilization 内部会处理 tolerance，这里无需重复传递
-                stabilized_faces = self._process_face_recognition_with_stabilization(camera_id, face_image)
+                for result in face_results:
+                    # 根据新的返回数据结构解析结果
+                    identity_info = result.get("identity", {})
+                    name = identity_info.get("name", "unknown")
+                    is_known = identity_info.get("is_known", False)
+                    confidence = identity_info.get("confidence", 0.0)
+                    bbox = result.get("bbox")
 
-                scale_back_x, scale_back_y = width / face_width, height / face_height
-                face_detections = []
-                for face in stabilized_faces[:strategy["face_limit"]]:
-                    if face["type"] == "face":
-                        face_bbox = [int(float(face["bbox"][0]) * scale_back_x),
-                                     int(float(face["bbox"][1]) * scale_back_y),
-                                     int(float(face["bbox"][2]) * scale_back_x),
-                                     int(float(face["bbox"][3]) * scale_back_y)]
-                        face_detections.append({
-                            "type": "face", "known": face.get("identity", {}).get("known", False),
-                            "name": face.get("identity", {}).get("name", "未知"),
-                            "confidence": float(face.get("confidence", 0.5)),
-                            "bbox": face_bbox, "tracking_id": face.get("tracking_id", ""),
-                            "timestamp": face.get("timestamp", datetime.now().isoformat())
-                        })
-                        if not face.get("identity", {}).get("known", False) and performance_mode != "fast":
-                            self.send_alert_to_backend(
-                                AIAnalysisResult(
-                                    camera_id=camera_id, event_type="unknown_face_detected",
-                                    location={"box": face_bbox}, confidence=float(face.get("confidence", 0.5)),
-                                    timestamp=datetime.now().isoformat(),
-                                    details={"tracking_id": face.get("tracking_id"),
-                                             "is_stable": face.get("is_stable", False)}
-                                )
-                            )
-                return face_detections
+                    if not bbox:
+                        continue
+
+                    # 打印日志
+                    log_message = (f"✨ [人脸识别] 摄像头: {camera_id}, 姓名: {name} "
+                                   f"(已知: {is_known}), 置信度: {confidence:.2f}, 框: {bbox}")
+                    logger.info(log_message)
+
+                    # 检查是否为已知人员且超过置信度阈值
+                    if is_known and confidence > 0.5:
+                        # 可以在这里为识别到的已知人员触发一个事件
+                        pass
+
+                    # 检查是否为需要告警的陌生人
+                    elif not is_known and ai_settings.get("stranger_intrusion", False):
+                        alert = AIAnalysisResult(
+                            camera_id=camera_id,
+                            event_type="stranger_intrusion",
+                            confidence=1.0,  # 陌生人闯入可以认为是100%确定
+                            timestamp=datetime.now().isoformat(),
+                            location={"bounding_box": bbox},
+                            details={"description": f"检测到未知人员", "name": name}
+                        )
+                        self.send_alert_to_backend(alert)
+
+                    # 将规范化后的结果添加到要发送到前端的列表中
+                    processed_results.append({
+                        "type": "face",
+                        "bbox": bbox,
+                        "confidence": confidence,
+                        "identity": identity_info
+                    })
+                return processed_results
             except Exception as e:
-                print(f"人脸识别失败: {e}")
+                # 【修复】提供更详细的错误日志
+                logger.error(f"人脸识别处理过程中失败: {e}", exc_info=True)
                 return []
 
         # 执行策略
@@ -1074,10 +1101,22 @@ class AIServiceManager:
             "tracker_available": camera_id in self._object_trackers
         }
 
-        # 异步发送检测结果到WebSocket (不阻塞响应)
-        if results.get("detections"):
-            self._thread_pool.submit(lambda: asyncio.run(self.send_detection_to_websocket(camera_id, results)))
+        # 异步发送检测结果到 WebSocket
+        if self.get_ai_settings(camera_id).get('realtime_mode', True) and results:
+            # 【修复】捕获在服务关闭时可能发生的RuntimeError
+            try:
+                # 使用lambda确保asyncio.run在线程池的线程中被调用
+                self._thread_pool.submit(lambda: asyncio.run(self.send_detection_to_websocket(camera_id, results)))
+            except RuntimeError as e:
+                # 当服务关闭，线程池已销毁时，这个错误是预期的。
+                # 我们可以安全地忽略它，或者只打印一条简短的日志。
+                if "cannot schedule new futures after shutdown" in str(e):
+                    logger.warning(f"服务关闭期间，无法发送最后的检测结果: {e}")
+                else:
+                    # 如果是其他RuntimeError，则重新抛出
+                    raise
 
+        # 返回处理后的结果
         return results
 
     # --- AISettings Model (for API) ---
@@ -1258,20 +1297,35 @@ class AIServiceManager:
 
     async def reload_face_recognizer(self):
         """
-        重新加载人脸识别器中的已知人脸数据。
+        异步触发人脸识别器重新加载已知人脸数据。
         """
         if not self.face_recognizer:
             logger.warning("人脸识别器未初始化，无法重新加载。")
             return {"status": "failed", "message": "Face recognizer not initialized."}
-        
+
         try:
-            logger.info("=== 正在通过API请求重新加载人脸数据库 ===")
+            logger.info("=== 收到API请求，开始在后台重新加载人脸数据库 ===")
             await self.face_recognizer.reload_known_faces()
-            logger.info("=== 人脸数据库重新加载成功 ===")
-            return {"status": "success", "message": "Known faces reloaded successfully."}
+            logger.info("=== 人脸数据库重新加载任务已成功调度 ===")
+            return {"status": "success", "message": "Known faces reload has been scheduled."}
         except Exception as e:
             logger.error(f"重新加载人脸数据库时出错: {e}", exc_info=True)
             return {"status": "failed", "message": str(e)}
+
+    def update_stream_settings(self, camera_id, settings):
+        """
+        更新指定视频流的AI分析设置。
+        """
+        if camera_id not in self.video_streams:
+            logger.warning(f"尝试更新不存在的视频流设置: {camera_id}")
+            return None
+
+        stream_processor = self.video_streams[camera_id]
+        if stream_processor:
+            stream_processor.update_settings(settings)
+            logger.info(f"成功更新摄像头 {camera_id} 的AI设置: {settings}")
+            return stream_processor.get_settings()
+        return None
 
 
 # 创建服务管理器实例
@@ -1548,4 +1602,5 @@ async def get_system_status():
 
 # 启动Uvicorn
 if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8001)
     uvicorn.run(app, host="0.0.0.0", port=8001)

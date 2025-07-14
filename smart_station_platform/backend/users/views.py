@@ -486,9 +486,11 @@ class RegisteredFaceViewSet(viewsets.ModelViewSet):
         """
         在创建新的人脸记录后，自动将图片同步到AI人脸库并通知AI服务刷新。
         """
+        # 1. 保存到数据库和media文件夹
         registered_face = serializer.save()
 
         try:
+            # 2. 复制图片到AI人脸库
             source_path = registered_face.face_image.path
             person_name = registered_face.name
 
@@ -503,6 +505,7 @@ class RegisteredFaceViewSet(viewsets.ModelViewSet):
             shutil.copy2(source_path, destination_path)
             print(f"成功将人脸图片复制到: {destination_path}")
 
+            # 3. 通知AI服务重新加载
             ai_service_url = getattr(settings, 'AI_SERVICE_URL', None)
             ai_service_api_key = getattr(settings, 'AI_SERVICE_API_KEY', None)
 

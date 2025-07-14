@@ -135,7 +135,7 @@ class FlameSmokeDetector:
             print(f"执行火焰检测，使用置信度阈值: {confidence_threshold}")
             results_original = self.model(image, conf=confidence_threshold, verbose=False)
             results_enhanced = self.model(enhanced_image, conf=confidence_threshold, verbose=False)
-            print(f"原始图像检测结果数量: {len(results_original)}")
+
             
             # 合并两个结果
             processed_results = []
@@ -143,7 +143,7 @@ class FlameSmokeDetector:
             # 处理原始图像的结果
             for r in results_original:
                 boxes = r.boxes
-                print(f"原始图像中的目标数: {len(boxes)}")
+
                 for box in boxes:
                     # 获取边界框坐标 [x1, y1, x2, y2]
                     coordinates = box.xyxy[0].cpu().numpy().tolist()
@@ -153,13 +153,19 @@ class FlameSmokeDetector:
                     
                     # 获取类别名称
                     class_name = self.class_names.get(class_id, "unknown")
-                    print(f"检测到目标 - 类别: {class_name}, 置信度: {confidence:.3f}, 坐标: {coordinates}")
+                    
+                    # 【修复】移除过于频繁的日志打印
+                    # print(f"检测到目标 - 类别: {class_name}, 置信度: {confidence:.3f}, 坐标: {coordinates}")
                     
                     # 如果使用通用模型，仅保留火焰相关目标
                     if not self.is_fire_model:
                         # 如果不是预定义的火灾相关物体，跳过
-                        if class_id not in self.fire_related_ids:
-                            print(f"跳过非火灾相关目标: {class_name}")
+                        is_fire_or_smoke = (class_id in self.fire_class_ids or
+                                            class_id in self.smoke_class_ids or
+                                            any(term in class_name.lower() for term in ['fire', 'flame', 'smoke']))
+                        if not is_fire_or_smoke:
+                            # 【修复】静默跳过，不再打印日志
+                            # print(f"跳过非火灾/烟雾目标: {class_name}")
                             continue
                     
                     # 确定是火焰还是烟雾
@@ -212,7 +218,7 @@ class FlameSmokeDetector:
             # 处理增强图像的结果
             for r in results_enhanced:
                 boxes = r.boxes
-                print(f"增强图像中的目标数: {len(boxes)}")
+
                 for box in boxes:
                     # 获取边界框坐标 [x1, y1, x2, y2]
                     coordinates = box.xyxy[0].cpu().numpy().tolist()
@@ -225,8 +231,10 @@ class FlameSmokeDetector:
                     
                     # 如果使用通用模型，仅保留火焰相关目标
                     if not self.is_fire_model:
-                        # 如果不是预定义的火灾相关物体，跳过
-                        if class_id not in self.fire_related_ids:
+                        is_fire_or_smoke = (class_id in self.fire_class_ids or
+                                            class_id in self.smoke_class_ids or
+                                            any(term in class_name.lower() for term in ['fire', 'flame', 'smoke']))
+                        if not is_fire_or_smoke:
                             continue
                     
                     # 确定是火焰还是烟雾
