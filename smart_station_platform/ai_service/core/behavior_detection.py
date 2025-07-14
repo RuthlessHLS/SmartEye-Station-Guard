@@ -1,256 +1,254 @@
 # 文件: ai_service/core/behavior_detection.py
 # 描述: 行为检测器，用于分析目标的姿态和动作。
-#       当前实现基于启发式规则和目标追踪信息。
 
 import numpy as np
-from typing import List, Dict, Tuple, Any, Optional
+from typing import List, Dict, Tuple, Optional
+import cv2
+import os
 import time
-import logging
-
-logger = logging.getLogger(__name__)
 
 
 class BehaviorDetector:
-    """
-    行为检测器，对检测到的人员进行行为分析。
-    目前基于边界框特征和目标追踪信息进行启发式判断。
-    """
-
     def __init__(self):
-        logger.info("行为检测器已初始化 (当前使用启发式判断模式)。")
-        # previous_states 字典将存储每个追踪ID的历史信息
-        # 结构: {tracking_id: {
-        #   'last_bbox': [x1, y1, x2, y2],
-        #   'last_center': [cx, cy],
-        #   'last_timestamp': float,
-        #   'fall_start_time': Optional[float], # 记录跌倒开始时间
-        #   'is_fallen': bool,                  # 当前帧是否被判定为跌倒
-        #   'fall_duration': float,             # 跌倒持续时间
-        #   'moving_avg_speed': float,          # 移动平均速度
-        #   'active_start_time': Optional[float], # 记录活跃行为开始时间
-        #   'is_active': bool,                  # 当前帧是否被判定为活跃
-        # }}
-        self.previous_states: Dict[str, Dict[str, Any]] = {}
-        self.enabled = True  # 添加启用/禁用标志
-
-        # 可配置的行为判断阈值
-        self._default_config = {
-            'fall_aspect_ratio_threshold': 1.2,  # 跌倒判断的宽高比阈值 (宽/高)
-            'min_fall_duration': 0.5,  # 判定为跌倒行为所需的最小持续时间 (秒)
-            'movement_speed_threshold_active': 15.0,  # 判定为活跃行为的最小移动速度 (像素/帧)
-            'movement_speed_threshold_running': 50.0,  # 判定为奔跑行为的最小移动速度 (像素/帧)
-            'max_idle_duration': 2.0,  # 判定为静止或不活跃的最大持续时间 (秒)
-            'detection_interval': 0.1  # 行为分析的最小时间间隔（秒），避免过度频繁更新状态
-        }
-        self.current_config = self._default_config.copy()
-
-    def update_config(self, new_config: Dict[str, Any]):
         """
-        更新行为检测器的配置参数。
-        Args:
-            new_config (Dict[str, Any]): 包含要更新的配置项的字典。
+        初始化行为检测器。
+        加载OpenPose模型用于姿态估计和跌倒检测。
         """
-        for key, value in new_config.items():
-            if key in self.current_config:
-                self.current_config[key] = value
-                logger.info(f"更新行为检测配置: {key} = {value}")
-            else:
-                logger.warning(f"尝试更新不存在的配置项: {key}")
-        logger.info(f"行为检测器当前配置: {self.current_config}")
+        print("行为检测器初始化中...")
+        self.previous_states = {}  # 用于存储每个追踪目标上一帧的状态
+        self.initialize_pose_model()
+        
+    def initialize_pose_model(self):
+        """初始化OpenPose模型或替代姿态估计模型"""
+        try:
+            # 尝试初始化OpenPose模型
+            # 路径应与init_detectors中使用的资源路径一致
+            ASSET_BASE_PATH = os.getenv("G_DRIVE_ASSET_PATH", ".")
+            model_path = os.path.join(ASSET_BASE_PATH, "models", "pose")
+            
+            # 检查OpenCV DNN模块和模型文件
+            if not os.path.exists(os.path.join(model_path, "pose_iter_440000.caffemodel")):
+                print("⚠️ 未找到OpenPose模型文件，将使用基于边界框的替代方法进行跌倒检测。")
+                self.pose_model = None
+                self.use_pose_estimation = False
+                return
+                
+            # 初始化OpenPose模型
+            self.pose_proto = os.path.join(model_path, "openpose_pose_coco.prototxt")
+            self.pose_model_path = os.path.join(model_path, "pose_iter_440000.caffemodel")
+            self.pose_net = cv2.dnn.readNetFromCaffe(self.pose_proto, self.pose_model_path)
+            
+            # 配置模型参数
+            self.n_points = 18  # COCO模型的关键点数量
+            self.POSE_PAIRS = [[1, 0], [1, 2], [1, 5], [2, 3], [3, 4], [5, 6], [6, 7],
+                              [1, 8], [8, 9], [9, 10], [1, 11], [11, 12], [12, 13],
+                              [0, 14], [0, 15], [14, 16], [15, 17]]
+            
+            self.use_pose_estimation = True
+            print("✅ 姿态估计模型加载成功")
+            
+        except Exception as e:
+            print(f"⚠️ 姿态估计模型初始化失败: {e}")
+            print("将使用基于边界框的替代方法进行跌倒检测")
+            self.pose_model = None
+            self.use_pose_estimation = False
 
-    def set_enabled(self, enabled: bool):
-        """启用或禁用行为检测器。"""
-        self.enabled = enabled
-        logger.info(f"行为检测器已{'启用' if enabled else '禁用'}。")
-
-    def detect_behavior(self,
-                        frame: np.ndarray,
-                        tracked_persons: List[Dict],
-                        current_timestamp: float) -> List[Dict]:
+    def detect_behavior(self, frame: np.ndarray, person_boxes: List[List[float]], current_time: float = None) -> List[Dict]:
         """
-        对检测到并追踪到的人员进行行为分析。
+        对检测到的人员进行行为分析。
+
         Args:
             frame (np.ndarray): 当前的视频帧。
-            tracked_persons (List[Dict]): 一个包含多个人员追踪信息的列表，
-                                         每个元素应包含 'tracking_id' 和 'bbox'。
-            current_timestamp (float): 当前帧的时间戳 (秒)。
+            person_boxes (List[List[float]]): 一个包含多个人边界框的列表，
+                                              每个边界框格式为 [x1, y1, x2, y2]。
+            current_time (float, optional): 当前时间戳，用于时序分析。
+
         Returns:
             List[Dict]: 一个包含每个被分析人员行为结果的字典列表。
         """
-        if not self.enabled:
-            return []
-
+        if current_time is None:
+            current_time = time.time()
+            
         detected_behaviors = []
 
-        # 清理过期的追踪状态
-        self._cleanup_old_states(current_timestamp)
-
-        for person_data in tracked_persons:
-            tracking_id = person_data.get('tracking_id')
-            bbox = person_data.get('bbox')
-
-            if not tracking_id or not bbox or len(bbox) != 4:
-                logger.warning(f"跳过无效的人员追踪数据: {person_data}")
+        for i, box in enumerate(person_boxes):
+            x1, y1, x2, y2 = map(int, box)
+            
+            # 跟踪ID (简化方式)
+            person_id = f"person_{i}"
+            
+            # 提取人物区域进行分析
+            person_roi = frame[max(0, y1):min(frame.shape[0], y2), 
+                              max(0, x1):min(frame.shape[1], x2)]
+            
+            # 如果ROI太小，跳过
+            if person_roi.size == 0 or person_roi.shape[0] < 10 or person_roi.shape[1] < 10:
                 continue
 
-            x1, y1, x2, y2 = map(int, bbox)
-
-            # 初始化或更新当前人员的状态
-            if tracking_id not in self.previous_states:
-                self.previous_states[tracking_id] = {
-                    'last_bbox': bbox,
-                    'last_center': [(x1 + x2) / 2, (y1 + y2) / 2],
-                    'last_timestamp': current_timestamp,
-                    'fall_start_time': None,
-                    'is_fallen': False,
-                    'fall_duration': 0.0,
-                    'moving_avg_speed': 0.0,  # 像素/秒
-                    'active_start_time': None,
-                    'is_active': False,
-                    'idle_start_time': None  # 用于判断长时间静止
-                }
-
-            person_state = self.previous_states[tracking_id]
-
-            # 计算时间差
-            time_diff = current_timestamp - person_state['last_timestamp']
-
-            # 避免过快更新，基于detection_interval
-            if time_diff < self.current_config['detection_interval']:
-                continue  # 跳过，等待足够的时间间隔
-
-            # --- 1. 跌倒检测 (Heuristic: 基于边界框的高宽比及持续时间) ---
-            box_w = x2 - x1
-            box_h = y2 - y1
-
-            is_fallen_current_frame = False
-            if box_h > 0 and box_w / box_h > self.current_config['fall_aspect_ratio_threshold']:
-                is_fallen_current_frame = True
-
-            if is_fallen_current_frame:
-                if not person_state['is_fallen']:  # 刚开始跌倒
-                    person_state['fall_start_time'] = current_timestamp
-                person_state['fall_duration'] = current_timestamp - person_state['fall_start_time'] if person_state[
-                    'fall_start_time'] else 0.0
-                person_state['is_fallen'] = True
-
-                if person_state['fall_duration'] >= self.current_config['min_fall_duration']:
-                    detected_behaviors.append({
-                        "tracking_id": tracking_id,
-                        "bbox": bbox,
-                        "behavior": "fall_down",
-                        "is_abnormal": True,
-                        "need_alert": True,  # 跌倒需要立即告警
-                        "confidence": min(1.0, 0.7 + person_state['fall_duration'] * 0.1),  # 置信度随持续时间增加
-                        "duration_s": round(person_state['fall_duration'], 2),
-                        "aspect_ratio": round(box_w / box_h, 2)
-                    })
-                    logger.info(
-                        f"🚨 [行为告警] 人员 {tracking_id} 检测到跌倒行为 (持续: {person_state['fall_duration']:.2f}s, 置信度: {detected_behaviors[-1]['confidence']:.2f})")
+            # 使用姿态估计或边界框方法检测跌倒
+            if self.use_pose_estimation:
+                is_fallen = self.detect_fall_by_pose(person_roi, person_id, current_time)
             else:
-                person_state['is_fallen'] = False
-                person_state['fall_start_time'] = None
-                person_state['fall_duration'] = 0.0
+                is_fallen = self.detect_fall_by_bbox_ratio(x1, y1, x2, y2)
 
-            # --- 2. 移动速度检测 (奔跑/静止/活跃) ---
-            current_center = [(x1 + x2) / 2, (y1 + y2) / 2]
-
-            # 计算瞬时移动距离
-            instant_distance = np.sqrt(
-                (current_center[0] - person_state['last_center'][0]) ** 2 +
-                (current_center[1] - person_state['last_center'][1]) ** 2
-            )
-
-            # 计算瞬时速度 (像素/秒)
-            instant_speed = instant_distance / time_diff if time_diff > 0 else 0.0
-
-            # 更新移动平均速度 (平滑处理，避免抖动)
-            alpha = 0.2  # 平滑因子，越小越平滑
-            person_state['moving_avg_speed'] = (1 - alpha) * person_state['moving_avg_speed'] + alpha * instant_speed
-
-            # 判断活跃状态
-            if person_state['moving_avg_speed'] > self.current_config['movement_speed_threshold_active']:
-                if not person_state['is_active']:
-                    person_state['active_start_time'] = current_timestamp
-                person_state['is_active'] = True
-                person_state['idle_start_time'] = None  # 不再静止
+            if is_fallen:
+                detected_behaviors.append({
+                    "person_id": person_id,
+                    "box": [x1, y1, x2, y2],
+                    "behavior": "fall_down",
+                    "is_abnormal": True,
+                    "need_alert": True,  # 跌倒需要立即告警
+                    "confidence": 0.85  # 置信度
+                })
             else:
-                person_state['is_active'] = False
-                if person_state['idle_start_time'] is None:
-                    person_state['idle_start_time'] = current_timestamp  # 开始静止计时
-
-            # 行为报告
-            if not is_fallen_current_frame:  # 如果没有跌倒，才判断其他行为
-                if person_state['moving_avg_speed'] >= self.current_config['movement_speed_threshold_running']:
-                    detected_behaviors.append({
-                        "tracking_id": tracking_id,
-                        "bbox": bbox,
-                        "behavior": "running",
-                        "is_abnormal": False,  # 奔跑本身不异常，但可根据场景定义
-                        "need_alert": False,
-                        "confidence": min(1.0, person_state['moving_avg_speed'] / self.current_config[
-                            'movement_speed_threshold_running']),
-                        "speed_px_per_s": round(person_state['moving_avg_speed'], 2)
-                    })
-                    logger.debug(
-                        f"🏃 人员 {tracking_id} 检测到奔跑行为 (速度: {person_state['moving_avg_speed']:.2f} px/s)")
-                elif person_state['is_active']:
-                    detected_behaviors.append({
-                        "tracking_id": tracking_id,
-                        "bbox": bbox,
-                        "behavior": "walking/active",
-                        "is_abnormal": False,
-                        "need_alert": False,
-                        "confidence": min(1.0, person_state['moving_avg_speed'] / self.current_config[
-                            'movement_speed_threshold_active']),
-                        "speed_px_per_s": round(person_state['moving_avg_speed'], 2)
-                    })
-                    logger.debug(
-                        f"🚶 人员 {tracking_id} 检测到活跃行为 (速度: {person_state['moving_avg_speed']:.2f} px/s)")
-                else:  # 不活跃/静止
-                    idle_duration = (current_timestamp - person_state['idle_start_time']) if person_state[
-                        'idle_start_time'] else 0.0
-                    if idle_duration >= self.current_config['max_idle_duration']:
-                        # 只报告一次长时间静止，直到重新移动
-                        if not person_state.get('reported_idle_alert', False):
-                            detected_behaviors.append({
-                                "tracking_id": tracking_id,
-                                "bbox": bbox,
-                                "behavior": "long_idle",
-                                "is_abnormal": True,  # 长时间静止在某些场景可能是异常
-                                "need_alert": True,
-                                "confidence": min(1.0, idle_duration / 5.0),  # 停留越久置信度越高
-                                "idle_duration_s": round(idle_duration, 2)
-                            })
-                            logger.info(f"⏳ [行为告警] 人员 {tracking_id} 长时间静止 (持续: {idle_duration:.2f}s)")
-                            person_state['reported_idle_alert'] = True
-                    else:
-                        person_state['reported_idle_alert'] = False
-
-            # 更新状态信息以用于下一帧
-            person_state['last_bbox'] = bbox
-            person_state['last_center'] = current_center
-            person_state['last_timestamp'] = current_timestamp
+                # 如果没摔倒，就认为在活动
+                detected_behaviors.append({
+                    "person_id": person_id,
+                    "box": [x1, y1, x2, y2],
+                    "behavior": "active",  # 正常活动
+                    "is_abnormal": False,
+                    "need_alert": False,
+                    "confidence": 0.7
+                })
 
         return detected_behaviors
 
-    def _cleanup_old_states(self, current_timestamp: float, timeout_s: float = 10.0):
+    def detect_fall_by_bbox_ratio(self, x1: int, y1: int, x2: int, y2: int) -> bool:
         """
-        清理长时间未见的人员追踪状态，防止内存泄漏。
+        使用边界框高宽比检测跌倒
+        
         Args:
-            current_timestamp (float): 当前时间戳。
-            timeout_s (float): 对象从缓存中移除前的最大不活跃时间（秒）。
+            x1, y1, x2, y2: 边界框坐标
+            
+        Returns:
+            bool: 是否检测到跌倒
         """
-        to_remove = []
-        for tracking_id, state in self.previous_states.items():
-            if current_timestamp - state['last_timestamp'] > timeout_s:
-                to_remove.append(tracking_id)
+        # 计算边界框的宽度和高度
+        box_w = x2 - x1
+        box_h = y2 - y1
+        
+        # 避免除以零的错误
+        if box_h == 0:
+            return False
+            
+        # 计算高宽比
+        aspect_ratio = box_w / box_h
+        
+        # 通常站立的人高宽比小于1 (例如 0.4-0.8)
+        # 如果高宽比大于阈值，我们认为他可能摔倒了
+        return aspect_ratio > 1.2
 
-        for tracking_id in to_remove:
-            del self.previous_states[tracking_id]
-            logger.debug(f"清理过期行为状态: {tracking_id}")
-
-    def reset(self):
-        """重置所有人员的行为状态历史。"""
-        self.previous_states.clear()
-        logger.info("行为检测器状态已重置。")
+    def detect_fall_by_pose(self, person_img: np.ndarray, person_id: str, current_time: float) -> bool:
+        """
+        使用姿态估计检测跌倒
+        
+        Args:
+            person_img: 人物区域图像
+            person_id: 人物ID，用于跟踪
+            current_time: 当前时间戳
+            
+        Returns:
+            bool: 是否检测到跌倒
+        """
+        try:
+            # 图像预处理
+            img_height, img_width, _ = person_img.shape
+            input_blob = cv2.dnn.blobFromImage(person_img, 1.0 / 255, (368, 368), 
+                                             (0, 0, 0), swapRB=False, crop=False)
+            
+            # 推理
+            self.pose_net.setInput(input_blob)
+            output = self.pose_net.forward()
+            
+            # 解析关键点
+            keypoints = []
+            for i in range(self.n_points):
+                # 置信度图
+                prob_map = output[0, i, :, :]
+                prob_map = cv2.resize(prob_map, (img_width, img_height))
+                
+                # 找到最大置信度点
+                _, confidence, _, point = cv2.minMaxLoc(prob_map)
+                
+                # 如果置信度大于阈值，记录该点
+                if confidence > 0.1:
+                    keypoints.append((point[0], point[1], confidence))
+                else:
+                    keypoints.append(None)
+            
+            # 分析姿态判断是否跌倒
+            return self.analyze_pose_for_fall(keypoints, person_id, current_time)
+            
+        except Exception as e:
+            print(f"姿态估计出错: {e}")
+            # 出错时使用边界框方法作为后备
+            return self.detect_fall_by_bbox_ratio(*self.get_person_bbox(person_img))
+    
+    def get_person_bbox(self, img: np.ndarray) -> Tuple[int, int, int, int]:
+        """
+        获取图像中的人物边界框
+        """
+        return 0, 0, img.shape[1], img.shape[0]
+    
+    def analyze_pose_for_fall(self, keypoints: List[Optional[Tuple]], person_id: str, current_time: float) -> bool:
+        """
+        分析人体姿态判断是否跌倒
+        
+        Args:
+            keypoints: 检测到的关键点列表
+            person_id: 人物ID
+            current_time: 当前时间戳
+            
+        Returns:
+            bool: 是否检测到跌倒
+        """
+        # 如果关键点不足，无法判断
+        valid_points = [p for p in keypoints if p is not None]
+        if len(valid_points) < 5:  # 需要足够多的关键点来判断
+            return False
+        
+        # 提取关键身体部位 (COCO模型关键点索引)
+        # 0:鼻子 1:颈部 2:右肩 3:右肘 4:右手 5:左肩 6:左肘 7:左手 
+        # 8:右臀 9:右膝 10:右脚 11:左臀 12:左膝 13:左脚 14:右眼 15:左眼 16:右耳 17:左耳
+        
+        # 获取头部和脚部的位置
+        head_points = [keypoints[0], keypoints[14], keypoints[15], keypoints[16], keypoints[17]]
+        valid_head = [p for p in head_points if p is not None]
+        
+        foot_points = [keypoints[10], keypoints[13]]
+        valid_foot = [p for p in foot_points if p is not None]
+        
+        # 如果头部或脚部关键点不可见，使用其他方法判断
+        if not valid_head or not valid_foot:
+            # 使用边界框方法作为后备
+            if person_id in self.previous_states:
+                prev_state = self.previous_states[person_id]
+                # 如果前一帧是跌倒状态，保持该状态以避免闪烁
+                if "is_fallen" in prev_state and prev_state["is_fallen"]:
+                    return True
+            return False
+        
+        # 计算头部中心点
+        head_center = (sum(p[0] for p in valid_head) / len(valid_head), 
+                      sum(p[1] for p in valid_head) / len(valid_head))
+        
+        # 计算脚部中心点
+        foot_center = (sum(p[0] for p in valid_foot) / len(valid_foot),
+                      sum(p[1] for p in valid_foot) / len(valid_foot))
+        
+        # 计算头部与脚部的高度差和水平差
+        height_diff = abs(foot_center[1] - head_center[1])
+        horizontal_diff = abs(foot_center[0] - head_center[0])
+        
+        # 如果水平差大于高度差，可能是跌倒状态
+        is_fallen = horizontal_diff > height_diff * 0.8
+        
+        # 记录当前状态，用于下一帧的判断
+        self.previous_states[person_id] = {
+            "timestamp": current_time,
+            "is_fallen": is_fallen,
+            "head_pos": head_center,
+            "foot_pos": foot_center
+        }
+        
+        return is_fallen

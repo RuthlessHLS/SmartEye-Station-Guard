@@ -150,9 +150,16 @@ DATABASES = {
 # 华为云 OBS 存储配置
 # -----------------------------------------------------------
 
+
+OBS_ACCESS_KEY_ID = config('OBS_ACCESS_KEY_ID', default='temp_access_key')
+OBS_SECRET_ACCESS_KEY = config('OBS_SECRET_ACCESS_KEY', default='temp_secret_key')
+OBS_ENDPOINT = config('OBS_ENDPOINT', default='obs.cn-north-4.myhuaweicloud.com')
+OBS_BUCKET_NAME = config('OBS_BUCKET_NAME', default='smart-station-bucket')
+
 # 文件存储配置
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+
 
 # 使用本地文件系统存储
 DEFAULT_FILE_STORAGE = 'django.core.files.storage.FileSystemStorage'

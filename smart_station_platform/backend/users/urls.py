@@ -35,6 +35,7 @@ urlpatterns = [
     # 用户管理路由
     path('register/', UserRegisterAPIView.as_view(), name='user-register'),
     path('profile/', UserProfileAPIView.as_view(), name='user-profile'),
+
     path('profile/change-password/', PasswordChangeView.as_view(), name='change-password'),
     path('profile/avatar/', AvatarUpdateView.as_view(), name='update-avatar'),
     

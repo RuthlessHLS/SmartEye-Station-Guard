@@ -13,6 +13,8 @@ import DataScreen from '../views/DataScreen.vue'
 import UserManagement from '../views/UserManagement.vue'
 import UserProfile from '../views/UserProfile.vue'
 import FaceRegistration from '../views/FaceRegistration.vue'
+import UserProfile from '../views/UserProfile.vue'
+
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
