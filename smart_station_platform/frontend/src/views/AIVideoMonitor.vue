@@ -171,8 +171,8 @@
                   <el-form-item label="人脸识别">
                     <el-switch
                       v-model="aiSettings.faceRecognition"
-                      :disabled="!isStreaming"
-                      @change="updateAISettings"
+                      :disabled="!isStreaming || !aiAnalysisEnabled"
+                      @change="() => updateAISettings('faceRecognition')"
                     />
                     <div class="setting-description">
                       识别视频中的人脸，并与已知人脸库进行匹配。可用于访客识别和权限控制。
@@ -181,8 +181,8 @@
                   <el-form-item label="目标检测">
                     <el-switch
                       v-model="aiSettings.objectDetection"
-                      :disabled="!isStreaming"
-                      @change="updateAISettings"
+                      :disabled="!isStreaming || !aiAnalysisEnabled"
+                      @change="() => updateAISettings('objectDetection')"
                     />
                     <div class="setting-description">
                       检测视频中的人员、车辆、包裹等常见目标，支持多目标同时跟踪。
@@ -191,8 +191,8 @@
                   <el-form-item label="行为分析">
                     <el-switch
                       v-model="aiSettings.behaviorAnalysis"
-                      :disabled="!isStreaming"
-                      @change="updateAISettings"
+                      :disabled="!isStreaming || !aiAnalysisEnabled"
+                      @change="() => updateAISettings('behaviorAnalysis')"
                     />
                     <div class="setting-description">
                       分析人员行为，如跌倒、奔跑、聚集等异常行为，及时发出预警。
@@ -201,8 +201,8 @@
                   <el-form-item label="声音检测">
                     <el-switch
                       v-model="aiSettings.soundDetection"
-                      :disabled="!isStreaming"
-                      @change="updateAISettings"
+                      :disabled="!isStreaming || !aiAnalysisEnabled"
+                      @change="() => updateAISettings('soundDetection')"
                     />
                     <div class="setting-description">
                       监测环境声音，检测异常噪音、尖叫等声音事件，提供声音告警。
@@ -211,8 +211,8 @@
                   <el-form-item label="火焰检测">
                     <el-switch
                       v-model="aiSettings.fireDetection"
-                      :disabled="!isStreaming"
-                      @change="updateAISettings"
+                      :disabled="!isStreaming || !aiAnalysisEnabled"
+                      @change="() => updateAISettings('fireDetection')"
                     />
                     <div class="setting-description">
                       检测视频中的火焰和烟雾，用于及早发现火灾隐患，保障安全。
@@ -221,10 +221,10 @@
                   <el-form-item label="实时模式">
                     <el-switch
                       v-model="aiSettings.realtimeMode"
-                      :disabled="!isStreaming"
+                      :disabled="!isStreaming || !aiAnalysisEnabled"
                       active-text="高频检测"
                       inactive-text="节能模式"
-                      @change="updateAISettings"
+                      @change="() => updateAISettings('realtimeMode')"
                     />
                     <div class="setting-description">
                       高频检测模式下可达到15FPS的检测速率，但会增加系统负载；节能模式下智能调节检测频率，平衡性能和效果。
@@ -245,8 +245,8 @@
               <el-scrollbar height="300px">
                 <div class="detection-list">
                   <div
-                    v-for="result in detectionResults || []"
-                    :key="result.timestamp"
+                    v-for="(result, index) in detectionResults || []"
+                    :key="`${result.tracking_id || result.type}_${index}`"
                     class="detection-item"
                     :class="`type-${result.type}`"
                   >
@@ -254,7 +254,9 @@
                       {{ getDetectionIcon(result.type) }}
                     </div>
                     <div class="detection-info">
-                      <div class="detection-name">{{ result.label }}</div>
+                      <div class="detection-name">
+                        {{ result.identity ? (result.identity.name || '未知人员') : result.class_name }}
+                      </div>
                       <div class="detection-details">
                         置信度: {{ (result.confidence * 100).toFixed(1) }}%
                       </div>
@@ -323,716 +325,659 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
-import { useApi } from '@/api'
-import { useWebSocket } from '@/composables/useWebSocket'
-import { useAuthStore } from '@/stores/auth'
-import { useRouter } from 'vue-router'
-import AIAnalyzer from '@/components/AIAnalyzer.vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { Close, Cpu, VideoCamera, Warning, Search } from '@element-plus/icons-vue'
-import flvjs from 'flv.js'
-import DPlayer from 'dplayer'
-import Hls from 'hls.js'; // 【新增】导入 hls.js
+import { ref, reactive, onMounted, onUnmounted, computed, nextTick, watch } from 'vue';
+import { useApi } from '@/api';
+import { useAuthStore } from '@/stores/auth';
+import { useRouter } from 'vue-router';
+import AIAnalyzer from '@/components/AIAnalyzer.vue';
+import { ElMessage, ElMessageBox } from 'element-plus';
+import { Close, Cpu, VideoCamera, Warning, Search, SuccessFilled, CircleCloseFilled } from '@element-plus/icons-vue';
+import flvjs from 'flv.js';
+import DPlayer from 'dplayer';
+import Hls from 'hls.js';
 
-// 初始化API服务和路由
-const api = useApi()
-const router = useRouter()
-const authStore = useAuthStore()
-
-// 视频相关引用
-const videoElement = ref(null)
-const videoRef = ref(null)
-const aiAnalyzer = ref(null)
-const video = ref(null)
-const player = ref(null)
-const isStreaming = ref(false)
-
-// 视频源设置
-const videoSource = ref('rtmp')
-const rawInputStreamUrl = ref('') // 【修改】用户输入的原始流地址，例如 rtmp://localhost:1935/live/stream
-const playbackUrl = ref('')    // 【新增】实际用于前端播放器DPlayer的流地址
-const selectedDeviceId = ref('')
-const videoDevices = ref([])
-const cameraId = ref(`camera_${Date.now()}`)
-
-// AI分析设置
-const aiAnalysisEnabled = ref(false)
+// --- State and Refs ---
+const api = useApi();
+const router = useRouter();
+const authStore = useAuthStore();
+const videoElement = ref(null);
+const videoRef = ref(null);
+const aiAnalyzer = ref(null);
+const video = ref(null);
+const player = ref(null);
+const isStreaming = ref(false);
+const videoSource = ref('rtmp');
+const rawInputStreamUrl = ref('');
+const playbackUrl = ref('');
+const selectedDeviceId = ref('');
+const videoDevices = ref([]);
+const cameraId = ref(`camera_${Date.now()}`);
+const aiAnalysisEnabled = ref(false);
+const localTrackingEnabled = ref(false);
 const aiSettings = reactive({
   faceRecognition: true,
   objectDetection: true,
   behaviorAnalysis: false,
   soundDetection: false,
   fireDetection: true,
-  realtimeMode: true
-})
+  realtimeMode: true,
+});
+const detectionResults = ref([]);
+const performanceStats = ref({});
+const realtimeAlerts = ref([]);
+const dangerZones = ref([]);
+const currentZonePoints = ref([]);
+const isDrawingZone = ref(false);
+const wsConnected = ref(false);
+let ws = null;
+const wsUrl = import.meta.env.VITE_APP_WS_URL || 'ws://localhost:8000/ws/alerts/';
 
-// 检测结果和性能统计
-const detectionResults = ref([])
-const performanceStats = ref({
-  fps: 0,
-  avgProcessTime: 0,
-  processedFrames: 0,
-  skippedFrames: 0,
-  errorCount: 0
-})
-
-// 实时告警数据
-const realtimeAlerts = ref([])
-
-// 危险区域设置
-const dangerZones = ref([])
-const currentZonePoints = ref([])
-const isDrawingZone = ref(false)
-const zoneColor = ref('#dc2626')
-const zoneName = ref('危险区域')
-
-// WebSocket连接
-const wsUrl = import.meta.env.VITE_APP_WS_URL || 'ws://localhost:8000/ws/alerts/'
-const {
-  isConnected: wsConnected,
-  connect: connectWebSocket,
-  disconnect: disconnectWebSocket,
-  messages: wsMessages
-} = useWebSocket(`${wsUrl}${cameraId.value}/`)
-
-// 监听WebSocket消息
-watch(wsMessages, (newMessages) => {
-  if (newMessages && newMessages.length > 0) {
-    const latestMessage = newMessages[newMessages.length - 1]
-
-    // 处理不同类型的WebSocket消息
-    if (latestMessage.type === 'detection') {
-      // 更新检测结果
-      detectionResults.value = latestMessage.detections || []
-    } else if (latestMessage.type === 'alert') {
-      // 显示告警通知
-      ElMessage({
-        type: 'warning',
-        message: latestMessage.message || '检测到异常事件',
-        duration: 5000
-      })
-
-      // 添加到实时告警列表
-      if (latestMessage.data) {
-        realtimeAlerts.value = realtimeAlerts.value || []
-        realtimeAlerts.value.unshift({
-          id: `alert_${Date.now()}`,
-          type: latestMessage.alert_type || 'warning',
-          title: latestMessage.message || '检测到异常事件',
-          description: latestMessage.description || latestMessage.data.details || '请注意查看监控画面',
-          timestamp: Date.now()
-        })
-
-        // 限制告警列表长度
-        if (realtimeAlerts.value.length > 20) {
-          realtimeAlerts.value = realtimeAlerts.value.slice(0, 20)
-        }
-      }
-    }
+// --- WebSocket Logic ---
+const disconnectWebSocket = () => {
+  if (ws) {
+    ws.onclose = null;
+    ws.onerror = null;
+    ws.onmessage = null;
+    ws.onopen = null;
+    ws.close();
+    ws = null;
+    wsConnected.value = false;
   }
-})
+};
 
-// 计算属性：是否可以开始流
-const canStartStream = computed(() => {
-  if (videoSource.value === 'local') {
-    return !!selectedDeviceId.value
-  } else {
-    return !!rawInputStreamUrl.value.trim() // 【修改】检查 rawInputStreamUrl
-  }
-})
+const connectWebSocket = () => {
+  disconnectWebSocket();
 
-// 获取流地址占位符
-const getStreamPlaceholder = () => {
-  switch (videoSource.value) {
-    case 'rtsp':
-      return 'rtsp://username:password@ip:port/stream'
-    case 'rtmp':
-      return 'rtmp://localhost:1935/live/stream_name (推流地址)' // 【修改】更明确是推流地址
-    case 'hls':
-      return 'http://localhost:8080/hls/stream.m3u8'
-    case 'flv':
-      return 'http://localhost:8080/live/stream.flv'
-    case 'webrtc':
-      return 'webrtc://localhost/live/stream'
-    case 'mp4':
-      return 'http://localhost:8080/video.mp4'
-    default:
-      return '请输入流地址'
-  }
-}
+  const fullWsUrl = `${wsUrl}${cameraId.value}/`;
+  console.log(`[WebSocket] 正在创建新的 WebSocket 连接: ${fullWsUrl}`);
+  ws = new WebSocket(fullWsUrl);
 
-// 处理视频源类型变化
-const handleVideoSourceChange = () => {
-  rawInputStreamUrl.value = '' // 【修改】清空 rawInputStreamUrl
-  playbackUrl.value = ''     // 【新增】清空 playbackUrl
+  ws.onopen = () => {
+    wsConnected.value = true;
+    console.log('[WebSocket] ✅ 新的连接已建立！');
+  };
 
-  if (videoSource.value === 'local') {
-    // 获取可用的摄像头设备
-    getVideoDevices()
-  }
-}
-
-// 获取可用的视频设备
-const getVideoDevices = async () => {
-  try {
-    const devices = await navigator.mediaDevices.enumerateDevices()
-    videoDevices.value = devices.filter(device => device.kind === 'videoinput')
-
-    if (videoDevices.value.length > 0 && !selectedDeviceId.value) {
-      selectedDeviceId.value = videoDevices.value[0].deviceId
-    }
-  } catch (error) {
-    console.error('获取视频设备失败:', error)
-    ElMessage.error('无法访问摄像头设备，请检查浏览器权限设置')
-  }
-}
-
-// 开始视频流
-const startStream = async () => {
-  try {
-    // 1. 立刻设置状态为true，让Vue去渲染播放器容器
-    isStreaming.value = true
-
-    // 2. 等待下一次DOM更新循环，确保容器div已经渲染到页面上
-    await nextTick()
-
-    // 3. 根据视频源类型构建实际播放URL和AI分析URL
-    if (videoSource.value === 'local') {
-      await startLocalCamera()
-      playbackUrl.value = 'webcam://' + selectedDeviceId.value; // 用于标识给AI服务
-    } else {
-      // 这里的逻辑是关键
-      if (videoSource.value === 'rtmp') {
-        const rtmpMatch = rawInputStreamUrl.value.match(/\/([a-zA-Z0-9_-]+)$/)
-        if (!rtmpMatch || !rtmpMatch[1]) {
-          throw new Error('RTMP流地址格式不正确，无法解析出流名称。请确保地址类似: rtmp://ip:port/live/stream_name')
-        }
-        const streamName = rtmpMatch[1]
-        playbackUrl.value = `http://localhost:8080/hls/${streamName}.m3u8` // 【核心】前端播放 HLS 流
-      } else {
-        // 对于其他流类型 (HLS, FLV, MP4, RTSP等)，直接使用用户输入的地址作为播放地址
-        playbackUrl.value = rawInputStreamUrl.value;
-      }
-
-      await startNetworkStream()
-    }
-
-    // 连接WebSocket
-    connectWebSocket()
-
-    // 通知AI服务开始处理
-    if (aiAnalysisEnabled.value) {
-      await startAIAnalysis()
-    }
-  } catch (error) {
-    console.error('启动视频流失败:', error)
-    ElMessage.error('启动视频流失败: ' + (error.message || '未知错误'))
-    // 如果启动失败，重置UI状态
-    isStreaming.value = false
-  }
-}
-
-// 启动本地摄像头
-const startLocalCamera = async () => {
-  try {
-    const constraints = {
-      video: {
-        deviceId: selectedDeviceId.value ? { exact: selectedDeviceId.value } : undefined,
-        width: { ideal: 1280 },
-        height: { ideal: 720 }
-      },
-      audio: false
-    }
-
-    const stream = await navigator.mediaDevices.getUserMedia(constraints)
-
-    if (videoElement.value) {
-      videoElement.value.srcObject = stream
-      video.value = videoElement.value
-
-      // 等待视频加载
-      await new Promise((resolve) => {
-        videoElement.value.onloadedmetadata = () => {
-          videoElement.value.play()
-          resolve()
-        }
-      })
-
-      ElMessage.success('本地摄像头启动成功')
-    }
-  } catch (error) {
-    console.error('启动本地摄像头失败:', error)
-    throw new Error('启动本地摄像头失败: ' + (error.message || '未知错误'))
-  }
-}
-
-// 启动网络流
-const startNetworkStream = async () => {
-  if (!playbackUrl.value) { // 【修改】检查 playbackUrl
-    throw new Error('请输入有效的流地址')
-  }
-
-  try {
-    // 测试流连接 (这里依然是对原始输入流地址的测试，由后端进行)
-    await testStreamConnection()
-
-    // 创建播放器
-    await createPlayer()
-
-    ElMessage.success('网络流连接成功')
-  } catch (error) {
-    console.error('启动网络流失败:', error)
-    throw error
-  }
-}
-
-// 测试流连接
-const testStreamConnection = async () => {
-  try {
-    ElMessage.info('正在测试流连接...')
-
-    // 【修改】向后端发送 rawInputStreamUrl 进行测试
-    const response = await api.ai.testStream(rawInputStreamUrl.value, videoSource.value)
-
-    // 【修复 4.1】根据后端返回的 status 字段判断成功，而不是 response 是否存在
-    if (response && response.status === 'success') {
-      ElMessage.success(response.message || '流连接测试成功')
-      return true
-    } else {
-      // 只有在 response 为空或不存在，或者 status 不为 'success' 时，才认为是失败
-      throw new Error(response?.message || '流连接测试失败: 无效的后端响应')
-    }
-  } catch (error) {
-    console.error('流连接测试失败:', error)
-    // 使用通用错误处理函数
-    handleApiError(error)
-    ElMessage.error('流连接测试失败: ' + (error.message || '未知错误'))
-    throw error
-  }
-}
-
-// 创建播放器
-const createPlayer = async () => {
-  if (player.value) {
-    player.value.destroy()
-    player.value = null
-  }
-
-  // 防御性检查，确保DOM元素存在
-  if (!videoRef.value) {
-    console.error("DPlayer container (videoRef) is not available in the DOM.")
-    throw new Error("无法创建播放器：容器元素不存在。")
-  }
-
-  return new Promise((resolve, reject) => {
+  ws.onmessage = (event) => {
+    console.log('[WebSocket] 📩 收到原始消息:', event.data);
     try {
-      // 根据流类型选择不同的播放器配置
-      const playerOptions = {
-        container: videoRef.value,
-        autoplay: true,
-        theme: '#42b883',
-        loop: false,
-        lang: 'zh-cn',
-        screenshot: false,
-        hotkey: true,
-        preload: 'auto',
-        volume: 0.7,
-        mutex: true,
-        video: {
-          url: playbackUrl.value, // 【核心修改】这里使用 playbackUrl.value
-          type: getVideoType(),
-          customType: {
-            flv: function(video, _player) {
-              if (flvjs.isSupported()) {
-                const flvPlayer = flvjs.createPlayer({
-                  type: 'flv',
-                  url: video.src
-                })
-                flvPlayer.attachMediaElement(video)
-                flvPlayer.load()
+      const messageData = JSON.parse(event.data);
+  
+      // 【修改点】确保这段逻辑存在且正确
+      if (messageData.type === 'stream_initialized') {
+        const resolution = messageData.data.resolution;
+        console.log('[父组件] 收到视频流初始化消息，分辨率为:', resolution);
+        if (aiAnalyzer.value && resolution) {
+          // 调用子组件的方法来设置AI处理分辨率
+          aiAnalyzer.value.setAiImageSize(resolution);
+        }
+      }
+      // 保留您原有的其他消息处理逻辑
+      else if (messageData.type === 'detection_result' && messageData.data && messageData.data.detections) {
+        // 格式化检测结果
+        let detections = [];
+        if (Array.isArray(messageData.data.detections)) {
+          detections = messageData.data.detections;
+        } else if (messageData.data.detections.detections) {
+          detections = messageData.data.detections.detections;
+        } else {
+          detections = Array.isArray(messageData.data.detections) ? 
+            messageData.data.detections : [messageData.data.detections];
+        }
+        
+        // 【新增】从消息中获取时间戳
+        const timestamp = messageData.data.timestamp || Date.now();
+        const frameId = messageData.data.frame_id || `frame_${timestamp}`;
+        
+        // 【新增】记录当前视频时间
+        const currentVideoTime = video.value ? video.value.currentTime : 0;
+        
+        // 【新增】将时间戳信息添加到检测结果中
+        detections.forEach(detection => {
+          detection.frame_timestamp = timestamp;
+          detection.frame_id = frameId;
+          detection.video_time = currentVideoTime;
+        });
+        
+        console.log(`[检测结果] 收到数据 (帧ID: ${frameId}, 视频时间: ${currentVideoTime.toFixed(2)}s):`, detections);
+        
+        // 更新检测结果
+        detectionResults.value = detections;
+        
+        // 强制重新渲染Canvas
+        if (aiAnalyzer.value) {
+          // 延迟执行，确保DOM已更新
+          nextTick(() => {
+            try {
+              // 清空画布后重新渲染
+              aiAnalyzer.value.clearCanvas();
+              aiAnalyzer.value.renderDetections(detectionResults.value);
+              
+              // 【新增】在画布上显示时间戳和帧ID，并检查同步状态
+              if (aiAnalyzer.value.drawTimestamp) {
+                // 检查视频时间和检测结果时间是否匹配
+                const videoTimeFromDetection = detections[0]?.video_time;
+                const isSynchronized = videoTimeFromDetection ? Math.abs(currentVideoTime - videoTimeFromDetection) < 0.5 : true;
+                const timeDifference = videoTimeFromDetection ? Math.abs(currentVideoTime - videoTimeFromDetection) : 0;
+                
+                aiAnalyzer.value.drawTimestamp(frameId, currentVideoTime, isSynchronized, timeDifference);
               }
-            },
-            // 【新增】HLS 自定义类型处理
-            hls: function(video, _player) { // 注意：这里_player是DPlayer实例，可以使用它的notice方法
-              if (Hls.isSupported()) {
-                const hls = new Hls();
-                hls.loadSource(video.src);
-                hls.attachMedia(video);
-                // 监听 hls.js 错误，将其传递给 DPlayer
-                hls.on(Hls.Events.ERROR, function(event, data) {
-                  if (data.fatal) {
-                    switch(data.type) {
-                      case Hls.ErrorTypes.NETWORK_ERROR:
-                        console.error('HLS网络错误', data);
-                        _player.notice('HLS网络错误', 3000);
-                        break;
-                      case Hls.ErrorTypes.MEDIA_ERROR:
-                        console.error('HLS媒体错误', data);
-                        _player.notice('HLS媒体错误', 3000);
-                        break;
-                      default:
-                        console.error('HLS未知错误', data);
-                        _player.notice('HLS未知错误', 3000);
-                        break;
-                    }
-                  }
-                });
-              } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-                // 原生支持 HLS 的浏览器
-                video.src = video.src;
-              } else {
-                console.error('您的浏览器不支持HLS播放');
-                _player.notice('您的浏览器不支持HLS播放', 5000);
-              }
+            } catch (error) {
+              console.error('[Canvas渲染错误]', error);
             }
+          });
+        }
+      } else if (messageData.type === 'alert') {
+        ElMessage({ type: 'warning', message: messageData.message || '检测到异常事件' });
+        if (messageData.data) {
+          realtimeAlerts.value.unshift({
+            id: `alert_${Date.now()}`,
+            type: messageData.alert_type || 'warning',
+            title: messageData.message || '检测到异常事件',
+            description: messageData.description || messageData.data.details || '请注意查看监控画面',
+            timestamp: Date.now(),
+          });
+          if (realtimeAlerts.value.length > 20) {
+            realtimeAlerts.value.pop();
           }
         }
       }
-
-      // 创建播放器实例
-      player.value = new DPlayer(playerOptions)
-
-      // 监听播放器事件
-      player.value.on('loadedmetadata', () => {
-        video.value = player.value.video
-        resolve()
-      })
-
-      player.value.on('error', (error) => {
-        console.error('播放器错误:', error)
-        reject(new Error('播放器加载失败: ' + error))
-      })
-
-      // 5秒后如果还没有加载完成，也认为成功（某些流可能不会触发loadedmetadata事件）
-      setTimeout(() => {
-        if (player.value && player.value.video && !video.value) { // 增加条件防止重复resolve
-          video.value = player.value.video
-          resolve()
-        }
-      }, 5000)
     } catch (error) {
-      console.error('创建播放器失败:', error)
-      reject(new Error('创建播放器失败: ' + (error.message || '未知错误')))
+      console.error('WebSocket 消息解析错误:', error);
     }
-  })
-}
-
-// 获取视频类型
-const getVideoType = () => {
-  // 【修改】根据 playbackUrl 的内容来判断视频类型
-  if (playbackUrl.value.includes('.m3u8')) {
-    return 'hls';
-  } else if (playbackUrl.value.includes('.flv')) {
-    return 'customFlv';
-  } else if (playbackUrl.value.includes('.mp4')) {
-    return 'auto';
-  }
-  // 对于其他类型，如 RTSP，DPlayer默认不支持，这里会返回'auto'可能导致播放失败
-  // 如果后端AI服务能够处理RTSP，而前端不需要直接播放RTSP，则无需额外处理
-  return 'auto';
-}
-
-// 停止视频流 (保持不变)
+  };
+  ws.onerror = (error) => console.error('WebSocket 发生错误:', error);
+  ws.onclose = () => {
+    wsConnected.value = false;
+    ws = null;
+  };
+};
+// --- Stream and Player Logic ---
 const stopStream = async () => {
-  try {
-    // 停止AI分析
-    if (aiAnalysisEnabled.value) {
-      await stopAIAnalysis()
-    }
-
-    // 断开WebSocket连接
-    disconnectWebSocket()
-
-    // 停止本地摄像头
-    if (videoSource.value === 'local' && videoElement.value && videoElement.value.srcObject) {
-      const tracks = videoElement.value.srcObject.getTracks()
-      tracks.forEach(track => track.stop())
-      videoElement.value.srcObject = null
-    }
-
-    // 销毁播放器
-    if (player.value) {
-      player.value.destroy()
-      player.value = null
-    }
-
-    // 重置视频引用
-    video.value = null
-
-    // 标记为流媒体已停止
-    isStreaming.value = false
-
-    // 重置检测结果
-    detectionResults.value = []
-
-    ElMessage.success('视频流已停止')
-  } catch (error) {
-    console.error('停止视频流失败:', error)
-    ElMessage.error('停止视频流失败: ' + (error.message || '未知错误'))
+  if (aiAnalysisEnabled.value) {
+    await stopAIAnalysis();
   }
-}
+  disconnectWebSocket();
+  if (player.value) {
+    player.value.destroy();
+    player.value = null;
+  }
+  if (videoElement.value && videoElement.value.srcObject) {
+    videoElement.value.srcObject.getTracks().forEach((track) => track.stop());
+    videoElement.value.srcObject = null;
+  }
+  isStreaming.value = false;
+  detectionResults.value = [];
+};
 
-// 启动AI分析 (核心逻辑修改点：向后端发送原始的流地址)
+const startStream = async () => {
+  await stopStream();
+  try {
+    isStreaming.value = true;
+    await nextTick();
+
+    if (videoSource.value === 'local') {
+      await startLocalCamera();
+    } else {
+      if (videoSource.value === 'rtmp') {
+        const rtmpMatch = rawInputStreamUrl.value.match(/\/([a-zA-Z0-9_-]+)$/);
+        if (!rtmpMatch || !rtmpMatch[1]) throw new Error('RTMP流地址格式不正确');
+        playbackUrl.value = `http://localhost:8080/hls/${rtmpMatch[1]}.m3u8`;
+      } else {
+        playbackUrl.value = rawInputStreamUrl.value;
+      }
+      await startNetworkStream();
+    }
+
+    connectWebSocket();
+
+    if (aiAnalysisEnabled.value) {
+      await startAIAnalysis();
+    }
+  } catch (error) {
+    ElMessage.error(`启动视频流失败: ${error.message}`);
+    isStreaming.value = false;
+  }
+};
+
+// --- 在组件挂载和更新时调用 ---
+
+// 当视频流启动成功时，自动获取当前AI设置
+watch(() => isStreaming.value, async (newValue) => {
+  if (newValue) {
+    // 视频流已启动，获取AI设置
+    await fetchAISettings();
+  }
+});
+
+// 当AI分析状态改变时，更新设置状态
+watch(() => aiAnalysisEnabled.value, (newValue) => {
+  if (!newValue) {
+    // 如果AI分析已关闭，禁用所有设置
+    console.log('[AI设置] AI分析已关闭，设置选项已禁用');
+  } else {
+    // 如果AI分析已开启，获取最新设置
+    fetchAISettings();
+  }
+});
+
+const startLocalCamera = async () => {
+  const constraints = { video: { deviceId: { exact: selectedDeviceId.value }, width: 1280, height: 720 } };
+  const stream = await navigator.mediaDevices.getUserMedia(constraints);
+  if (videoElement.value) {
+    videoElement.value.srcObject = stream;
+    video.value = videoElement.value;
+    videoElement.value.play();
+  }
+};
+
+const startNetworkStream = async () => {
+  await testStreamConnection();
+  await createPlayer();
+};
+
+const testStreamConnection = async () => {
+  try {
+    const response = await api.ai.testStream(rawInputStreamUrl.value, videoSource.value);
+    if (response?.status !== 'success') {
+      throw new Error(response?.message || '无效的后端响应');
+    }
+  } catch (error) {
+    handleApiError(error);
+    throw error;
+  }
+};
+
+const createPlayer = () => {
+  if (player.value) player.value.destroy();
+  if (!videoRef.value) throw new Error("播放器容器不存在");
+
+  player.value = new DPlayer({
+    container: videoRef.value,
+    autoplay: true,
+    video: {
+      url: playbackUrl.value,
+      type: getVideoType(),
+      customType: {
+        flv: (video) => {
+          const flvPlayer = flvjs.createPlayer({ type: 'flv', url: video.src });
+          flvPlayer.attachMediaElement(video);
+          flvPlayer.load();
+        },
+        hls: (video) => {
+          if (Hls.isSupported()) {
+            const hls = new Hls();
+            hls.loadSource(video.src);
+            hls.attachMedia(video);
+          } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+            // eslint-disable-next-line no-self-assign
+            video.src = video.src;
+          }
+        },
+      },
+    },
+  });
+  video.value = player.value.video;
+
+  // 添加事件监听，确保视频加载后记录尺寸信息
+  video.value.addEventListener('loadedmetadata', () => {
+    console.log('[播放器] 视频元数据已加载，视频尺寸:', video.value.videoWidth, 'x', video.value.videoHeight);
+    onVideoLoaded();
+  });
+
+  // 添加播放准备就绪事件
+  player.value.on('playing', () => {
+    console.log('[播放器] 视频开始播放');
+
+    // 视频播放时多次尝试调整Canvas，确保能正确捕获视频尺寸
+    // 第一次调整 - 立即调整
+    if (aiAnalyzer.value && typeof aiAnalyzer.value.resizeCanvas === 'function') {
+      console.log('[播放器] 视频播放开始，立即调整Canvas');
+      aiAnalyzer.value.resizeCanvas();
+    }
+
+    // 第二次调整 - 300ms后，视频刚开始渲染
+    setTimeout(() => {
+      if (aiAnalyzer.value && typeof aiAnalyzer.value.resizeCanvas === 'function') {
+        console.log('[播放器] 视频播放300ms后，再次调整Canvas');
+        aiAnalyzer.value.resizeCanvas();
+      }
+    }, 300);
+
+    // 第三次调整 - 1秒后，视频已完全渲染
+    setTimeout(() => {
+      if (aiAnalyzer.value && typeof aiAnalyzer.value.resizeCanvas === 'function') {
+        console.log('[播放器] 视频播放1秒后，最终调整Canvas');
+        aiAnalyzer.value.resizeCanvas();
+      }
+    }, 1000);
+
+    // 第四次调整 - 3秒后，确保视频稳定后Canvas位置正确
+    setTimeout(() => {
+      if (aiAnalyzer.value && typeof aiAnalyzer.value.resizeCanvas === 'function') {
+        console.log('[播放器] 视频播放3秒后，稳定性检查');
+        aiAnalyzer.value.resizeCanvas();
+      }
+    }, 3000);
+  });
+
+  // 播放进度变化时再次检查Canvas尺寸
+  player.value.on('timeupdate', () => {
+    // 每10秒检查一次Canvas位置
+    const currentTime = player.value.video.currentTime;
+    if (currentTime > 0 && Math.floor(currentTime) % 10 === 0) {
+      if (aiAnalyzer.value && typeof aiAnalyzer.value.resizeCanvas === 'function') {
+        console.log(`[播放器] 播放进度${currentTime.toFixed(0)}秒，检查Canvas位置`);
+        aiAnalyzer.value.resizeCanvas();
+      }
+    }
+  });
+
+  // 监听视频调整尺寸事件
+  player.value.on('resize', () => {
+    console.log('[播放器] 视频尺寸已调整');
+    if (aiAnalyzer.value && typeof aiAnalyzer.value.resizeCanvas === 'function') {
+      aiAnalyzer.value.resizeCanvas();
+    }
+  });
+
+  // 监听全屏变化
+  player.value.on('fullscreen', () => {
+    console.log('[播放器] 视频全屏状态已变化');
+    setTimeout(() => {
+      if (aiAnalyzer.value && typeof aiAnalyzer.value.resizeCanvas === 'function') {
+        aiAnalyzer.value.resizeCanvas();
+      }
+    }, 300);
+  });
+
+  console.log('[播放器] 播放器创建完成，当前视频元素:', video.value);
+};
+
+// --- AI Logic ---
+// 更新AI设置的函数
+const updateAISettings = async (settingName = '') => {
+  try {
+    let settings = {};
+
+    // 如果指定了具体设置名称，则只更新该设置
+    if (settingName) {
+      settings[settingName] = aiSettings[settingName];
+      console.log(`[AI设置] 尝试更新单个设置 '${settingName}': ${aiSettings[settingName]}`);
+    } else {
+      // 否则更新所有设置
+      settings = { ...aiSettings };
+      console.log('[AI设置] 尝试更新所有设置:', JSON.stringify(settings));
+    }
+
+    const response = await api.ai.updateSettings(cameraId.value, settings);
+
+    if (response?.status !== 'success') {
+      throw new Error(response?.message || '更新AI设置失败');
+    }
+
+    // 如果更新成功，更新本地设置
+    if (response?.settings) {
+      // 将后端返回的设置同步到本地
+      const oldSettings = { ...aiSettings };
+      Object.assign(aiSettings, response.settings);
+      console.log(`[AI设置] 更新成功! 更新前:`, oldSettings, '更新后:', response.settings);
+      
+      // 显示成功消息
+      ElMessage({
+        message: settingName ? `${translateSettingName(settingName)}已${aiSettings[settingName] ? '启用' : '禁用'}` : '所有AI设置已更新',
+        type: 'success',
+        duration: 2000
+      });
+    }
+
+    console.log(`[AI设置] ${settingName ? `${settingName}已更新` : '所有设置已更新'}:`, aiSettings);
+  } catch (error) {
+    const errorMessage = error.response?.data?.detail || error.message || '未知错误';
+    console.error('[AI设置] 更新设置失败:', errorMessage, error);
+    ElMessage.error(`更新AI设置失败: ${errorMessage}`);
+  }
+};
+
+// 设置名称翻译函数
+const translateSettingName = (settingName) => {
+  const translations = {
+    faceRecognition: '人脸识别',
+    objectDetection: '目标检测',
+    behaviorAnalysis: '行为分析',
+    soundDetection: '声音检测',
+    fireDetection: '火焰检测',
+    realtimeMode: '实时模式'
+  };
+  return translations[settingName] || settingName;
+};
+
+// 获取当前AI设置的函数
+const fetchAISettings = async () => {
+  if (!cameraId.value || !isStreaming.value) return;
+
+  try {
+    const response = await api.ai.updateSettings(cameraId.value, {});
+    if (response?.settings) {
+      // 将后端返回的设置映射回前端格式
+      const mappedSettings = {};
+      const reverseMapping = {
+        'face_recognition': 'faceRecognition',
+        'object_detection': 'objectDetection',
+        'behavior_analysis': 'behaviorAnalysis',
+        'sound_detection': 'soundDetection',
+        'fire_detection': 'fireDetection',
+        'realtime_mode': 'realtimeMode'
+      };
+      
+      Object.keys(response.settings).forEach(key => {
+        const frontendKey = reverseMapping[key] || key;
+        mappedSettings[frontendKey] = response.settings[key];
+      });
+      
+      // 更新到本地状态
+      Object.assign(aiSettings, mappedSettings);
+      console.log('[AI设置] 已从服务器获取最新设置并映射:', mappedSettings);
+    }
+  } catch (error) {
+    console.error('[AI设置] 获取设置失败:', error);
+  }
+};
+
 const startAIAnalysis = async () => {
   try {
-    let streamUrlForAI;
-    if (videoSource.value === 'local') {
-      streamUrlForAI = 'webcam://' + selectedDeviceId.value; // AI服务将从本地摄像头获取
-    } else {
-      // 【核心】AI服务应该从 Nginx 直接拉取原始 RTMP 流 (或用户输入的其他原始流)
-      streamUrlForAI = rawInputStreamUrl.value; // 【修改】这里传递原始的 rawInputStreamUrl 给后端
-    }
-
-    const response = await api.ai.startStream({
+    const streamUrlForAI = (videoSource.value === 'local') ? `webcam://${selectedDeviceId.value}` : rawInputStreamUrl.value;
+    const payload = {
       camera_id: cameraId.value,
-      stream_url: streamUrlForAI, // 【修改】传递原始流地址
+      stream_url: streamUrlForAI,
       enable_face_recognition: aiSettings.faceRecognition,
       enable_object_detection: aiSettings.objectDetection,
       enable_behavior_detection: aiSettings.behaviorAnalysis,
-      enable_fire_detection: aiSettings.fireDetection
-    })
-
-    // 【修复 4.2】根据后端返回的 status 字段判断成功
-    if (response && response.status === 'success') {
-      aiAnalysisEnabled.value = true
-      ElMessage.success('AI分析已启动')
-    } else {
-      throw new Error(response?.message || 'AI分析启动失败')
+      enable_sound_detection: aiSettings.soundDetection,
+      enable_fire_detection: aiSettings.fireDetection,
+    };
+    const response = await api.ai.startStream(payload);
+    if (response?.status !== 'success') {
+      throw new Error(response?.message || response?.detail || 'AI分析启动失败');
     }
-  } catch (error) {
-    console.error('启动AI分析失败:', error)
-    // 使用通用错误处理函数
-    handleApiError(error)
-    ElMessage.error('启动AI分析失败: ' + (error.message || '未知错误'))
-    aiAnalysisEnabled.value = false
-  }
-}
 
-// 停止AI分析 (保持不变)
+    // 启动成功后，获取最新设置
+    aiAnalysisEnabled.value = true;
+    await fetchAISettings();
+
+  } catch (error) {
+    const errorMessage = error.response?.data?.detail || error.message || '未知错误';
+    ElMessage.error(`启动AI分析失败: ${errorMessage}`);
+    aiAnalysisEnabled.value = false;
+  }
+};
+
 const stopAIAnalysis = async () => {
   try {
-    // 通知AI服务停止处理
-    const response = await api.ai.stopStream(cameraId.value)
-
-    // 【修复 4.3】根据后端返回的 status 字段判断成功
-    if (response && response.status === 'success') {
-      ElMessage.success('AI分析已停止')
-    } else {
-      console.warn('AI分析停止响应异常:', response)
-    }
+    await api.ai.stopStream(cameraId.value);
   } catch (error) {
-    console.error('停止AI分析失败:', error)
-    // 使用通用错误处理函数
-    handleApiError(error)
-    ElMessage.warning('停止AI分析失败，但视频流已关闭')
+    handleApiError(error);
   } finally {
-    aiAnalysisEnabled.value = false
+    aiAnalysisEnabled.value = false;
   }
-}
+};
 
-// 切换AI分析状态 (保持不变)
 const toggleAIAnalysis = async () => {
   if (aiAnalysisEnabled.value) {
-    await stopAIAnalysis()
+    await stopAIAnalysis();
   } else {
-    await startAIAnalysis()
+    await startAIAnalysis();
   }
-}
+};
 
-// 更新AI设置 (保持不变)
-const updateAISettings = async () => {
-  if (!aiAnalysisEnabled.value || !isStreaming.value) return
+// 修改AI设置单项开关状态
+const toggleAIFeature = (featureName) => {
+  if (!isStreaming.value || !aiAnalysisEnabled.value) return;
 
-  try {
-    await api.ai.updateSettings(cameraId.value, aiSettings)
-    ElMessage.success('AI设置已更新')
-  } catch (error) {
-    console.error('更新AI设置失败:', error)
-    // 使用通用错误处理函数
-    handleApiError(error)
-    ElMessage.error('更新AI设置失败: ' + (error.message || '未知错误'))
+  // 切换特定功能的状态
+  aiSettings[featureName] = !aiSettings[featureName];
+
+  // 更新设置到服务器
+  updateAISettings(featureName);
+};
+
+
+// --- Helper Functions and Lifecycle ---
+const canStartStream = computed(() => {
+  if (videoSource.value === 'local') {
+    return !!selectedDeviceId.value;
   }
-}
+  return !!rawInputStreamUrl.value.trim();
+});
 
-// 切换本地跟踪状态 (保持不变)
+// 新增函数：记录视频元素信息
+const logVideoElementInfo = () => {
+  if (!video.value) {
+    console.warn('[视频检查] 视频元素不存在');
+    return;
+  }
+
+  const videoWidth = video.value.videoWidth;
+  const videoHeight = video.value.videoHeight;
+  console.log('[视频检查] 当前视频元素尺寸:', videoWidth, 'x', videoHeight);
+  console.log('[视频检查] 当前Canvas尺寸:',
+    aiAnalyzer.value ?
+    `${aiAnalyzer.value.$el.querySelector('canvas').width} x ${aiAnalyzer.value.$el.querySelector('canvas').height}` :
+    '无法获取Canvas尺寸');
+};
+
+const getStreamPlaceholder = () => {
+  const placeholders = {
+    rtsp: 'rtsp://username:password@ip:port/stream',
+    rtmp: 'rtmp://localhost:1935/live/stream_name',
+    hls: 'http://localhost:8080/hls/stream.m3u8',
+    flv: 'http://localhost:8080/live/stream.flv',
+    webrtc: 'webrtc://localhost/live/stream',
+    mp4: 'http://localhost:8080/video.mp4',
+  };
+  return placeholders[videoSource.value] || '请输入流地址';
+};
+
+const handleVideoSourceChange = () => {
+  rawInputStreamUrl.value = '';
+  playbackUrl.value = '';
+  if (videoSource.value === 'local') {
+    getVideoDevices();
+  }
+};
+
+const getVideoType = () => {
+  if (playbackUrl.value.includes('.m3u8')) return 'hls';
+  if (playbackUrl.value.includes('.flv')) return 'customFlv';
+  return 'auto';
+};
+
 const toggleLocalTracking = () => {
-  localTrackingEnabled.value = !localTrackingEnabled.value
+  localTrackingEnabled.value = !localTrackingEnabled.value;
+};
 
-  if (aiAnalyzer.value) {
-    nextTick(() => {
-      ElMessage.info(localTrackingEnabled.value ? '本地跟踪已启用' : '本地跟踪已禁用')
-    })
-  }
-}
-
-// 处理视频加载事件 (保持不变)
 const onVideoLoaded = () => {
-  if (videoElement.value) {
-    console.log('视频已加载:', {
-      width: videoElement.value.videoWidth,
-      height: videoElement.value.videoHeight
-    })
+  if (!video.value) {
+    console.warn('[视频] 视频元素尚未加载');
+    return;
   }
-}
 
-// 处理检测结果 (保持不变)
+  console.log('[视频] 视频已加载，当前尺寸:',
+    `${video.value.videoWidth}x${video.value.videoHeight}`);
+
+  // 如果AIAnalyzer组件已加载，通知其调整Canvas大小
+  if (aiAnalyzer.value && typeof aiAnalyzer.value.resizeCanvas === 'function') {
+    console.log('[视频] 通知AIAnalyzer调整Canvas尺寸');
+    aiAnalyzer.value.resizeCanvas();
+
+    // 如果已知视频原始分辨率，同时更新AI处理分辨率
+    if (video.value.videoWidth && video.value.videoHeight) {
+      aiAnalyzer.value.setAiImageSize({
+        width: video.value.videoWidth,
+        height: video.value.videoHeight
+      });
+    }
+  }
+
+  // 创建多次调整Canvas的计划，确保在不同加载阶段都能正确调整
+  [100, 500, 1000, 3000].forEach(delay => {
+    setTimeout(() => {
+      if (aiAnalyzer.value && typeof aiAnalyzer.value.resizeCanvas === 'function') {
+        console.log(`[视频] 视频加载后${delay}ms调整Canvas`);
+        aiAnalyzer.value.resizeCanvas();
+      }
+    }, delay);
+  });
+};
 const handleDetectionResults = (results) => {
-  detectionResults.value = (results && Array.isArray(results.detections)) ? results.detections : []
-}
-
-// 处理性能统计 (保持不变)
+  detectionResults.value = results?.detections || [];
+};
 const handlePerformanceStats = (stats) => {
-  performanceStats.value = stats
-}
-
-// 处理Canvas点击 (保持不变)
+  performanceStats.value = stats;
+};
 const handleCanvasClick = (event) => {
   if (isDrawingZone.value) {
-    // 添加点到当前区域
-    currentZonePoints.value.push({
-      x: event.x,
-      y: event.y
-    })
-
-    ElMessage.info(`已添加点 (${event.x.toFixed(2)}, ${event.y.toFixed(2)})`)
+    currentZonePoints.value.push({ x: event.x, y: event.y });
   }
-}
-
-// 移除告警 (保持不变)
+};
 const removeAlert = (index) => {
-  if (index >= 0 && index < realtimeAlerts.value.length) {
-    realtimeAlerts.value.splice(index, 1)
-  }
-}
+  realtimeAlerts.value.splice(index, 1);
+};
 
-// 开始绘制区域 (保持不变)
-const startDrawingZone = () => {
-  isDrawingZone.value = true
-  currentZonePoints.value = []
-  ElMessage.info('请在视频上点击添加区域顶点，完成后点击"完成区域"')
-}
-
-// 完成区域绘制 (保持不变)
-const finishDrawingZone = () => {
-  if (currentZonePoints.value.length < 3) {
-    ElMessage.warning('请至少添加3个点以形成有效区域')
-    return
-  }
-
-  // 添加新区域
-  dangerZones.value.push({
-    id: `zone_${Date.now()}`,
-    name: zoneName.value,
-    color: zoneColor.value,
-    points: [...currentZonePoints.value]
-  })
-
-  // 重置当前绘制状态
-  isDrawingZone.value = false
-  currentZonePoints.value = []
-
-  ElMessage.success('危险区域已添加')
-}
-
-// 取消区域绘制 (保持不变)
-const cancelDrawingZone = () => {
-  isDrawingZone.value = false
-  currentZonePoints.value = []
-  ElMessage.info('已取消区域绘制')
-}
-
-// 删除区域 (保持不变)
-const deleteZone = (zoneId) => {
-  ElMessageBox.confirm('确定要删除此区域吗?', '删除确认', {
-    confirmButtonText: '确定',
-    cancelButtonText: '取消',
-    type: 'warning'
-  }).then(() => {
-    dangerZones.value = dangerZones.value.filter(zone => zone.id !== zoneId)
-    ElMessage.success('区域已删除')
-  }).catch(() => {})
-}
-
-// 获取检测图标 (保持不变)
 const getDetectionIcon = (type) => {
-  switch (type) {
-    case 'person': return '👤';
-    case 'car': return '🚗';
-    case 'fire': return '🔥';
-    case 'face': return '😀';
-    case 'smoke': return '💨';
-    case 'animal': return '🐕';
-    default: return '📦';
-  }
-}
-
-// 获取告警图标 (保持不变)
+  const icons = {
+    person: '👤', car: '🚗', fire: '🔥', face: '😀', smoke: '💨', animal: '🐕',
+  };
+  return icons[type] || '📦';
+};
 const getAlertIcon = (type) => {
-  switch (type) {
-    case 'danger': return '⛔';
-    case 'warning': return '⚠️';
-    case 'info': return 'ℹ️';
-    case 'success': return '✅';
-    default: return '🚨';
+  const icons = {
+    danger: '⛔', warning: '⚠️', info: 'ℹ️', success: '✅',
+  };
+  return icons[type] || '🚨';
+};
+const formatTime = (timestamp) => (timestamp ? new Date(timestamp).toLocaleTimeString() : '');
+
+const handleApiError = (error) => {
+  if (error.response?.status === 401) {
+    authStore.logout();
+    router.push('/login');
   }
-}
+};
 
-// 格式化时间 (保持不变)
-const formatTime = (timestamp) => {
-  if (!timestamp) return '';
-  const date = new Date(timestamp);
-  return date.toLocaleTimeString();
-}
-
-// 组件挂载时初始化 (保持不变)
 onMounted(() => {
-  // 检查登录状态
   if (!authStore.isAuthenticated) {
-    ElMessage.warning('请先登录再访问监控页面');
     router.push('/login');
     return;
   }
-
-  // 初始化检测结果和告警数组
-  detectionResults.value = []
-  realtimeAlerts.value = []
-
-  // 获取可用的视频设备
   if (videoSource.value === 'local') {
-    getVideoDevices()
+    getVideoDevices();
   }
+});
 
-  // 初始化时静默测试AI连接
-  api.ai.testConnection().catch(error => {
-    console.warn('AI服务连接初始化测试失败:', error)
-    handleApiError(error)
-  })
-})
-
-// 处理API错误，特别是401未授权错误 (保持不变)
-const handleApiError = (error) => {
-  if (!error.response) {
-    console.error('网络错误:', error.message);
-    ElMessage.error('网络连接错误，请检查网络后重试');
-    return;
-  }
-
-  if (error.response.status === 401) {
-    console.error('认证失败:', error.response.data);
-    ElMessage.error('认证已过期，请重新登录');
-    authStore.logout(); // 使用auth store的logout方法
-    return;
-  }
-}
-
-// 组件卸载时清理资源 (保持不变)
 onUnmounted(() => {
-  // 确保停止视频流
-  if (isStreaming.value) {
-    stopStream()
-  }
-})
+  stopStream();
+});
+
 </script>
 
 <style scoped>
@@ -1072,17 +1017,32 @@ onUnmounted(() => {
   position: relative;
   width: 100%;
   height: 100%;
+  min-height: 480px;
+  background-color: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
 }
 
-.video-element {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
+/* 添加CSS调试工具，确保视频容器和AIAnalyzer显示正确 */
+.video-player-wrapper::after {
+  content: "视频容器";
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  background: rgba(255, 0, 0, 0.5);
+  color: white;
+  padding: 5px;
+  font-size: 12px;
+  z-index: 1000;
+  pointer-events: none;
 }
 
-.dplayer-container {
+.video-element, .dplayer-container {
   width: 100%;
   height: 100%;
+  object-fit: contain;
 }
 
 .overlay-canvas {
@@ -1119,27 +1079,29 @@ onUnmounted(() => {
   border-radius: 8px;
 }
 
-/* DPlayer 相关样式 */
 :deep(.dplayer) {
-  width: 100%;
-  height: 100%;
+  width: 100% !important;
+  height: 100% !important;
+  position: relative !important;
+  z-index: 1 !important;
 }
 
+/* 确保DPlayer视频元素不会覆盖AIAnalyzer */
 :deep(.dplayer-video-wrap) {
-  height: 100%;
+  z-index: 1 !important;
+}
+
+/* 确保DPlayer控制栏不会覆盖AIAnalyzer */
+:deep(.dplayer-controller) {
+  z-index: 90 !important;
 }
 
 :deep(.el-form-item__label) {
   color: #fff !important;
 }
 
-/* 控制面板样式 */
-.control-panel {
+.control-panel, .results-panel, .alerts-panel {
   margin-bottom: 20px;
-}
-
-.analysis-settings {
-  padding: 10px;
 }
 
 .setting-description {
@@ -1147,11 +1109,9 @@ onUnmounted(() => {
   color: #909399;
   margin-top: 4px;
   line-height: 1.4;
-  padding-right: 10px;
 }
 
-/* 检测结果列表样式 */
-.detection-list {
+.detection-list, .alerts-list {
   padding: 10px;
 }
 
@@ -1180,19 +1140,10 @@ onUnmounted(() => {
   color: #909399;
 }
 
-.no-results {
+.no-results, .no-alerts {
   text-align: center;
   padding: 20px;
   color: #909399;
-}
-
-/* 告警面板样式 */
-.alerts-panel {
-  margin-bottom: 20px;
-}
-
-.alerts-list {
-  padding: 10px;
 }
 
 .alert-item {
@@ -1203,16 +1154,9 @@ onUnmounted(() => {
   border-radius: 8px;
   border-left: 4px solid;
   background-color: #f8f9fa;
-  transition: all 0.3s ease;
   position: relative;
 }
 
-.alert-item:hover {
-  transform: translateX(3px);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-}
-
-/* 告警类型样式 */
 .alert-danger { border-left-color: #f56c6c; background-color: #fef0f0; }
 .alert-warning { border-left-color: #e6a23c; background-color: #fdf6ec; }
 .alert-info { border-left-color: #409eff; background-color: #ecf5ff; }
@@ -1221,67 +1165,30 @@ onUnmounted(() => {
 .alert-icon {
   font-size: 20px;
   margin-right: 12px;
-  margin-top: 2px;
 }
 
 .alert-content {
   flex: 1;
-  min-width: 0;
 }
 
 .alert-title {
   font-weight: bold;
-  font-size: 14px;
-  margin-bottom: 4px;
-  color: #303133;
 }
 
-.alert-description {
+.alert-description, .alert-time {
   font-size: 12px;
   color: #606266;
-  line-height: 1.4;
-  margin-bottom: 4px;
-}
-.alert-time {
-  font-size: 11px;
-  color: #909399;
 }
 
 .alert-remove {
   position: absolute;
   top: 8px;
   right: 8px;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  font-size: 16px;
-  line-height: 1;
-  padding: 0;
-  color: #909399;
+  cursor: pointer;
 }
 
-.alert-remove:hover {
-  background-color: #f56c6c;
-  color: white;
-}
-
-.no-alerts {
-  text-align: center;
-  padding: 30px 20px;
-  color: #909399;
-}
-
-.no-alerts .el-icon {
-  font-size: 32px;
-  margin-bottom: 10px;
-}
-
-/* 输入帮助样式 */
 .input-help {
   margin-top: 4px;
-  padding: 4px 8px;
-  background-color: #f0f9ff;
-  border-radius: 4px;
-  border-left: 3px solid #409eff;
+  font-size: 12px;
 }
 </style>

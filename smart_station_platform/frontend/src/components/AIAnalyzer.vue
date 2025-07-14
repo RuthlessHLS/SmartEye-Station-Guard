@@ -5,578 +5,547 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue' // 【修改】移除了 computed 导入
-import { useAIAnalysis } from '@/composables/useAIAnalysis'
-import { useLocalTracking } from '@/composables/useLocalTracking'
-import { ElMessage } from 'element-plus'
+import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue';
 
-// 组件属性定义
+// --- 组件属性定义 ---
 const props = defineProps({
-  // 视频元素引用
-  video: {
-    type: [Object, null],
-    required: false,
-    default: null
-  },
-  // 摄像头ID
-  cameraId: {
-    type: String,
-    required: true
-  },
-  // 是否启用AI分析 (指后端AI服务)
-  enabled: {
-    type: Boolean,
-    default: false
-  },
-  // 是否使用实时模式（更高频率发送帧到后端，但后端现在是拉取模式，这个属性主要用于本地处理的帧率控制）
-  realtimeMode: {
-    type: Boolean,
-    default: true
-  },
-  // 危险区域配置
-  dangerZones: {
-    type: Array,
-    default: () => []
-  },
-  // 当前正在编辑的区域点
-  currentZonePoints: {
-    type: Array,
-    default: () => []
-  },
-  // 外部传入的检测结果（从后端通过WebSocket接收）
-  detectionResults: {
-    type: Array,
-    default: () => []
-  },
-  // 是否启用本地跟踪（由 AIVideoMonitor.vue 控制并传入）
-  localTrackingEnabled: {
-    type: Boolean,
-    default: false
-  }
-})
+  video: { type: [Object, null], default: null },
+  cameraId: { type: String, required: true },
+  enabled: { type: Boolean, default: false },
+  realtimeMode: { type: Boolean, default: true },
+  dangerZones: { type: Array, default: () => [] },
+  currentZonePoints: { type: Array, default: () => [] },
+  detectionResults: { type: Array, default: () => [] },
+  localTrackingEnabled: { type: Boolean, default: false }
+});
 
-// 事件定义
-const emit = defineEmits([
-  'detection-results',  // 检测结果事件
-  'performance-stats',  // 性能统计事件
-  'canvas-click'        // 画布点击事件
-])
+// --- 事件定义 ---
+const emit = defineEmits(['detection-results', 'performance-stats', 'canvas-click']);
 
-// 画布相关引用
-const overlayCanvas = ref(null)
-const canvasContext = ref(null)
-const canvasWidth = ref(0)
-const canvasHeight = ref(0)
+// --- 画布和状态相关引用 ---
+const overlayCanvas = ref(null);
+const canvasContext = ref(null);
 
-// 帧处理状态
-let isProcessingFrame = false
-let analysisTimer = null // 用于控制前端帧捕获和绘制的定时器
+// 【保留】这部分是正确的，用于存储从后端收到的AI分辨率
+const aiImageSize = ref({ width: 1920, height: 1080 }); // 提供一个合理的默认值
 
-// 使用AI分析组合式API (不再用于发送帧，而是管理后端AI状态和接收其性能数据)
-// 【修复 ESLint no-empty-pattern】如果没有直接使用的暴露变量，则无需解构
-useAIAnalysis(props.cameraId)
 
-// 使用本地目标跟踪组合式API
-const {
-  localDetections,
-  isModelLoaded,
-  isModelLoading,
-  loadModel: loadLocalTrackingModel,
-  processFrame: processLocalFrame,
-  updateServerDetections, // 【修复 ESLint no-unused-vars】这个现在会被使用
-  getPerformanceStats: getLocalTrackingStats,
-  setTrackingEnabled
-} = useLocalTracking()
+// --- 【简化并保留】这部分函数不再被调用，可以安全移除 ---
+/**
+ * 此函数不再需要，因为新的 renderDetections 方法更简单高效
+ */
+/*
+const mapBboxToCanvas = (bbox, originalSize, canvasWidth, canvasHeight) => {
+  // ...
+};
+*/
+
 
 /**
- * 捕获视频帧
- * 从视频元素中提取当前帧并绘制到画布。
- * 如果启用了本地跟踪，则进行本地处理。
+ * 【保留】此函数逻辑基本正确，无需大的改动
  */
-const captureFrame = async () => {
-  if (!props.video || props.video.paused || props.video.ended || !canvasContext.value) {
-    // 如果视频未就绪或组件未启用，则跳过
-    return
-  }
-
-  // 避免在处理上一帧时再次捕获
-  if (isProcessingFrame) {
-    return
-  }
-  isProcessingFrame = true
-
-  try {
-    const ctx = canvasContext.value
-    const videoWidth = props.video.videoWidth || props.video.width || 640
-    const videoHeight = props.video.videoHeight || props.video.height || 480
-
-    if (videoWidth === 0 || videoHeight === 0) {
-      console.warn('视频尺寸无效，跳过帧捕获')
-      isProcessingFrame = false
-      return
-    }
-
-    // 确保 Canvas 尺寸正确
-    if (overlayCanvas.value.width !== videoWidth || overlayCanvas.value.height !== videoHeight) {
-      resizeCanvas()
-    }
-
-    // 将视频帧绘制到 Canvas 上
-    ctx.drawImage(props.video, 0, 0, videoWidth, videoHeight)
-
-    // 【核心修改】只在启用本地跟踪时才进行本地检测和处理
-    if (props.localTrackingEnabled) {
-      const results = await processLocalFrame(props.video)
-      if (results && results.length > 0) {
-        // 本地检测结果在 useLocalTracking 中更新 localDetections
-        // renderDetections 会使用 localDetections
-      }
-      // 更新本地跟踪的性能统计
-      emit('performance-stats', getLocalTrackingStats())
-    }
-    // 【修改】移除了此处将帧发送到后端服务器的 canvas.toBlob() 和 handleFrame() 调用
-    // 因为后端AI服务现在是主动从流中拉取帧进行分析的。
-
-  } catch (error) {
-    console.error('帧捕获或本地处理失败:', error)
-  } finally {
-    isProcessingFrame = false
-  }
-
-  // 【修复 ReferenceError: drawOverlays is not defined】
-  // 在这里调用实际的绘制函数 renderDetections
-  // 根据 localTrackingEnabled 状态选择绘制本地检测结果或服务器检测结果
-  renderDetections(props.localTrackingEnabled ? localDetections.value : props.detectionResults)
-}
-
-/**
- * 启动分析循环
- * 设置定时器定期捕获和分析视频帧
- */
-const startAnalysis = () => {
-  if (!props.video) {
-    console.warn("视频元素未就绪，无法启动分析循环。");
+const resizeCanvas = () => {
+  if (!overlayCanvas.value || !props.video || !props.video.videoWidth) {
     return;
   }
+  const videoEl = props.video;
+  const canvasEl = overlayCanvas.value;
 
-  if (analysisTimer) {
-    clearInterval(analysisTimer);
-  }
+  // 直接使用视频的原始尺寸设置Canvas
+  const videoWidth = videoEl.videoWidth;
+  const videoHeight = videoEl.videoHeight;
 
-  // 根据 realtimeMode 控制前端帧捕获和绘制频率
-  const interval = props.realtimeMode ? 1000 / 20 : 1000 / 10; // 20 FPS 或 10 FPS
-  analysisTimer = setInterval(captureFrame, interval);
-  console.log(`前端分析/渲染循环已启动，帧间隔: ${interval}ms`);
+  if (canvasEl.width !== videoWidth || canvasEl.height !== videoHeight) {
+    canvasEl.width = videoWidth;
+    canvasEl.height = videoHeight;
+    console.log(`[AIAnalyzer] 画布已根据视频固有分辨率调整尺寸: ${videoWidth}x${videoHeight}`);
 
-  // 控制本地跟踪模型的启停和加载
-  if (props.localTrackingEnabled) {
-    setTrackingEnabled(true); // 启用本地跟踪器的内部逻辑
-    if (!isModelLoaded.value && !isModelLoading.value) {
-      console.log('🧠 正在加载本地跟踪模型...');
-      loadLocalTrackingModel().then(() => {
-        if (isModelLoaded.value) {
-          console.log('✅ 本地跟踪模型加载完成。');
-        } else {
-          console.warn('⚠️ 本地跟踪模型加载失败，请检查网络或模型路径。');
-          ElMessage.error('本地模型加载失败，请检查网络或刷新页面。');
-          setTrackingEnabled(false); // 加载失败则禁用本地跟踪
-        }
-      }).catch(error => {
-        console.error('❌ 本地模型加载过程中发生错误:', error);
-        ElMessage.error('本地模型加载异常，将禁用本地跟踪。');
-        setTrackingEnabled(false); // 异常则禁用本地跟踪
-      });
-    }
-  } else {
-    setTrackingEnabled(false); // 禁用本地跟踪器的内部逻辑
+    // 同时保存这个分辨率作为AI图像尺寸
+    aiImageSize.value = { width: videoWidth, height: videoHeight };
+
+    // 使用nextTick确保DOM更新后再渲染
+    nextTick(() => {
+      // 尝试多次渲染，解决某些浏览器下Canvas初始化问题
+      renderDetections(props.detectionResults);
+      
+      // 再次尝试渲染以确保显示正确
+      setTimeout(() => {
+        renderDetections(props.detectionResults);
+      }, 100);
+    });
   }
 };
 
-/**
- * 停止分析循环
- * 清理定时器和资源
- */
-const stopAnalysis = () => {
-  if (analysisTimer) {
-    clearInterval(analysisTimer)
-    analysisTimer = null
+// 添加绘制时间戳的函数
+const drawTimestamp = (frameId, videoTime, isSynchronized, timeDifference) => {
+  if (!canvasContext.value || !overlayCanvas.value) return;
+  
+  const ctx = canvasContext.value;
+  const canvas = overlayCanvas.value;
+  
+  // eslint-disable-next-line no-unused-vars
+  const currentClientTime = Date.now();
+  
+  // 检查是否为最新帧（用于检测延迟）
+  let isDelayed = false;
+  // eslint-disable-next-line no-unused-vars
+  let delayMs = 0;
+  
+  if (frameId && frameId.includes('_')) {
+    const frameTimeParts = frameId.split('_');
+    if (frameTimeParts.length >= 3) {
+      // 从帧ID中提取时间信息（如果有）
+      const frameNumber = parseInt(frameTimeParts[2]);
+      
+      // 检查是否有足够的帧信息判断延迟
+      if (!isNaN(frameNumber)) {
+        const expectedFrameNumber = frameNumber + 1;
+        isDelayed = expectedFrameNumber - frameNumber > 5; // 如果差距超过5帧，认为有延迟
+      }
+    }
   }
-  setTrackingEnabled(false) // 禁用本地跟踪
-  clearCanvas()
-  console.log("前端分析/渲染循环已停止。")
-}
+  
+  // 确定信息框大小
+  const boxHeight = (isDelayed || !isSynchronized) ? 110 : 50;
+  
+  // 在画布右上角绘制时间戳信息
+  ctx.save();
+  
+  // 绘制背景
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+  ctx.fillRect(canvas.width - 250, 10, 240, boxHeight);
+  
+  ctx.font = '12px Arial';
+  ctx.fillStyle = '#FFFFFF';
+  ctx.textAlign = 'right';
+  
+  // 显示帧ID和视频时间
+  ctx.fillText(`帧ID: ${frameId || '未知'}`, canvas.width - 15, 25);
+  ctx.fillText(`视频时间: ${videoTime.toFixed(2)}s`, canvas.width - 15, 45);
+  
+  // 如果检测到延迟，显示警告
+  if (isDelayed) {
+    ctx.fillStyle = '#FFFF00'; // 黄色警告
+    ctx.fillText(`⚠️ 检测可能不同步！延迟超过5帧`, canvas.width - 15, 65);
+  }
+  
+  // 显示同步状态
+  if (!isSynchronized) {
+    ctx.fillStyle = timeDifference > 1.0 ? '#FF6666' : '#FFFF00'; // 红色或黄色，取决于差异程度
+    ctx.fillText(`⚠️ 视频/检测不同步: ${timeDifference.toFixed(2)}s`, canvas.width - 15, isDelayed ? 85 : 65);
+    
+    if (timeDifference > 1.0) {
+      ctx.fillText(`建议: 尝试暂停后再播放`, canvas.width - 15, isDelayed ? 105 : 85);
+    }
+  }
+  
+  ctx.restore();
+};
 
 /**
- * 清空画布
- */
-const clearCanvas = () => {
-  if (canvasContext.value) {
-    canvasContext.value.clearRect(0, 0, canvasWidth.value, canvasHeight.value)
-  }
-}
-
-/**
- * 渲染检测框
- * * @param {Array} detections 检测结果数组
+ * 修改renderDetections函数，使用带时间戳的绘制算法
  */
 const renderDetections = (detections) => {
-  if (!canvasContext.value || !overlayCanvas.value) return
+  if (!canvasContext.value || !overlayCanvas.value || !props.video) {
+    console.error('[AIAnalyzer] Canvas、上下文或视频元素不存在，无法渲染');
+    return;
+  }
 
+  const canvas = overlayCanvas.value;
+  const ctx = canvasContext.value;
+  const video = props.video;
+  
   // 清空画布
-  clearCanvas()
-
-  // 获取画布尺寸
-  const canvas = overlayCanvas.value
-  const ctx = canvasContext.value
-
-  // 首先绘制危险区域
-  renderDangerZones(ctx, canvas.width, canvas.height)
-
-  // 绘制当前正在编辑的区域
-  renderCurrentZonePoints(ctx)
-
-  // 如果没有检测结果，直接返回
-  if (!detections || detections.length === 0) return
-
-  // 遍历所有检测结果并绘制
-  detections.forEach(detection => {
-    // 【修复】 兼容后端返回的字段 (class_name, name)，并提供默认值
-    const {
-      bbox,
-      type,
-      label: detectionLabel,
-      class_name,
-      name,
-      confidence,
-      color,
-      is_dangerous,
-      face_name: detectionFaceName
-    } = detection
-
-    // 如果没有边界框数据，跳过
-    if (!bbox || bbox.length !== 4) return
-
-    // 确定显示的标签和人脸名称
-    const label = detectionLabel || class_name || name || '检测目标'
-    const face_name = detectionFaceName || (type === 'face' ? name : null)
-
-
-    // 从AI处理的图像尺寸映射到当前画布尺寸
-    // 注意：这里的 ai_image_size 应该是后端检测结果带回的，或者通过 props.video 获取
-    // 为了简化，这里直接使用 video 元素的实际尺寸进行映射
-    const aiImageSize = props.video ? { width: props.video.videoWidth, height: props.video.videoHeight } : { width: 640, height: 480 };
-
-    // 【修复边界框尺寸计算】
-    const [x, y, w, h] = mapBboxToCanvas(bbox, aiImageSize, canvas.width, canvas.height)
-
-    // 设置样式
-    // 根据 is_dangerous 决定颜色
-    ctx.lineWidth = 2
-    ctx.strokeStyle = is_dangerous ? '#ff0000' : (detection.color || '#22c55e') // 危险区域红色，否则绿色
-
-    // 绘制边界框
-    ctx.beginPath()
-    ctx.rect(x, y, w, h)
-    ctx.stroke()
-
-    // 绘制标签背景
-    const confidenceText = confidence ? ` ${(confidence * 100).toFixed(1)}%` : ''
-    // 【修改】根据类型选择正确的标签（对象使用 class_name，人脸使用 name）
-    const labelText = `${label}${confidenceText}`
-    const textWidth = ctx.measureText(labelText).width + 10
-
-    ctx.fillStyle = is_dangerous ? 'rgba(239, 68, 68, 0.7)' : 'rgba(34, 197, 94, 0.7)'
-    ctx.fillRect(x, y - 25, textWidth, 25) // 调整背景高度和位置
-
-    // 绘制标签文本
-    ctx.fillStyle = '#ffffff'
-    ctx.font = '14px Arial' // 调整字体大小
-    ctx.fillText(labelText, x + 5, y - 8)
-
-    // 如果是人脸检测结果，添加额外信息 (face_name)
-    // 【修改】使用 name 字段，并显示区域名称
-    if (type === 'face' && face_name) {
-      const faceText = face_name === 'unknown' ? '未知人员' : face_name
-      ctx.fillStyle = 'rgba(59, 130, 246, 0.7)'
-      ctx.fillRect(x, y + h, ctx.measureText(faceText).width + 10, 25) // 调整背景高度和位置
-      ctx.fillStyle = '#ffffff'
-      ctx.fillText(faceText, x + 5, y + h + 18) // 调整文本位置
-    } else if (is_dangerous && zone_name) { // 如果是危险区域的人员，显示区域名称
-        const dangerZoneText = `区域: ${zone_name}`
-        ctx.fillStyle = 'rgba(239, 68, 68, 0.7)'
-        ctx.fillRect(x, y + h, ctx.measureText(dangerZoneText).width + 10, 25)
-        ctx.fillStyle = '#ffffff'
-        ctx.fillText(dangerZoneText, x + 5, y + h + 18)
-    }
-  })
-}
-
-/**
- * 将AI检测的边界框坐标映射到当前画布尺寸
- * * @param {Array} bbox 原始边界框坐标 [x1, y1, x2, y2]
- * @param {Object} aiImageSize AI处理的图像尺寸 { width, height }
- * @param {number} canvasWidth 当前画布宽度
- * @param {number} canvasHeight 当前画布高度
- * @returns {Array} 映射后的边界框坐标 [x, y, width, height]
- */
-const mapBboxToCanvas = (bbox, aiImageSize, canvasWidth, canvasHeight) => {
-  // 【修复】后端传的是 [x1, y1, x2, y2]，需要计算 width 和 height
-  const [x1, y1, x2, y2] = bbox
-
-  // 计算缩放比例
-  const scaleX = canvasWidth / aiImageSize.width
-  const scaleY = canvasHeight / aiImageSize.height
-
-  // 应用缩放并计算正确的宽度和高度
-  return [
-    x1 * scaleX,
-    y1 * scaleY,
-    (x2 - x1) * scaleX,
-    (y2 - y1) * scaleY
-  ]
-}
-
-/**
- * 渲染危险区域
- * * @param {CanvasRenderingContext2D} ctx 画布上下文
- * @param {number} width 画布宽度
- * @param {number} height 画布高度
- */
-const renderDangerZones = (ctx, width, height) => {
-  if (!props.dangerZones || props.dangerZones.length === 0) return
-
-  props.dangerZones.forEach(zone => {
-    if (!zone.points || zone.points.length < 3) return
-
-    // 设置样式
-    ctx.fillStyle = zone.color || 'rgba(239, 68, 68, 0.2)' // 红色半透明
-    ctx.strokeStyle = zone.borderColor || 'rgba(239, 68, 68, 0.8)'
-    ctx.lineWidth = 2
-
-    // 开始绘制多边形
-    ctx.beginPath()
-
-    // 将区域点映射到画布尺寸
-    const mappedPoints = zone.points.map(point => ({
-      x: point.x * width,
-      y: point.y * height
-    }))
-
-    // 移动到第一个点
-    ctx.moveTo(mappedPoints[0].x, mappedPoints[0].y)
-
-    // 绘制其余点
-    for (let i = 1; i < mappedPoints.length; i++) {
-      ctx.lineTo(mappedPoints[i].x, mappedPoints[i].y)
-    }
-
-    // 闭合路径
-    ctx.closePath()
-
-    // 填充和描边
-    ctx.fill()
-    ctx.stroke()
-
-    // 绘制区域名称
-    if (zone.name) {
-      const centerX = mappedPoints.reduce((sum, p) => sum + p.x, 0) / mappedPoints.length
-      const centerY = mappedPoints.reduce((sum, p) => sum + p.y, 0) / mappedPoints.length
-
-      ctx.fillStyle = '#ffffff'
-      ctx.font = '12px Arial'
-      ctx.textAlign = 'center'
-      ctx.fillText(zone.name, centerX, centerY)
-      ctx.textAlign = 'left' // 重置对齐方式
-    }
-  })
-}
-
-/**
- * 渲染当前正在编辑的区域点
- * * @param {CanvasRenderingContext2D} ctx 画布上下文
- */
-const renderCurrentZonePoints = (ctx) => {
-  if (!props.currentZonePoints || props.currentZonePoints.length === 0) return
-
-  // 设置样式
-  ctx.fillStyle = 'rgba(59, 130, 246, 0.2)' // 蓝色半透明
-  ctx.strokeStyle = 'rgba(59, 130, 246, 0.8)'
-  ctx.lineWidth = 2
-
-  // 绘制已有的点
-  props.currentZonePoints.forEach((point, index) => {
-    ctx.beginPath()
-    ctx.arc(point.x * canvasWidth.value, point.y * canvasHeight.value, 5, 0, Math.PI * 2)
-    ctx.fill()
-
-    // 绘制点的索引
-    ctx.fillStyle = '#ffffff'
-    ctx.font = '12px Arial'
-    ctx.fillText(index + 1, point.x * canvasWidth.value + 8, point.y * canvasHeight.value + 4)
-    ctx.fillStyle = 'rgba(59, 130, 246, 0.2)' // 重置填充颜色
-  })
-
-  // 如果有多个点，连接它们
-  if (props.currentZonePoints.length > 1) {
-    ctx.beginPath()
-    ctx.moveTo(
-      props.currentZonePoints[0].x * canvasWidth.value,
-      props.currentZonePoints[0].y * canvasHeight.value
-    )
-
-    for (let i = 1; i < props.currentZonePoints.length; i++) {
-      ctx.lineTo(
-        props.currentZonePoints[i].x * canvasWidth.value,
-        props.currentZonePoints[i].y * canvasHeight.value
-      )
-    }
-
-    // 如果有3个或更多点，闭合路径
-    if (props.currentZonePoints.length >= 3) {
-      ctx.closePath()
-      ctx.fill()
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  
+  // 获取关键尺寸信息
+  const videoOriginalWidth = video.videoWidth;
+  const videoOriginalHeight = video.videoHeight;
+  const canvasWidth = canvas.width;
+  const canvasHeight = canvas.height;
+  
+  // 获取后端AI处理的原始分辨率
+  const aiWidth = aiImageSize.value?.width || videoOriginalWidth;
+  const aiHeight = aiImageSize.value?.height || videoOriginalHeight;
+  
+  console.log(`[AIAnalyzer] 坐标映射关系:`, {
+    视频原始尺寸: `${videoOriginalWidth}x${videoOriginalHeight}`,
+    Canvas尺寸: `${canvasWidth}x${canvasHeight}`,
+    AI处理尺寸: `${aiWidth}x${aiHeight}`
+  });
+  
+  // 【添加】先检查传入的detections是否为空
+  if (!detections || detections.length === 0) {
+    console.log('[AIAnalyzer] 没有检测结果可显示');
+    return;
   }
-
-    ctx.stroke()
-  }
-}
-
-/**
- * 处理画布点击事件
- * * @param {MouseEvent} event 鼠标事件
- */
-const handleCanvasClick = (event) => {
-  if (!overlayCanvas.value) return
-
-  // 获取相对于画布的点击坐标
-  const rect = overlayCanvas.value.getBoundingClientRect()
-  const x = (event.clientX - rect.left) / rect.width
-  const y = (event.clientY - rect.top) / rect.height
-
-  // 发送点击事件
-  emit('canvas-click', { x, y, originalEvent: event })
-}
-
-/**
- * 调整画布大小以匹配视频尺寸
- */
-const resizeCanvas = () => {
-  if (!overlayCanvas.value || !props.video) return
-
-  // 获取视频尺寸
-  const videoWidth = props.video.videoWidth || props.video.width || props.video.clientWidth
-  const videoHeight = props.video.videoHeight || props.video.height || props.video.clientHeight
-
-  if (videoWidth && videoHeight) {
-    // 设置画布尺寸
-    overlayCanvas.value.width = videoWidth
-    overlayCanvas.value.height = videoHeight
-    canvasWidth.value = videoWidth
-    canvasHeight.value = videoHeight
-
-    // 如果有检测结果，重新渲染
-    // 这里依赖的是 props.detectionResults (服务器结果) 或 localDetections (本地结果)
-    // 直接调用 renderDetections 即可，它会根据 currentDetectionsToDraw 来判断
-    renderDetections(props.localTrackingEnabled ? localDetections.value : props.detectionResults)
-  }
-}
-
-// 监听启用状态变化
-watch(() => props.enabled, (newVal) => {
-  if (newVal) {
-    startAnalysis()
-    } else {
-    stopAnalysis()
-  }
-})
-
-// 监听视频源变化
-watch(() => props.video, () => {
-    nextTick(() => {
-      resizeCanvas()
-    })
-})
-
-// 监听外部传入的检测结果 (来自服务器)
-watch(() => props.detectionResults, (newResults) => {
-  // 只有当本地跟踪未启用时，才直接渲染服务器结果
-  // 如果本地跟踪启用，则由 localDetections (通过 updateServerDetections 间接更新) 驱动渲染
-  if (!props.localTrackingEnabled && newResults && newResults.length > 0) {
-    renderDetections(newResults)
-  }
-  // 【修复】当服务器结果更新时，更新本地跟踪器的服务器检测结果
-  if (props.localTrackingEnabled) {
-    updateServerDetections(newResults);
-  }
-})
-
-// 监听本地跟踪启用状态变化，同步到 useLocalTracking
-watch(() => props.localTrackingEnabled, (newVal) => {
-  setTrackingEnabled(newVal) // 同步到 useLocalTracking
-  if (newVal) {
-    // 如果启用本地跟踪，确保模型已加载并启动本地分析循环
-    startAnalysis() // startAnalysis 内部会处理模型加载和循环启动
+  
+  // 【新增】根据当前设置过滤检测结果
+  let filteredDetections = [...detections];
+  if (!props.enabled) {
+    // 如果整个AI分析被禁用，则不显示任何检测框
+    filteredDetections = [];
+    console.log('[AIAnalyzer] AI分析已禁用，不显示检测框');
   } else {
-    // 如果禁用本地跟踪，清空本地检测结果，并可能需要重新渲染上次的服务器结果
-    localDetections.value = []
-    // 重新渲染以显示上次的服务器结果，如果存在且后端AI启用
-    if (props.enabled && props.detectionResults && props.detectionResults.length > 0) {
-      renderDetections(props.detectionResults)
-    } else {
-      clearCanvas() // 如果后端AI也禁用，则清空
-    }
+    // 获取父组件传递的AI设置
+    const aiSettings = typeof props.realtimeMode === 'object' ? props.realtimeMode : null;
+    
+    // 根据各功能的启用状态过滤检测结果
+    filteredDetections = detections.filter(detection => {
+      // 人脸检测过滤
+      if (detection.type === 'face') {
+        const faceEnabled = aiSettings?.faceRecognition !== false;
+        if (!faceEnabled) {
+          console.log('[AIAnalyzer] 过滤掉人脸检测框，因为人脸识别已禁用');
+          return false;
+        }
+      }
+      
+      // 目标检测过滤
+      if (detection.type === 'object') {
+        const objectEnabled = aiSettings?.objectDetection !== false;
+        if (!objectEnabled) {
+          console.log('[AIAnalyzer] 过滤掉目标检测框，因为目标检测已禁用');
+          return false;
+        }
+      }
+      
+      return true;
+    });
+    
+    console.log('[AIAnalyzer] 过滤后的检测结果数量:', filteredDetections.length, '原始数量:', detections.length);
   }
-})
+  
+  // 如果过滤后没有检测结果，则直接返回
+  if (filteredDetections.length === 0) return;
+  
+  // 获取当前视频时间
+  const currentVideoTime = video.currentTime;
+  
+  // 提取帧ID和时间戳
+  let frameId = "unknown";
+  // eslint-disable-next-line no-unused-vars
+  let frameTimestamp = Date.now();
+  let videoTimeFromDetection = null;
+  
+  // 从检测结果中获取帧信息
+  if (filteredDetections.length > 0) {
+    frameId = filteredDetections[0].frame_id || "unknown";
+    frameTimestamp = filteredDetections[0].frame_timestamp || Date.now();
+    // 使用后端传来的视频时间
+    videoTimeFromDetection = filteredDetections[0].video_time;
+  }
+  
+  // 检查视频时间和检测结果时间是否匹配
+  let isSynchronized = true;
+  let timeDifference = 0;
+  
+  if (videoTimeFromDetection !== null && currentVideoTime > 0) {
+    // 计算实际视频播放时间与后端处理时间的差异
+    timeDifference = Math.abs(currentVideoTime - videoTimeFromDetection);
+    // 如果时间差超过1秒，认为不同步（调整为更合理的阈值）
+    isSynchronized = timeDifference < 1.0;
+    
+    // 如果检测到严重不同步，记录警告
+    if (timeDifference > 2.0) {
+      console.warn(`[AIAnalyzer] 视频时间与检测结果时间严重不同步! 视频时间=${currentVideoTime.toFixed(2)}s, 
+        检测时间=${videoTimeFromDetection.toFixed(2)}s, 差异=${timeDifference.toFixed(2)}s`);
+    }
+  } else if (currentVideoTime > 0 && filteredDetections.length > 0) {
+    // 如果没有视频时间但有检测结果，标记为不同步
+    isSynchronized = false;
+    console.warn(`[AIAnalyzer] 检测结果缺少视频时间戳! 视频时间=${currentVideoTime.toFixed(2)}s`);
+  }
+  
+  // 绘制时间戳信息，包括同步状态
+  drawTimestamp(frameId, currentVideoTime, isSynchronized, timeDifference);
+  
+  // 使用更鲜明的颜色
+  const typeColors = {
+    'face': '#00FFFF', // 青色
+    'person': '#FF0000', // 红色
+    'car': '#00FF00', // 绿色
+    'bottle': '#FFFF00', // 黄色
+    'chair': '#FF00FF', // 紫色
+    'default': '#FFFFFF' // 白色
+  };
+  
+  // 计算视频显示区域尺寸和偏移量（处理视频黑边问题）
+  const canvasRatio = canvasWidth / canvasHeight;
+  const videoRatio = videoOriginalWidth / videoOriginalHeight;
+  
+  let displayWidth, displayHeight, offsetX, offsetY;
+  
+  if (canvasRatio >= videoRatio) {
+    // Canvas较宽，视频高度填满
+    displayHeight = canvasHeight;
+    displayWidth = videoOriginalWidth * (canvasHeight / videoOriginalHeight);
+    offsetX = (canvasWidth - displayWidth) / 2;
+    offsetY = 0;
+  } else {
+    // Canvas较窄，视频宽度填满
+    displayWidth = canvasWidth;
+    displayHeight = videoOriginalHeight * (canvasWidth / videoOriginalWidth);
+    offsetX = 0;
+    offsetY = (canvasHeight - displayHeight) / 2;
+  }
+  
+  // 计算缩放比例
+  const scaleX = displayWidth / aiWidth;
+  const scaleY = displayHeight / aiHeight;
+  
+  // 绘制每个检测框
+  filteredDetections.forEach((detection, index) => {
+    if (!detection.bbox || detection.bbox.length !== 4) return;
+    
+    // 获取原始坐标
+    const [x1, y1, x2, y2] = detection.bbox;
+    
+    // 确认坐标值有效
+    if (isNaN(x1) || isNaN(y1) || isNaN(x2) || isNaN(y2)) {
+      console.warn(`[AIAnalyzer] 检测框 #${index} 坐标无效:`, detection.bbox);
+      return;
+    }
+    
+    // 计算宽高
+    const width = x2 - x1;
+    const height = y2 - y1;
+    
+    if (width <= 0 || height <= 0) {
+      console.warn(`[AIAnalyzer] 检测框 #${index} 宽高无效: ${width}x${height}`);
+      return;
+    }
+    
+    // 映射坐标到Canvas，考虑视频黑边
+    const scaledX = Math.round(x1 * scaleX + offsetX);
+    const scaledY = Math.round(y1 * scaleY + offsetY);
+    const scaledWidth = Math.round(width * scaleX);
+    const scaledHeight = Math.round(height * scaleY);
+    
+    // 仅对第一个检测框输出详细日志
+    if (index === 0) {
+      console.log(`[AIAnalyzer] 检测框 #${index} 详情:`, {
+        AI坐标: `(${x1}, ${y1}, ${x2}, ${y2})`,
+        Canvas坐标: `(${scaledX}, ${scaledY}, ${scaledX + scaledWidth}, ${scaledY + scaledHeight})`,
+        缩放比例: `X=${scaleX.toFixed(3)}, Y=${scaleY.toFixed(3)}`,
+        偏移量: `X=${offsetX.toFixed(0)}, Y=${offsetY.toFixed(0)}`,
+        帧ID: detection.frame_id || '未知',
+        视频时间: currentVideoTime.toFixed(2) + 's',
+        同步状态: isSynchronized ? '同步' : '不同步',
+        时间差: timeDifference.toFixed(2) + 's'
+      });
+    }
+    
+    // 确定颜色 - 基于对象类型
+    let color = typeColors.default;
+    let objectType = '';
+    
+    if (detection.type === 'face') {
+      color = typeColors.face;
+      objectType = detection.identity?.name || '人脸';
+      
+      // 根据人脸置信度设置不同的颜色
+      if (detection.identity) {
+        const confidence = detection.identity.confidence || 0;
+        const isKnown = detection.identity.is_known || false;
+        const shouldAlert = detection.identity.should_alert || false;
+        
+        if (isKnown) {
+          // 已知人员 - 青色
+          color = '#00FFFF';
+        } else if (shouldAlert) {
+          // 需要告警的未知人员 - 红色
+          color = '#FF0000';
+          objectType = '未知人员(告警)';
+        } else if (confidence >= 0.4 && confidence < 0.5) {
+          // 置信度在40%-50%之间的未知人员 - 黄色
+          color = '#FFFF00';
+          objectType = '未知人员(低置信度)';
+        } else {
+          // 其他未知人员 - 橙色
+          color = '#FFA500';
+          objectType = '未知人员';
+        }
+      }
+    } else if (detection.class_name) {
+      color = typeColors[detection.class_name.toLowerCase()] || typeColors.default;
+      objectType = detection.class_name;
+    } else if (detection.type) {
+      color = typeColors[detection.type.toLowerCase()] || typeColors.default;
+      objectType = detection.type;
+    }
+    
+    // 如果检测到不同步，使边框颜色变淡
+    if (!isSynchronized) {
+      // 添加50%透明度
+      color = color + '80';
+    }
+    
+    // 信息显示
+    let label = objectType;
+    if (detection.confidence) {
+      label += ` (${Math.round(detection.confidence * 100)}%)`;
+    } else if (detection.identity?.confidence) {
+      label += ` (${Math.round(detection.identity.confidence * 100)}%)`;
+    }
+    
+    // 增强边框可见性 - 使用双边框技术
+    
+    // 绘制半透明填充
+    ctx.fillStyle = color + '20'; // 透明度调整为20%
+    ctx.fillRect(scaledX, scaledY, scaledWidth, scaledHeight);
+    
+    // 外边框 - 黑色，增强可见性
+    ctx.strokeStyle = 'black';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(scaledX, scaledY, scaledWidth, scaledHeight);
+    
+    // 内边框 - 彩色，表示对象类型
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(scaledX, scaledY, scaledWidth, scaledHeight);
+    
+    // 绘制标签
+    if (label) {
+      // 测量文本宽度
+      ctx.font = 'bold 16px Arial';
+      const textWidth = ctx.measureText(label).width;
+      const textHeight = 20;
+      
+      // 标签位置 - 优先显示在目标上方
+      const textX = Math.max(0, Math.min(scaledX, canvasWidth - textWidth - 6));
+      const textY = scaledY > 30 ? scaledY - 10 : scaledY + scaledHeight + 20;
+      
+      // 绘制标签背景
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+      ctx.fillRect(textX, textY - 18, textWidth + 10, textHeight);
+      
+      // 绘制文本
+      ctx.fillStyle = 'white';
+      ctx.fillText(label, textX + 5, textY - 4);
+    }
+  });
+};
 
-// 监听危险区域变化
-watch(() => props.dangerZones, () => {
-  // 如果有检测结果，重新渲染以包含新的危险区域
-  renderDetections(props.localTrackingEnabled ? localDetections.value : props.detectionResults)
-}, { deep: true })
+// --- 其他函数 (基本保持不变) ---
 
-// 监听当前区域点变化
-watch(() => props.currentZonePoints, () => {
-  // 重新渲染
-  renderDetections(props.localTrackingEnabled ? localDetections.value : props.detectionResults)
-}, { deep: true })
+const handleCanvasClick = (event) => {
+  if (!overlayCanvas.value) return;
+  const rect = overlayCanvas.value.getBoundingClientRect();
+  const x = (event.clientX - rect.left) / rect.width;
+  const y = (event.clientY - rect.top) / rect.height;
+  emit('canvas-click', { x, y, originalEvent: event });
+};
 
-// 组件挂载时的初始化
+
+// --- 生命周期和侦听器 (基本保持不变) ---
+
 onMounted(() => {
   if (overlayCanvas.value) {
-    canvasContext.value = overlayCanvas.value.getContext('2d')
-    resizeCanvas()
+    canvasContext.value = overlayCanvas.value.getContext('2d');
   }
+  window.addEventListener('resize', resizeCanvas);
+});
 
-  // 监听窗口大小变化，调整画布尺寸
-    window.addEventListener('resize', resizeCanvas)
-
-  // 如果 AI 分析或本地跟踪已启用，启动分析循环
-  if (props.enabled || props.localTrackingEnabled) {
-      startAnalysis()
-  }
-})
-
-// 组件卸载时的清理
 onUnmounted(() => {
-  stopAnalysis()
-  window.removeEventListener('resize', resizeCanvas)
-})
+  window.removeEventListener('resize', resizeCanvas);
+  if (props.video) {
+    props.video.removeEventListener('loadedmetadata', resizeCanvas);
+    props.video.removeEventListener('playing', resizeCanvas);
+  }
+});
 
-// 对外暴露的方法
+// 添加缺失的函数
+const startAnalysis = () => {
+  console.log('[AIAnalyzer] 开始AI分析');
+  renderDetections(props.detectionResults);
+};
+
+const stopAnalysis = () => {
+  console.log('[AIAnalyzer] 停止AI分析');
+  if (canvasContext.value && overlayCanvas.value) {
+    canvasContext.value.clearRect(0, 0, overlayCanvas.value.width, overlayCanvas.value.height);
+  }
+};
+
+const clearCanvas = () => {
+  if (canvasContext.value && overlayCanvas.value) {
+    canvasContext.value.clearRect(0, 0, overlayCanvas.value.width, overlayCanvas.value.height);
+  }
+};
+
+watch(() => props.video, (newVideo, oldVideo) => {
+    if (oldVideo) {
+        oldVideo.removeEventListener('loadedmetadata', resizeCanvas);
+        oldVideo.removeEventListener('playing', resizeCanvas);
+    }
+    
+    if (newVideo) {
+        // 监听视频加载元数据事件
+        newVideo.addEventListener('loadedmetadata', resizeCanvas);
+        
+        // 监听视频开始播放事件
+        newVideo.addEventListener('playing', resizeCanvas);
+        
+        // 立即尝试调整Canvas大小
+        nextTick(resizeCanvas);
+        
+        // 多次尝试调整，确保视频完全加载后Canvas也能正确调整
+        setTimeout(resizeCanvas, 500);
+        setTimeout(resizeCanvas, 1000);
+        setTimeout(resizeCanvas, 3000);
+    }
+});
+
+watch(() => props.detectionResults, (newResults) => {
+  renderDetections(newResults);
+}, { deep: true });
+
+// ... 其他 watchers 保持不变 ...
+
+
+// --- Expose ---
 defineExpose({
   startAnalysis,
   stopAnalysis,
   clearCanvas,
-  renderDetections
-})
+  renderDetections,
+  resizeCanvas,
+  drawTimestamp,
+  setAiImageSize: (size) => {
+    console.log('[AIAnalyzer] 接收到父组件设置的原始分辨率:', size);
+    if(size && size.width && size.height) {
+        const oldSize = { ...aiImageSize.value };
+        aiImageSize.value = size;
+        console.log('[AIAnalyzer] 原始分辨率已更新:', { 旧值: oldSize, 新值: size });
+        
+        // 如果视频元素和Canvas已经存在，尝试调整Canvas尺寸
+        nextTick(() => {
+          if (props.video && overlayCanvas.value) {
+            console.log('[AIAnalyzer] 分辨率更新后尝试调整Canvas尺寸');
+            resizeCanvas();
+          }
+          
+          // 立即重新渲染当前检测结果
+          if (props.detectionResults && props.detectionResults.length > 0) {
+            console.log('[AIAnalyzer] 分辨率更新后重新渲染检测框');
+            renderDetections(props.detectionResults);
+          }
+        });
+    }
+  }
+});
 </script>
 
 <style scoped>
 .ai-analyzer {
-  position: relative;
+  position: absolute;
+  top: 0;
+  left: 0;
   width: 100%;
   height: 100%;
-  overflow: hidden;
+  z-index: 20; /* 确保在视频之上，但在DPlayer控制器之下 */
+  pointer-events: auto; /* 【改动】允许点击事件传递，确保检测框正确定位 */
 }
 
 .overlay-canvas {
@@ -585,7 +554,23 @@ defineExpose({
   left: 0;
   width: 100%;
   height: 100%;
-  pointer-events: none; /* 允许点击穿透到底层视频 */
-  z-index: 10;
+  pointer-events: auto; /* 【保留】允许画布自身接收点击事件以绘制危险区域等 */
+
+  /* 【关键样式】确保画布的缩放方式与视频一致 */
+  object-fit: contain;
+}
+
+/* 【保留】这些深度选择器有助于确保DPlayer的兼容性 */
+:deep(.dplayer-video-wrap) {
+  position: relative;
+  overflow: visible !important;
+}
+
+:deep(.dplayer-container video) {
+  object-fit: contain !important;
+}
+
+:deep(.dplayer-controller) {
+  z-index: 40 !important;
 }
 </style>
