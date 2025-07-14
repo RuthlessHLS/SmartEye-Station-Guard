@@ -13,7 +13,7 @@
                 @click="startLocalCamera"
               >
                 <el-icon><VideoCamera /></el-icon>
-                <启动摄像头></启动摄像头>
+                启动摄像头
               </el-button>
               <el-button
                 type="danger"
@@ -417,7 +417,7 @@
               </template>
             </el-table-column>
             <el-table-column label="操作" width="100">
-              <template #default="{ row, $index }">
+              <template #default="{ $index }">
                 <el-button
                   type="danger"
                   size="small"
@@ -444,20 +444,20 @@
               <el-input v-model="newZoneName" placeholder="例如：机器设备区" />
             </el-form-item>
             <el-form-item label="距离阈值">
-              <el-input-number 
-                v-model="newZoneMinDistance" 
-                :min="0" 
-                :max="200" 
+              <el-input-number
+                v-model="newZoneMinDistance"
+                :min="0"
+                :max="200"
                 :step="10"
                 controls-position="right"
               />
               <small>人员距离区域边缘小于此值时告警(像素)</small>
             </el-form-item>
             <el-form-item label="停留阈值">
-              <el-input-number 
-                v-model="newZoneDwellTime" 
-                :min="0" 
-                :max="300" 
+              <el-input-number
+                v-model="newZoneDwellTime"
+                :min="0"
+                :max="300"
                 :step="5"
                 controls-position="right"
               />
@@ -610,9 +610,9 @@ let audioMonitoringId = null
 // 开始音频监控
 const startAudioMonitoring = () => {
   if (audioMonitoringActive) return // 防止重复启动
-  
+
   audioMonitoringActive = true
-  
+
   const monitorAudio = () => {
     if (!audioMonitoringActive || !audioAnalyser || !audioDataArray) {
       audioMonitoringId = null
@@ -920,7 +920,7 @@ const startFrameCapture = () => {
       // 保存实际发送的图像尺寸用于后续坐标转换
       const sentImageWidth = canvas.width
       const sentImageHeight = canvas.height
-      
+
       console.log(`📸 发送图像尺寸: ${sentImageWidth}x${sentImageHeight} (缩放比例: ${scale})`)
       console.log(`📺 原始视频尺寸: ${video.videoWidth}x${video.videoHeight}`)
 
@@ -950,10 +950,10 @@ const startFrameCapture = () => {
 // 发送帧到AI服务进行分析
 const sendFrameToAI = async (frameBlob, sentImageWidth, sentImageHeight) => {
   const startTime = performance.now()
-  
+
   // 保存发送的图像尺寸，用于坐标转换
   window.lastSentImageSize = { width: sentImageWidth, height: sentImageHeight }
-  
+
   console.log(`📤 发送图像: ${sentImageWidth}x${sentImageHeight}`)
 
   try {
@@ -968,25 +968,25 @@ const sendFrameToAI = async (frameBlob, sentImageWidth, sentImageHeight) => {
 
     // 创建AbortController来控制请求超时
     const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), 10000) // 增加到10秒超时
+    const timeoutId = setTimeout(() => controller.abort(), 20000) // 增加到10秒超时
 
     const response = await requestWithRetry(aiService, {
       method: 'post',
       url: '/frame/analyze/',
       data: formData,
       signal: controller.signal,
-      timeout: 10000 // 增加axios超时到10秒
+      timeout: 60000 // 增加axios超时到10秒
     });
 
     clearTimeout(timeoutId)
 
     console.log('🔍 AI服务原始响应:', response)
-    
+
     // AI服务直接返回 {status: "success", results: {...}} 格式
     if (response && response.status === 'success') {
       console.log('✅ AI分析成功:', response.results)
       processAIResults(response.results)
-      
+
       // 更新性能统计
       const processTime = performance.now() - startTime
       updatePerformanceStats(processTime, true)
@@ -1058,14 +1058,21 @@ const processAIResults = (results) => {
   const detections = []
 
   // 处理检测结果
-  results.detections.forEach((detection, index) => {
-    console.log(`🎯 处理检测 ${index + 1}:`, detection)
+  results.detections.forEach((detection, idx) => {
+    console.log(`🎯 处理检测 ${idx + 1}:`, detection)
+    
+    // 统一坐标格式 - 如果有coordinates字段，优先使用
+    let bbox = detection.bbox || null
+    if (!bbox && detection.coordinates && detection.coordinates.length === 4) {
+      console.log('🔄 从coordinates创建bbox:', detection.coordinates)
+      bbox = detection.coordinates
+    }
 
     const processedDetection = {
       type: detection.type,
       label: getDetectionLabel(detection),
       confidence: detection.confidence,
-      bbox: detection.bbox,
+      bbox: bbox,
       timestamp: new Date(detection.timestamp || Date.now())
     }
 
@@ -1112,6 +1119,7 @@ const getAlertTitle = (alertType) => {
     person_detected: '🚨 检测到人员',
     unknown_face: '⚠️ 发现未知人脸',
     behavior_anomaly: '🔥 异常行为检测',
+    abnormal_behavior_fall_down: '⚠️ 检测到跌倒',
     fire_fire: '🔥 火焰检测告警',
     fire_smoke: '💨 烟雾检测告警',
     fire_related: '⚠️ 火灾风险检测'
@@ -1120,6 +1128,11 @@ const getAlertTitle = (alertType) => {
   if (alertType && alertType.startsWith('fire_detection_')) {
     const subType = alertType.replace('fire_detection_', '')
     return titles[`fire_${subType}`] || '🔥 火灾风险检测'
+  }
+  // 处理以abnormal_behavior_开头的告警类型
+  if (alertType && alertType.startsWith('abnormal_behavior_')) {
+    const behaviorType = alertType.replace('abnormal_behavior_', '')
+    return behaviorType === 'fall_down' ? '⚠️ 检测到跌倒' : '⚠️ 异常行为检测'
   }
   return titles[alertType] || '🔔 检测告警'
 }
@@ -1130,6 +1143,7 @@ const getAlertType = (alertType) => {
     person_detected: 'info',
     unknown_face: 'warning',
     behavior_anomaly: 'error',
+    abnormal_behavior_fall_down: 'error', // 跌倒告警为错误级别（最高）
     fire_fire: 'error',        // 火焰告警为错误级别（最高）
     fire_smoke: 'error',       // 烟雾告警为错误级别（最高）
     fire_related: 'warning'    // 火灾风险为警告级别
@@ -1139,6 +1153,11 @@ const getAlertType = (alertType) => {
   if (alertType && alertType.startsWith('fire_detection_')) {
     const subType = alertType.replace('fire_detection_', '')
     return types[`fire_${subType}`] || 'error' // 默认火灾相关告警为错误级别
+  }
+
+  // 处理以abnormal_behavior_开头的告警类型
+  if (alertType && alertType.startsWith('abnormal_behavior_')) {
+    return 'error' // 异常行为都视为错误级别
   }
 
   return types[alertType] || 'info'
@@ -1279,16 +1298,16 @@ const drawDetectionResults = (results) => {
   const canvasHeight = canvas.height
   const videoWidth = video.videoWidth
   const videoHeight = video.videoHeight
-  
+
   // 获取实际发送给AI服务的图像尺寸
   const sentImageSize = window.lastSentImageSize || { width: videoWidth, height: videoHeight }
-  
+
   // AI返回的坐标是相对于发送图像尺寸的，需要转换到Canvas显示坐标
   // 转换链条：AI坐标(相对发送图像) → 原始视频坐标 → Canvas显示坐标
   const scaleX = canvasWidth / sentImageSize.width
   const scaleY = canvasHeight / sentImageSize.height
-  
-  console.log('📏 坐标转换信息:', { 
+
+  console.log('📏 坐标转换信息:', {
     scaleX, scaleY,
     canvasSize: { width: canvasWidth, height: canvasHeight },
     videoSize: { width: videoWidth, height: videoHeight },
@@ -1296,16 +1315,23 @@ const drawDetectionResults = (results) => {
   })
 
   // 绘制每个检测结果
-  results.forEach((result, index) => {
-    console.log(`🖌️ 绘制检测框 ${index + 1}:`, result)
-    
+  results.forEach((result, idx) => {
+    console.log(`🖌️ 绘制检测框 ${idx + 1}:`, result)
+
+    // 处理来自AI服务的不同坐标格式
     if (!result.bbox || result.bbox.length !== 4) {
-      console.warn(`⚠️ 检测框 ${index + 1} bbox数据无效:`, result.bbox)
-      return
+      // 尝试从coordinates字段获取坐标（火焰检测模块使用这个字段）
+      if (result.coordinates && result.coordinates.length === 4) {
+        console.log(`⚙️ 使用coordinates替代bbox字段:`, result.coordinates)
+        result.bbox = result.coordinates
+      } else {
+        console.warn(`⚠️ 检测框 ${idx + 1} 坐标数据无效:`, result)
+        return
+      }
     }
 
     const [x1, y1, x2, y2] = result.bbox
-    
+
     console.log(`📍 AI返回坐标 (相对于原始图像): (${x1}, ${y1}) -> (${x2}, ${y2})`)
 
     // AI服务返回的坐标已经是相对于原始图像的，直接转换到Canvas显示坐标
@@ -1313,7 +1339,7 @@ const drawDetectionResults = (results) => {
     const displayY1 = y1 * scaleY
     const displayX2 = x2 * scaleX
     const displayY2 = y2 * scaleY
-    
+
     console.log(`📍 Canvas显示坐标: (${displayX1}, ${displayY1}) -> (${displayX2}, ${displayY2})`)
 
     const width = displayX2 - displayX1
@@ -1386,10 +1412,10 @@ const drawDetectionResults = (results) => {
     canvasContext.fillStyle = 'white'
     canvasContext.fillText(label, labelX + 4, labelY - 4)
 
-    console.log(`✅ 检测框 ${index + 1} 绘制完成`)
+    console.log(`✅ 检测框 ${idx + 1} 绘制完成`)
   })
 
-  console.log('🎨 所有检测框绘制完成')
+  console.log('🎨 所有检测框绘制完成 为什么框没看到？')
 }
 
 // 测试检测框显示
@@ -1592,6 +1618,14 @@ const getDetectionColor = (type) => {
     fire_detection: '#F56C6C',  // 火焰检测使用红色
     fire: '#F56C6C'             // 火焰也使用红色
   }
+  
+  // 处理以fire开头的类型，确保火焰相关检测始终为红色
+  if (type && (type.startsWith('fire') || type.includes('fire'))) {
+    console.log(`检测到火焰相关类型: ${type}，使用红色`)
+    return '#F56C6C'  // 统一使用红色
+  }
+  
+  console.log(`获取颜色类型: ${type} -> ${colors[type] || '#909399'}`)
   return colors[type] || '#909399'
 }
 
@@ -1605,6 +1639,12 @@ const getDetectionIcon = (type) => {
     fire_detection: '🔥',  // 火焰检测图标
     fire: '🔥'             // 火焰图标
   }
+  
+  // 处理fire相关类型
+  if (type && (type.startsWith('fire') || type.includes('fire'))) {
+    return '🔥'
+  }
+  
   return icons[type] || '🔍'
 }
 
@@ -1832,7 +1872,7 @@ watch(() => aiSettings.realtimeMode, (newVal) => {
 // 监听声音检测开关变化
 watch(() => aiSettings.soundDetection, async (newVal) => {
   console.log(`声音检测${newVal ? '开启' : '关闭'}`)
-  
+
   if (newVal && isStreaming.value && mediaStream && mediaStream.getAudioTracks().length > 0) {
     // 开启声音检测
     try {
@@ -1859,57 +1899,57 @@ const startDrawingZone = () => {
     ElMessage.warning('请先启动摄像头')
     return
   }
-  
+
   isDrawingZone.value = true
   currentZonePoints.value = []
   newZoneName.value = `区域${dangerZones.value.length + 1}`
-  
+
   // 为Canvas添加点击事件监听器
   if (overlayCanvas.value) {
     overlayCanvas.value.style.pointerEvents = 'auto'
     overlayCanvas.value.addEventListener('click', handleCanvasClick)
     overlayCanvas.value.addEventListener('contextmenu', finishDrawing)
   }
-  
+
   ElMessage.info('点击画面绘制区域顶点，右键完成绘制')
 }
 
 // 处理Canvas点击事件
 const handleCanvasClick = (event) => {
   if (!isDrawingZone.value) return
-  
+
   const rect = overlayCanvas.value.getBoundingClientRect()
   const x = event.clientX - rect.left
   const y = event.clientY - rect.top
-  
+
   // 转换为相对于Canvas的坐标
   const canvasX = (x / rect.width) * overlayCanvas.value.width
   const canvasY = (y / rect.height) * overlayCanvas.value.height
-  
+
   currentZonePoints.value.push([canvasX, canvasY])
-  
+
   // 实时绘制当前区域
   drawDangerZones()
-  
+
   console.log(`添加顶点: (${canvasX.toFixed(1)}, ${canvasY.toFixed(1)})`)
 }
 
 // 完成绘制
 const finishDrawing = (event) => {
   event.preventDefault()
-  
+
   if (currentZonePoints.value.length < 3) {
     ElMessage.warning('至少需要3个顶点才能构成区域')
     return
   }
-  
+
   // 移除事件监听器
   if (overlayCanvas.value) {
     overlayCanvas.value.style.pointerEvents = 'none'
     overlayCanvas.value.removeEventListener('click', handleCanvasClick)
     overlayCanvas.value.removeEventListener('contextmenu', finishDrawing)
   }
-  
+
   ElMessage.success(`区域绘制完成，共${currentZonePoints.value.length}个顶点`)
   showZoneManager.value = true
 }
@@ -1918,14 +1958,14 @@ const finishDrawing = (event) => {
 const cancelDrawing = () => {
   isDrawingZone.value = false
   currentZonePoints.value = []
-  
+
   // 移除事件监听器
   if (overlayCanvas.value) {
     overlayCanvas.value.style.pointerEvents = 'none'
     overlayCanvas.value.removeEventListener('click', handleCanvasClick)
     overlayCanvas.value.removeEventListener('contextmenu', finishDrawing)
   }
-  
+
   // 重新绘制已有区域
   drawDangerZones()
 }
@@ -1936,12 +1976,12 @@ const saveDangerZone = () => {
     ElMessage.error('请输入区域名称')
     return
   }
-  
+
   if (currentZonePoints.value.length < 3) {
     ElMessage.error('区域至少需要3个顶点')
     return
   }
-  
+
   const newZone = {
     name: newZoneName.value,
     coordinates: currentZonePoints.value,
@@ -1949,16 +1989,16 @@ const saveDangerZone = () => {
     time_in_area_threshold: newZoneDwellTime.value,
     is_active: true
   }
-  
+
   dangerZones.value.push(newZone)
-  
+
   // 重置绘制状态
   isDrawingZone.value = false
   currentZonePoints.value = []
   newZoneName.value = ''
   newZoneMinDistance.value = 50
   newZoneDwellTime.value = 10
-  
+
   ElMessage.success(`危险区域 "${newZone.name}" 已保存`)
   drawDangerZones()
 }
@@ -1974,20 +2014,20 @@ const removeDangerZone = (index) => {
 // 绘制所有危险区域
 const drawDangerZones = () => {
   if (!canvasContext || !overlayCanvas.value) return
-  
+
   // 先清除Canvas，然后重新绘制检测结果
   canvasContext.clearRect(0, 0, overlayCanvas.value.width, overlayCanvas.value.height)
-  
+
   // 重新绘制检测框
   if (detectionResults.value && detectionResults.value.length > 0) {
     drawDetectionResults(detectionResults.value)
   }
-  
+
   // 绘制已保存的危险区域
   dangerZones.value.forEach((zone, index) => {
     drawZone(zone.coordinates, `#f56c6c`, zone.name, true)
   })
-  
+
   // 绘制正在绘制的区域
   if (currentZonePoints.value.length > 0) {
     drawZone(currentZonePoints.value, `#409EFF`, '新区域', false)
@@ -1997,56 +2037,56 @@ const drawDangerZones = () => {
 // 绘制单个区域
 const drawZone = (points, color, name, isComplete) => {
   if (!canvasContext || points.length === 0) return
-  
+
   canvasContext.save()
-  
+
   // 绘制区域边界
   canvasContext.strokeStyle = color
   canvasContext.lineWidth = 3
   canvasContext.setLineDash(isComplete ? [] : [8, 4])
-  
+
   canvasContext.beginPath()
   canvasContext.moveTo(points[0][0], points[0][1])
-  
+
   for (let i = 1; i < points.length; i++) {
     canvasContext.lineTo(points[i][0], points[i][1])
   }
-  
+
   if (isComplete && points.length > 2) {
     canvasContext.closePath()
-    
+
     // 填充半透明背景
     canvasContext.fillStyle = color + '20' // 添加透明度
     canvasContext.fill()
   }
-  
+
   canvasContext.stroke()
-  
+
   // 绘制顶点
   points.forEach((point, index) => {
     canvasContext.fillStyle = color
     canvasContext.beginPath()
     canvasContext.arc(point[0], point[1], 4, 0, 2 * Math.PI)
     canvasContext.fill()
-    
+
     // 显示顶点序号
     canvasContext.fillStyle = '#ffffff'
     canvasContext.font = '12px Arial'
     canvasContext.textAlign = 'center'
     canvasContext.fillText(index + 1, point[0], point[1] + 4)
   })
-  
+
   // 绘制区域名称
   if (points.length > 0) {
     const centerX = points.reduce((sum, point) => sum + point[0], 0) / points.length
     const centerY = points.reduce((sum, point) => sum + point[1], 0) / points.length
-    
+
     canvasContext.fillStyle = color
     canvasContext.font = 'bold 14px Arial'
     canvasContext.textAlign = 'center'
     canvasContext.fillText(name, centerX, centerY)
   }
-  
+
   canvasContext.restore()
 }
 
@@ -2058,7 +2098,7 @@ const syncZonesToAI = async () => {
       // 使用实际发送给AI的图像尺寸进行坐标转换
       const lastSentSize = window.lastSentImageSize
       let targetWidth, targetHeight
-      
+
       if (lastSentSize) {
         // 使用上次发送的实际图像尺寸
         targetWidth = lastSentSize.width
@@ -2067,7 +2107,7 @@ const syncZonesToAI = async () => {
       } else if (overlayCanvas.value && videoElement.value) {
         // 如果没有上次发送尺寸，计算当前的发送尺寸（与captureFrame逻辑一致）
         const video = videoElement.value
-        
+
         // 获取当前性能状态的缩放比例（模拟captureFrame中的逻辑）
         let scale = 0.8 // 默认缩放比例
         if (performanceStats.avgProcessTime > 400) {
@@ -2079,7 +2119,7 @@ const syncZonesToAI = async () => {
         } else {
           scale = performanceStats.avgProcessTime > 100 ? 0.7 : 0.8
         }
-        
+
         targetWidth = Math.floor(video.videoWidth * scale)
         targetHeight = Math.floor(video.videoHeight * scale)
         console.log(`📐 计算的发送图像尺寸: ${targetWidth}x${targetHeight} (scale=${scale})`)
@@ -2089,26 +2129,26 @@ const syncZonesToAI = async () => {
         targetHeight = 480
         console.log(`⚠️ 使用默认尺寸: ${targetWidth}x${targetHeight}`)
       }
-      
+
       const scaleX = targetWidth / overlayCanvas.value.width
       const scaleY = targetHeight / overlayCanvas.value.height
-      
+
       console.log(`🔄 坐标转换: Canvas(${overlayCanvas.value.width}x${overlayCanvas.value.height}) -> AI(${targetWidth}x${targetHeight})`)
       console.log(`📏 缩放比例: scaleX=${scaleX.toFixed(3)}, scaleY=${scaleY.toFixed(3)}`)
-      
+
       const convertedCoordinates = zone.coordinates.map(([x, y]) => {
         const newX = x * scaleX
         const newY = y * scaleY
         console.log(`   点转换: (${x.toFixed(1)}, ${y.toFixed(1)}) -> (${newX.toFixed(1)}, ${newY.toFixed(1)})`)
         return [newX, newY]
       })
-      
+
       return {
         ...zone,
         coordinates: convertedCoordinates
       }
     })
-    
+
     const response = await requestWithRetry(aiService, {
       method: 'post',
       url: '/danger_zone/config/',
@@ -2117,7 +2157,7 @@ const syncZonesToAI = async () => {
         zones: convertedZones
       }
     })
-    
+
     if (response && response.status === 'success') {
       ElMessage.success('危险区域配置已同步到AI服务')
     } else {
@@ -2530,11 +2570,11 @@ onUnmounted(() => {
   .zone-manager {
     max-height: 400px;
   }
-  
+
   .new-zone-form {
     padding: 15px;
   }
-  
+
   .zone-controls .el-button {
     font-size: 12px;
     padding: 6px 12px;

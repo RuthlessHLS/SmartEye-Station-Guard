@@ -1135,6 +1135,7 @@ def send_result_to_backend(result: AIAnalysisResult):
 
     def task():
         try:
+            print(f"📤 准备发送告警到后端: {result.event_type}")
             # 配置重试策略
             session = requests.Session()
             retries = Retry(
@@ -1165,22 +1166,39 @@ def send_result_to_backend(result: AIAnalysisResult):
             ai_api_key = os.getenv('AI_SERVICE_API_KEY', 'smarteye-ai-service-key-2024')
             headers['X-API-Key'] = ai_api_key
             
+            print(f"🔄 开始请求后端API: POST http://localhost:8000/api/alerts/ai-results/")
+            start_time = time.time()
+            
             # 发送请求
             response = session.post(
                 'http://localhost:8000/api/alerts/ai-results/',  # 修复API路径
                 json=data,
                 headers=headers,
-                timeout=5  # 5秒超时
+                timeout=15  # 增加超时时间到15秒
             )
             
-            if response.status_code == 200:
-                print(f"✅ 成功发送告警到后端: {result.event_type}")
+            elapsed_time = time.time() - start_time
+            print(f"⏱️ 后端响应用时: {elapsed_time:.2f}秒")
+            
+            if response.status_code == 200 or response.status_code == 201:
+                print(f"✅ 成功发送告警到后端: {result.event_type}, HTTP状态: {response.status_code}")
+                try:
+                    print(f"📊 后端响应: {response.json()}")
+                except:
+                    print(f"📝 后端响应内容: {response.text[:100]}")
             else:
                 print(f"❌ 发送告警失败: HTTP {response.status_code}")
                 print(f"响应内容: {response.text}")
 
+        except requests.exceptions.Timeout as e:
+            print(f"⏰ 发送告警超时: {str(e)}")
+            print(f"提示: 检查后端服务是否运行中或负载过高")
+        except requests.exceptions.ConnectionError as e:
+            print(f"🔌 连接错误: {str(e)}")
+            print(f"提示: 检查后端服务是否已启动 (http://localhost:8000)")
         except Exception as e:
             print(f"❌ 发送告警时发生错误: {str(e)}")
+            print(f"错误详情: {traceback.format_exc()}")
             # 记录失败的告警到本地文件
             try:
                 with open('failed_alerts.json', 'a') as f:
@@ -1654,15 +1672,15 @@ async def analyze_frame(
                 
                 print(f"火焰检测结果: 检测到{len(fire_results)}个火焰/烟雾对象")
                 for idx, fire_obj in enumerate(fire_results):
-                    print(f"  火焰对象 #{idx+1}: 类型={fire_obj['type']}, 类别={fire_obj['class_name']}, 置信度={fire_obj['confidence']:.3f}")
+                    print(f"  火焰对象 #{idx+1}: 类型={fire_obj['detection_type'] if 'detection_type' in fire_obj else fire_obj['type']}, 类别={fire_obj['class_name']}, 置信度={fire_obj['confidence']:.3f}")
                 
                 for fire_obj in fire_results:
                     # 确保坐标转换为Python原生int类型
                     bbox = [int(float(coord)) for coord in fire_obj["coordinates"]]
                     detection = {
-                        "type": "fire_detection",
+                        "type": "fire_detection",  # 确保类型一致
                         "class_name": fire_obj["class_name"],
-                        "detection_type": fire_obj["type"],
+                        "detection_type": fire_obj.get("detection_type", "fire"),  # 使用detection_type或默认为fire
                         "confidence": float(fire_obj["confidence"]),
                         "bbox": bbox,
                         "timestamp": datetime.now().isoformat()
@@ -1671,8 +1689,8 @@ async def analyze_frame(
                     
                     # 生成火灾告警
                     alert = {
-                        "type": f"fire_{fire_obj['type']}",
-                        "message": f"检测到{fire_obj['type']}: {fire_obj['class_name']} (置信度: {fire_obj['confidence']:.2f})",
+                        "type": f"fire_{fire_obj.get('detection_type', 'fire')}",  # 使用detection_type或默认为fire
+                        "message": f"检测到{fire_obj.get('detection_type', 'fire')}: {fire_obj['class_name']} (置信度: {fire_obj['confidence']:.2f})",
                         "confidence": float(fire_obj["confidence"]),
                         "location": bbox
                     }
@@ -1681,12 +1699,12 @@ async def analyze_frame(
                     # 异步发送到后端
                     backend_alert = AIAnalysisResult(
                         camera_id=camera_id,
-                        event_type=f"fire_detection_{fire_obj['type']}",
+                        event_type=f"fire_detection_{fire_obj.get('detection_type', 'fire')}",
                         location={"box": bbox},
                         confidence=float(fire_obj["confidence"]),
                         timestamp=datetime.now().isoformat(),
                         details={
-                            "detection_type": fire_obj["type"],
+                            "detection_type": fire_obj.get("detection_type", "fire"),
                             "object_type": fire_obj["class_name"],
                             "realtime_detection": True
                         }
