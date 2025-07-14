@@ -1,23 +1,40 @@
 <template>
   <div class="face-login-container">
     <div class="face-login-card">
-      <h2>人脸识别登录</h2>
-      
+      <h2 class="title">人脸识别登录</h2>
+      <p class="subtitle">请将面部对准摄像头，并按提示操作</p>
+
       <!-- 视频预览区域 -->
-      <div class="video-container">
-        <video ref="videoElement" autoplay muted playsinline></video>
-        <canvas ref="canvasElement" class="detection-canvas"></canvas>
-        
-        <!-- 活体检测指示和提示 -->
-        <div v-if="isDetecting" class="detection-overlay">
-          <div class="detection-prompt">
-            {{ currentPrompt }}
+      <div class="video-wrapper">
+        <video ref="videoElement" autoplay muted playsinline class="video-feed"></video>
+        <div class="video-overlay">
+          <div class="face-guide-frame"></div>
+          
+          <!-- 状态提示 -->
+          <div v-if="statusMessage" class="status-prompt" :class="statusClass">
+             <i v-if="statusIcon" class="status-icon" :class="statusIcon"></i>
+            {{ statusMessage }}
           </div>
-          <div class="detection-progress">
-            <div class="progress-bar" :style="{ width: `${detectionProgress}%` }"></div>
+          
+          <!-- 倒计时 -->
+          <div v-if="isVerifying" class="countdown-circle">
+            <svg class="countdown-svg" viewBox="0 0 36 36">
+              <path class="circle-bg"
+                d="M18 2.0845
+                  a 15.9155 15.9155 0 0 1 0 31.831
+                  a 15.9155 15.9155 0 0 1 0 -31.831"
+              />
+              <path class="circle"
+                :stroke-dasharray="countdownProgress + ', 100'"
+                d="M18 2.0845
+                  a 15.9155 15.9155 0 0 1 0 31.831
+                  a 15.9155 15.9155 0 0 1 0 -31.831"
+              />
+            </svg>
+            <div class="countdown-text">{{ countdown.toFixed(1) }}s</div>
           </div>
         </div>
-
+        
         <!-- 加载状态 -->
         <div v-if="loading" class="loading-overlay">
           <div class="spinner"></div>
@@ -27,191 +44,291 @@
 
       <!-- 操作按钮 -->
       <div class="action-buttons">
-        <button 
-          @click="startDetection" 
-          :disabled="isDetecting || loading"
-          class="primary-button"
+        <el-button 
+          type="primary"
+          @click="startVerification" 
+          :disabled="isVerifying || loading"
+          :loading="loading"
+          size="large"
+          round
         >
-          开始识别
-        </button>
-        <button @click="goToPasswordLogin" class="secondary-button">
-          使用密码登录
-        </button>
+          {{ verificationButtonText }}
+        </el-button>
+        <el-button @click="goToPasswordLogin" link>使用密码登录</el-button>
       </div>
 
       <!-- 错误信息 -->
-      <div v-if="errorMessage" class="error-message">
-        {{ errorMessage }}
-      </div>
+       <el-alert
+        v-if="errorMessage"
+        :title="errorMessage"
+        type="error"
+        show-icon
+        :closable="false"
+        class="error-alert"
+      />
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue';
+import { ref, onMounted, onUnmounted, computed } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
-import api from '@/api';
+import { ElMessage, ElAlert, ElButton } from 'element-plus';
 
-// 路由和状态管理
 const router = useRouter();
 const authStore = useAuthStore();
-
-// DOM引用
 const videoElement = ref(null);
-const canvasElement = ref(null);
 
-// 状态变量
 const stream = ref(null);
-const isDetecting = ref(false);
-const loading = ref(false);
-const loadingMessage = ref('');
+const websocket = ref(null);
+const loading = ref(true); // 初始为true，等待摄像头
+const loadingMessage = ref('正在初始化摄像头...');
 const errorMessage = ref('');
-const currentPrompt = ref('请正视摄像头');
-const detectionProgress = ref(0);
+const statusMessage = ref('准备就绪');
+const isVerifying = ref(false);
 
-// --- 活体检测强化: 随机化动作序列 ---
-let livenessFrames = []; // 用于存储活体检测的帧
+const countdown = ref(7.0);
+const countdownTimer = ref(null);
+const frameRequestID = ref(null);
 
-const actionPool = [
-  { prompt: '请眨眨眼睛', duration: 2500 },
-  { prompt: '请向左转头', duration: 2500 },
-  { prompt: '请向右转头', duration: 2500 },
-  { prompt: '请张张嘴', duration: 2000 },
-];
+const verificationButtonText = computed(() => {
+  if(loading.value) return '准备中...';
+  if(isVerifying.value) return '正在验证...';
+  if(errorMessage.value) return '重新尝试';
+  return '开始人脸识别';
+});
 
-const shuffleArray = (array) => {
-  for (let i = array.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [array[i], array[j]] = [array[j], array[i]];
+const statusInfo = computed(() => {
+  switch (statusMessage.value) {
+    case '请眨眼':
+    case '请左右摇头':
+    case '请上下点头':
+    case '请张开您的嘴巴':
+      return { class: 'challenge', icon: 'el-icon-bell' };
+    case '验证成功！正在登录...':
+    case '活体检测通过，正在进行身份识别...':
+      return { class: 'success', icon: 'el-icon-circle-check' };
+    case '识别失败':
+    case '验证超时':
+    case '活体检测失败':
+      return { class: 'error', icon: 'el-icon-circle-close' };
+    default:
+      return { class: 'info', icon: 'el-icon-info-filled' };
   }
-  return array;
-}
+});
 
-let detectionSteps = [];
+const statusClass = computed(() => statusInfo.value.class);
+const statusIcon = computed(() => statusInfo.value.icon);
 
-const generateDetectionSteps = () => {
-  const shuffledActions = shuffleArray([...actionPool]);
-  const selectedActions = shuffledActions.slice(0, 3); // 始终随机选择3个动作
 
-  detectionSteps = [
-    { prompt: '请正视摄像头', duration: 2000 },
-    ...selectedActions
-  ];
-};
-// --- 活体检测强化结束 ---
-
-const currentStepIndex = ref(0);
-let detectionTimer = null;
+const countdownProgress = computed(() => {
+  // 确保countdown.value不大于总时长，避免UI超出
+  const totalDuration = 15.0; // 后端总会话超时时间
+  return (Math.max(0, countdown.value) / totalDuration) * 100;
+});
 
 const initCamera = async () => {
   try {
     loading.value = true;
     loadingMessage.value = '正在初始化摄像头...';
+    errorMessage.value = '';
     stream.value = await navigator.mediaDevices.getUserMedia({
       video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' }
     });
     if (videoElement.value) {
       videoElement.value.srcObject = stream.value;
     }
-    loading.value = false;
+    statusMessage.value = '摄像头准备就绪';
   } catch (error) {
-    errorMessage.value = '无法访问摄像头，请确保已授予摄像头权限';
+    errorMessage.value = '无法访问摄像头，请检查权限';
+    statusMessage.value = '摄像头访问失败';
+    console.error(error);
+  } finally {
     loading.value = false;
   }
 };
 
-const startDetection = () => {
+const startVerification = () => {
   if (!stream.value) {
-    initCamera();
+    ElMessage.warning('摄像头尚未准备好');
     return;
   }
-  generateDetectionSteps();
-  errorMessage.value = '';
-  isDetecting.value = true;
-  currentStepIndex.value = 0;
-  detectionProgress.value = 0;
-  livenessFrames = [];
-  currentPrompt.value = detectionSteps[0].prompt;
-  runDetectionStep();
+  
+  resetState();
+  isVerifying.value = true;
+  statusMessage.value = '正在连接服务器...';
+
+  const wsUrl = `ws://${window.location.hostname}:8001/ws/face_verification`;
+  websocket.value = new WebSocket(wsUrl);
+
+  websocket.value.onopen = () => {
+    statusMessage.value = '连接成功，准备接收挑战...';
+    // 不再立即开始发送帧，等待服务器指令
+  };
+
+  websocket.value.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+
+    switch(data.status) {
+      case 'challenge':
+        statusMessage.value = data.message;
+        isVerifying.value = true; // 开始验证流程
+        startCountdown(); // <--- FIX: Start the countdown timer on new challenge
+        
+        // 接收到挑战后，开始发送视频帧
+        if (!frameRequestID.value) {
+          startStreamingFrames(); 
+        }
+        break;
+      case 'info':
+        // 显示服务器的提示信息，但不改变核心状态
+        statusMessage.value = data.message;
+        break;
+      case 'verifying':
+        // 活体检测成功，准备发送最后一帧
+        statusMessage.value = data.message;
+        stopStreamingFrames(); // 停止发送连续帧
+        sendFinalFrame(); // 发送高质量单帧进行识别
+        break;
+      case 'success':
+        statusMessage.value = "验证成功！正在登录...";
+        stopVerification();
+        authStore.handleSuccessfulLogin({
+          access: data.access,
+          refresh: data.refresh,
+          user: data.user
+        }).then(() => {
+          router.push('/dashboard');
+        });
+        break;
+      case 'failed':
+        errorMessage.value = data.message || '验证失败，请重试';
+        statusMessage.value = data.message.startsWith('活体检测失败') ? '活体检测失败' : '识别失败';
+        stopVerification();
+        break;
+    }
+  };
+
+  websocket.value.onerror = (error) => {
+    console.error('WebSocket Error:', error);
+    errorMessage.value = '连接验证服务器失败，请检查网络或联系管理员。';
+    stopVerification();
+  };
+
+  websocket.value.onclose = () => {
+    console.log('WebSocket connection closed.');
+    stopVerification(false); // only stop timers, don't reset state if it's already done
+  };
 };
 
-const captureFrame = () => {
-  if (!videoElement.value) return null;
-  const canvas = canvasElement.value;
-  const video = videoElement.value;
-  const context = canvas.getContext('2d');
-  canvas.width = video.videoWidth;
-  canvas.height = video.videoHeight;
-  context.drawImage(video, 0, 0, canvas.width, canvas.height);
-  return canvas.toDataURL('image/jpeg').split(',')[1];
-}
-
-const runDetectionStep = () => {
-  const currentStep = detectionSteps[currentStepIndex.value];
-  const stepDuration = currentStep.duration;
-
-  // 用setTimeout代替setInterval，确保动作完成后再捕获
-  detectionTimer = setTimeout(() => {
-    const frameData = captureFrame();
-    if (frameData) {
-      livenessFrames.push({
-        action: currentStep.prompt,
-        image_data: frameData,
-        timestamp: Date.now() // 添加时间戳
-      });
-    }
-
-    detectionProgress.value = ((currentStepIndex.value + 1) / detectionSteps.length) * 100;
-    
-    currentStepIndex.value++;
-    if (currentStepIndex.value < detectionSteps.length) {
-      currentPrompt.value = detectionSteps[currentStepIndex.value].prompt;
-      runDetectionStep();
+// --- FIX: Add countdown logic ---
+const startCountdown = () => {
+  // 清除之前的计时器
+  if (countdownTimer.value) {
+    clearInterval(countdownTimer.value);
+  }
+  // 从后端会话总时长开始倒计时
+  countdown.value = 15.0; 
+  
+  countdownTimer.value = setInterval(() => {
+    if (countdown.value > 0) {
+      countdown.value -= 0.1;
     } else {
-      performFaceRecognition();
+      // 即使前端倒计时结束，也由后端来最终决定超时
+      // 这里只停止前端计时器
+      stopVerification(true);
     }
-  }, stepDuration);
+  }, 100);
 };
 
-const performFaceRecognition = async () => {
-  try {
-    loading.value = true;
-    loadingMessage.value = '正在进行安全验证...';
-    isDetecting.value = false;
-    
-    if (livenessFrames.length < detectionSteps.length) {
-      errorMessage.value = "未能捕获所有活体检测图像，请重试。";
-      loading.value = false;
+
+const startStreamingFrames = () => {
+  const canvas = document.createElement('canvas');
+  const context = canvas.getContext('2d');
+  
+  const sendFrame = () => {
+    if (!isVerifying.value || !videoElement.value || websocket.value?.readyState !== WebSocket.OPEN) {
+      if (frameRequestID.value) {
+        cancelAnimationFrame(frameRequestID.value);
+        frameRequestID.value = null;
+      }
       return;
     }
     
-    const primaryImage = livenessFrames[0].image_data;
+    canvas.width = videoElement.value.videoWidth;
+    canvas.height = videoElement.value.videoHeight;
+    context.drawImage(videoElement.value, 0, 0, canvas.width, canvas.height);
     
-    const response = await api.auth.verifyFace({
-      primary_image: primaryImage,
-      liveness_frames: livenessFrames
-    });
-    
-    if (response && response.data && response.data.success) {
-      await authStore.login({
-        access_token: response.data.token,
-        refresh_token: response.data.refresh_token,
-        user: response.data.user,
-        face_auth: true
-      });
-      router.push('/dashboard');
-    } else {
-      errorMessage.value = (response && response.data && response.data.message) || '人脸识别失败，请重试';
-      loading.value = false;
+    canvas.toBlob((blob) => {
+      if (blob && websocket.value?.readyState === WebSocket.OPEN) {
+        // 发送为二进制数据
+        websocket.value.send(blob);
+      }
+    }, 'image/jpeg', 0.8); // 提高一点图像质量
+
+    frameRequestID.value = requestAnimationFrame(sendFrame);
+  };
+  
+  frameRequestID.value = requestAnimationFrame(sendFrame);
+};
+
+const stopStreamingFrames = () => {
+  if (frameRequestID.value) {
+    cancelAnimationFrame(frameRequestID.value);
+    frameRequestID.value = null;
+  }
+};
+
+const sendFinalFrame = () => {
+  const canvas = document.createElement('canvas');
+  const context = canvas.getContext('2d');
+  
+  if (!videoElement.value) return;
+
+  canvas.width = videoElement.value.videoWidth;
+  canvas.height = videoElement.value.videoHeight;
+  context.drawImage(videoElement.value, 0, 0, canvas.width, canvas.height);
+  
+  canvas.toBlob((blob) => {
+    if (blob && websocket.value?.readyState === WebSocket.OPEN) {
+      websocket.value.send(blob);
     }
-  } catch (error) {
-    let errorMsg = '人脸识别过程中发生错误，请重试';
-    if (error.response && error.response.data && error.response.data.message) {
-      errorMsg = error.response.data.message;
+  }, 'image/jpeg', 0.95); // 发送高质量最终帧
+};
+
+
+const stopVerification = (reset = true) => {
+  isVerifying.value = false;
+  stopStreamingFrames();
+  
+  if (countdownTimer.value) {
+    clearInterval(countdownTimer.value);
+    countdownTimer.value = null;
+  }
+
+  if (websocket.value) {
+    // 检查状态，避免在已关闭时再次关闭
+    if (websocket.value.readyState === WebSocket.OPEN) {
+      websocket.value.close();
     }
-    errorMessage.value = errorMsg;
-    loading.value = false;
+    websocket.value = null;
+  }
+  
+  if(reset) {
+    // 保留错误信息给用户看
+    // errorMessage.value = '';
+  }
+};
+
+const resetState = () => {
+  errorMessage.value = '';
+  statusMessage.value = '准备就绪';
+  isVerifying.value = false;
+  countdown.value = 15.0; // 重置为总时长
+  if (countdownTimer.value) {
+    clearInterval(countdownTimer.value);
+    countdownTimer.value = null;
   }
 };
 
@@ -219,16 +336,16 @@ const goToPasswordLogin = () => {
   router.push('/login');
 };
 
-const cleanup = () => {
-  if (detectionTimer) clearTimeout(detectionTimer);
+onMounted(() => {
+  initCamera();
+});
+
+onUnmounted(() => {
+  stopVerification();
   if (stream.value) {
     stream.value.getTracks().forEach(track => track.stop());
-    stream.value = null;
   }
-};
-
-onMounted(initCamera);
-onUnmounted(cleanup);
+});
 </script>
 
 <style scoped>
@@ -237,50 +354,52 @@ onUnmounted(cleanup);
   justify-content: center;
   align-items: center;
   min-height: 100vh;
-  background-color: #f0f2f5;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
 }
 
 .face-login-card {
-  background: #fff;
-  border-radius: 8px;
-  padding: 30px;
-  width: 400px;
-  box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(10px);
+  border-radius: 16px;
+  padding: 40px;
+  width: 420px;
+  box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
   text-align: center;
+  border: 1px solid rgba(255, 255, 255, 0.18);
 }
 
-.face-login-card h2 {
-  margin-bottom: 20px;
+.title {
+  font-size: 24px;
+  font-weight: 600;
   color: #333;
+  margin-bottom: 8px;
 }
 
-.video-container {
+.subtitle {
+  font-size: 14px;
+  color: #666;
+  margin-bottom: 24px;
+}
+
+.video-wrapper {
   position: relative;
   width: 100%;
-  height: 300px;
-  background-color: #000;
-  border-radius: 8px;
+  aspect-ratio: 4 / 3;
+  background-color: #111;
+  border-radius: 12px;
   overflow: hidden;
-  margin-bottom: 20px;
+  margin-bottom: 24px;
+  box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
 }
 
-video {
+.video-feed {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  transform: scaleX(-1); /* 镜像翻转，符合用户照镜子的习惯 */
 }
 
-.detection-canvas {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-}
-
-.detection-overlay {
+.video-overlay {
   position: absolute;
   top: 0;
   left: 0;
@@ -290,29 +409,82 @@ video {
   flex-direction: column;
   justify-content: center;
   align-items: center;
-  background-color: rgba(0, 0, 0, 0.3);
+  pointer-events: none;
+}
+
+.face-guide-frame {
+  width: 65%;
+  height: 85%;
+  border: 4px solid rgba(255, 255, 255, 0.8);
+  border-radius: 50% / 40%;
+  box-shadow: 0 0 0 999px rgba(0, 0, 0, 0.5);
+  animation: pulse 2s infinite ease-in-out;
+}
+
+@keyframes pulse {
+  0% { border-color: rgba(255, 255, 255, 0.8); }
+  50% { border-color: rgba(68, 133, 255, 0.9); }
+  100% { border-color: rgba(255, 255, 255, 0.8); }
+}
+
+.status-prompt {
+  position: absolute;
+  bottom: 20px;
+  background: rgba(0, 0, 0, 0.7);
   color: white;
+  padding: 8px 16px;
+  border-radius: 20px;
+  font-size: 16px;
+  font-weight: 500;
+  transition: all 0.3s ease;
 }
 
-.detection-prompt {
-  font-size: 20px;
-  font-weight: bold;
-  margin-bottom: 20px;
-  text-shadow: 0 0 5px rgba(0, 0, 0, 0.5);
+.status-prompt.success { background: #67C23A; }
+.status-prompt.error { background: #F56C6C; }
+.status-prompt.challenge {
+  background-color: rgba(230, 162, 60, 0.8); /* 橙色背景以示挑战 */
 }
 
-.detection-progress {
-  width: 80%;
-  height: 10px;
-  background-color: rgba(255, 255, 255, 0.3);
-  border-radius: 5px;
-  overflow: hidden;
+.status-prompt.info {
+  background-color: rgba(64, 158, 255, 0.8); /* 蓝色背景作为提示 */
 }
 
-.progress-bar {
+.countdown-circle {
+  position: absolute;
+  top: 15px;
+  right: 15px;
+  width: 50px;
+  height: 50px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.countdown-svg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
   height: 100%;
-  background-color: #1890ff;
-  transition: width 0.3s;
+  transform: rotate(-90deg);
+}
+.circle-bg {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.2);
+  stroke-width: 3.8;
+}
+.circle {
+  fill: none;
+  stroke: #409eff;
+  stroke-width: 4;
+  stroke-linecap: round;
+  transition: stroke-dasharray 0.1s linear;
+}
+
+.countdown-text {
+  color: white;
+  font-size: 16px;
+  font-weight: bold;
 }
 
 .loading-overlay {
@@ -321,70 +493,34 @@ video {
   left: 0;
   width: 100%;
   height: 100%;
+  background: rgba(0,0,0,0.6);
   display: flex;
   flex-direction: column;
   justify-content: center;
   align-items: center;
-  background-color: rgba(0, 0, 0, 0.7);
   color: white;
 }
 
 .spinner {
   border: 4px solid rgba(255, 255, 255, 0.3);
-  border-top: 4px solid #fff;
+  border-left-color: #fff;
   border-radius: 50%;
   width: 40px;
   height: 40px;
   animation: spin 1s linear infinite;
-  margin-bottom: 15px;
+  margin-bottom: 10px;
 }
-
 @keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
+  to { transform: rotate(360deg); }
 }
 
 .action-buttons {
   display: flex;
-  justify-content: center;
-  gap: 15px;
-  margin-bottom: 20px;
+  flex-direction: column;
+  gap: 12px;
 }
 
-.primary-button, .secondary-button {
-  padding: 10px 20px;
-  border-radius: 4px;
-  font-size: 16px;
-  cursor: pointer;
-  transition: all 0.3s;
-  border: none;
-}
-
-.primary-button {
-  background-color: #1890ff;
-  color: white;
-}
-
-.primary-button:hover {
-  background-color: #40a9ff;
-}
-
-.primary-button:disabled {
-  background-color: #b3d9ff;
-  cursor: not-allowed;
-}
-
-.secondary-button {
-  background-color: #f0f0f0;
-  color: #666;
-}
-
-.secondary-button:hover {
-  background-color: #e0e0e0;
-}
-
-.error-message {
-  color: #f56c6c;
-  margin-top: 15px;
+.error-alert {
+  margin-top: 20px;
 }
 </style> 

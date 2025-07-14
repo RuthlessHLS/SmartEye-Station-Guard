@@ -246,6 +246,23 @@ const api = {
         method: 'post'
       });
     },
+    verifyFace: (data) => {
+      return requestWithRetry(aiService, {
+        url: '/face/verify',
+        method: 'post',
+        data: data
+      });
+    },
+    registerFace: (formData) => {
+      return requestWithRetry(aiService, {
+        url: '/face/register/',
+        method: 'post',
+        data: formData,
+        headers: {
+          'Content-Type': 'multipart/form-data'
+        }
+      });
+    },
     updateSettings: (camera_id, settings) => {
       return requestWithRetry(aiService, {
         url: `/frame/analyze/settings/${camera_id}`,

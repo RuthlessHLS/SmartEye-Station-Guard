@@ -20,6 +20,7 @@ from .views import (
     PasswordChangeView,
     AvatarUpdateView
 )
+from .internal_views import InternalLoginAPIView
 
 router = DefaultRouter()
 router.register(r'directory', UsersDirectoryViewSet, basename='user-directory')
@@ -29,6 +30,7 @@ router.register(r'registered-faces', RegisteredFaceViewSet, basename='registered
 urlpatterns = [
     # 认证相关路由
     path('login/', UserLoginAPIView.as_view(), name='user-login'),
+    path('login/internal/', InternalLoginAPIView.as_view(), name='internal-login'),
     path('token/', MyTokenObtainPairView.as_view(), name='token-obtain'),
     path('token/refresh/', TokenRefreshView.as_view(), name='token-refresh'),
     

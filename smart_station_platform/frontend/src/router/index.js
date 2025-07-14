@@ -1,6 +1,7 @@
 
-import { createRouter, createWebHistory } from 'vue-router'
+import { createRouter, createWebHashHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { setupHistoryFallback } from './history-fallback'
 
 // 导入视图组件
 import Login from '../views/Login.vue'
@@ -13,10 +14,11 @@ import DataScreen from '../views/DataScreen.vue'
 import UserManagement from '../views/UserManagement.vue'
 import UserProfile from '../views/UserProfile.vue'
 import FaceRegistration from '../views/FaceRegistration.vue'
+import FaceLogin from '../views/FaceLogin.vue'
 
 
 const router = createRouter({
-  history: createWebHistory(import.meta.env.BASE_URL),
+  history: createWebHashHistory(import.meta.env.BASE_URL),
   routes: [
     // --- 根路径重定向 ---
     {
@@ -38,6 +40,15 @@ const router = createRouter({
       path: '/register',
       name: 'Register',
       component: Register,
+      meta: {
+        requiresAuth: false,
+        layout: 'auth' // 指定使用 auth 布局
+      }
+    },
+    {
+      path: '/face-login',
+      name: 'FaceLogin',
+      component: FaceLogin,
       meta: {
         requiresAuth: false,
         layout: 'auth' // 指定使用 auth 布局
@@ -116,4 +127,5 @@ router.beforeEach((to, from, next) => {
   }
 });
 
-export default router;
+// 应用历史模式回退处理
+export default setupHistoryFallback(router);

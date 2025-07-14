@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HLS 播放测试</title>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        video {
+            width: 100%;
+            max-height: 500px;
+            background: #000;
+        }
+        .controls {
+            margin: 20px 0;
+        }
+        button {
+            padding: 8px 16px;
+            margin-right: 10px;
+        }
+        input {
+            padding: 8px;
+            width: 60%;
+        }
+    </style>
+</head>
+<body>
+    <h1>HLS 直播测试</h1>
+    
+    <div class="video-container">
+        <video id="video" controls></video>
+    </div>
+    
+    <div class="controls">
+        <input type="text" id="stream-url" value="http://localhost:8080/hls/test.m3u8">
+        <button id="load-btn">加载流</button>
+        <button id="reload-btn">重新加载</button>
+    </div>
+    
+    <div class="log">
+        <h3>日志：</h3>
+        <pre id="log-area"></pre>
+    </div>
+    
+    <script>
+        const video = document.getElementById('video');
+        const streamUrlInput = document.getElementById('stream-url');
+        const loadBtn = document.getElementById('load-btn');
+        const reloadBtn = document.getElementById('reload-btn');
+        const logArea = document.getElementById('log-area');
+        
+        let hls = null;
+        
+        function log(msg) {
+            console.log(msg);
+            logArea.textContent += new Date().toLocaleTimeString() + ": " + msg + "\n";
+        }
+        
+        function loadStream(url) {
+            if (hls) {
+                hls.destroy();
+                hls = null;
+            }
+            
+            if (Hls.isSupported()) {
+                log(`加载流: ${url}`);
+                
+                hls = new Hls({
+                    debug: true,
+                    enableWorker: true,
+                    lowLatencyMode: false,
+                    xhrSetup: function(xhr) {
+                        xhr.withCredentials = false;
+                    }
+                });
+                
+                hls.loadSource(url);
+                hls.attachMedia(video);
+                
+                hls.on(Hls.Events.MEDIA_ATTACHED, function() {
+                    log("媒体附加成功");
+                    video.play();
+                });
+                
+                hls.on(Hls.Events.MANIFEST_PARSED, function(event, data) {
+                    log(`解析清单成功, 发现 ${data.levels.length} 个质量级别`);
+                });
+                
+                hls.on(Hls.Events.ERROR, function(event, data) {
+                    log(`错误: ${data.type}, 详情: ${data.details}`);
+                    
+                    if (data.fatal) {
+                        switch(data.type) {
+                            case Hls.ErrorTypes.NETWORK_ERROR:
+                                log("网络错误，尝试恢复...");
+                                hls.startLoad();
+                                break;
+                            case Hls.ErrorTypes.MEDIA_ERROR:
+                                log("媒体错误，尝试恢复...");
+                                hls.recoverMediaError();
+                                break;
+                            default:
+                                log("无法恢复的错误");
+                                hls.destroy();
+                                break;
+                        }
+                    }
+                });
+                
+            } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                log("使用原生HLS支持");
+                video.src = url;
+                video.addEventListener('loadedmetadata', function() {
+                    video.play();
+                });
+            } else {
+                log("您的浏览器不支持HLS");
+            }
+        }
+        
+        loadBtn.addEventListener('click', function() {
+            loadStream(streamUrlInput.value);
+        });
+        
+        reloadBtn.addEventListener('click', function() {
+            loadStream(streamUrlInput.value);
+        });
+        
+        // 初始加载
+        loadStream(streamUrlInput.value);
+    </script>
+</body>
+</html> 

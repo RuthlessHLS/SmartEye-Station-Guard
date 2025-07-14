@@ -17,11 +17,13 @@ import numpy as np
 import uvicorn
 import requests
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Body, File, UploadFile, Form, Query, Request, Depends
+from fastapi import FastAPI, HTTPException, Body, File, UploadFile, Form, Query, Request, Depends, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, ConfigDict
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from starlette.websockets import WebSocketState
+import httpx # 确保导入 httpx
 
 # 导入我们自定义的所有核心AI模块和模型
 import sys
@@ -31,20 +33,87 @@ logger = logging.getLogger(__name__)
 # 将当前目录添加到Python路径，确保可以导入核心模块
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from core.video_stream import VideoStream
-from core.object_detection import ObjectDetector
-from core.behavior_detection import BehaviorDetector
-from core.face_recognition import FaceRecognizer
-from core.fire_smoke_detection import FlameSmokeDetector
-from core.multi_object_tracker import DeepSORTTracker
-from core.danger_zone_detection import DangerZoneDetector
-from models.alert_models import AIAnalysisResult, CameraConfig, SystemStatus  # 确保这些文件存在且结构正确
-from core.acoustic_detection import AcousticEventDetector
-from core.fire_smoke_detection import FlameSmokeDetector
-from core.multi_object_tracker import DeepSORTTracker
-from core.danger_zone_detection import danger_zone_detector
-from core.object_detection import ObjectDetector
-from core.danger_zone_detection import DangerZoneDetector
+from smart_station_platform.ai_service.core.video_stream import VideoStream
+from smart_station_platform.ai_service.core.object_detection import ObjectDetector
+from smart_station_platform.ai_service.core.behavior_detection import BehaviorDetector
+from smart_station_platform.ai_service.core.face_recognition import FaceRecognizer
+from smart_station_platform.ai_service.core.fire_smoke_detection import FlameSmokeDetector
+from smart_station_platform.ai_service.core.multi_object_tracker import DeepSORTTracker
+from smart_station_platform.ai_service.core.danger_zone_detection import DangerZoneDetector
+from smart_station_platform.ai_service.core.liveness_detector import LivenessSession
+from smart_station_platform.ai_service.models.alert_models import AIAnalysisResult, CameraConfig, SystemStatus
+from smart_station_platform.ai_service.core.acoustic_detection import AcousticEventDetector
+
+# --- 全局变量和模型初始化 ---
+# 获取当前文件 (app.py) 的绝对路径
+current_file_path = os.path.dirname(os.path.abspath(__file__))
+# 构建 'assets' 目录的绝对路径
+assets_path = os.path.join(current_file_path, 'assets')
+known_faces_path = os.path.join(assets_path, 'known_faces')
+# --- FIX: Add explicit path for the YOLO model ---
+yolo_model_path = os.path.join(assets_path, 'models', 'torch', 'yolov8n.pt')
+
+
+# 初始化人脸识别模块，并传入资源路径
+try:
+    face_recognizer = FaceRecognizer(known_faces_dir=known_faces_path, asset_base_path=assets_path)
+    # FIX: LivenessDetector does not exist, and is not needed for initialization.
+    # liveness_detector is created per-session inside the WebSocket endpoint.
+    if not hasattr(face_recognizer, 'dlib_detector') or not face_recognizer.dlib_detector:
+        logger.error("人脸识别模块的 dlib 组件初始化失败，活体检测功能将受限。")
+except Exception as e:
+    logger.error(f"初始化 face_recognizer 时发生严重错误: {e}", exc_info=True)
+    face_recognizer = None
+
+
+# FIX: Corrected class name for the fire detector and provide full model path
+try:
+    if os.path.exists(yolo_model_path):
+        fire_detector = FlameSmokeDetector(model_path=yolo_model_path) 
+    else:
+        logger.error(f"YOLO model not found at {yolo_model_path}. Fire detector will be disabled.")
+        fire_detector = None
+except Exception as e:
+    logger.error(f"初始化 fire_detector 时发生严重错误: {e}", exc_info=True)
+    fire_detector = None
+    
+try:
+    # --- FINAL FIX: Load class names from the file and then initialize the detector ---
+    coco_names_path = os.path.join(assets_path, 'models', 'coco.names')
+    if os.path.exists(yolo_model_path) and os.path.exists(coco_names_path):
+        with open(coco_names_path, 'r', encoding='utf-8') as f:
+            coco_class_names = [line.strip() for line in f.readlines()]
+        
+        logger.info(f"成功从 {coco_names_path} 加载 {len(coco_class_names)} 个类别名称。")
+        
+        object_detector = ObjectDetector(
+            model_weights_path=yolo_model_path,
+            num_classes=len(coco_class_names),
+            class_names=coco_class_names
+        )
+    else:
+        if not os.path.exists(yolo_model_path):
+            logger.error(f"YOLO model not found at {yolo_model_path}. Object detector will be disabled.")
+        if not os.path.exists(coco_names_path):
+            logger.error(f"COCO names file not found at {coco_names_path}. Object detector will be disabled.")
+        object_detector = None
+except Exception as e:
+    logger.error(f"初始化 object_detector 时发生严重错误: {e}", exc_info=True)
+    object_detector = None
+    
+try:
+    # FIX: MultiObjectTracker does not exist. We should use DeepSORTTracker.
+    # Note: DeepSORTTracker itself is a wrapper for a simpler tracker in your code.
+    tracker = DeepSORTTracker()
+except Exception as e:
+    logger.error(f"初始化 tracker 时发生严重错误: {e}", exc_info=True)
+    tracker = None
+
+try:
+    danger_zone_detector = DangerZoneDetector()
+except Exception as e:
+    logger.error(f"初始化 danger_zone_detector 时发生严重错误: {e}", exc_info=True)
+    danger_zone_detector = None
 
 
 # --- 配置管理 ---
@@ -83,7 +152,13 @@ DETECTION_FRAME_SKIP = 5  # 每5帧处理一次检测，减少CPU/GPU负载
 class AIServiceManager:
     def __init__(self, config: AppConfig):
         self.config = config
-        self._detectors: Dict[str, Any] = {}  # 存储所有AI检测器实例
+        self._detectors: Dict[str, Any] = {
+            "object": object_detector,
+            "fire": fire_detector,
+            "face": face_recognizer,
+            "behavior": BehaviorDetector(),
+            "acoustic": AcousticEventDetector() if config.ENABLE_SOUND_DETECTION else None,
+        }
         self._video_streams: Dict[str, VideoStream] = {}  # 存储活跃的VideoStream实例
         self._object_trackers: Dict[str, DeepSORTTracker] = {}  # 存储每个摄像头的DeepSORT追踪器
         self._detection_cache: Dict[str, Dict] = {}  # 存储每个摄像头的检测稳定化缓存
@@ -131,7 +206,10 @@ class AIServiceManager:
 
             # 3. 初始化人脸识别器
             print(f"正在从目录 '{known_faces_dir}' 加载已知人脸。")
-            self._detectors["face"] = FaceRecognizer(known_faces_dir=known_faces_dir)
+            self._detectors["face"] = FaceRecognizer(
+                known_faces_dir=known_faces_dir,
+                asset_base_path=self.config.ASSET_BASE_PATH
+            )
 
             # 4. 初始化声学事件检测器
             if self.config.ENABLE_SOUND_DETECTION:
@@ -241,6 +319,34 @@ class AIServiceManager:
                     print(f"无法保存失败的告警: {str(write_error)}")
 
         self._thread_pool.submit(task)
+
+    async def get_user_token(self, username: str) -> Optional[Dict[str, Any]]:
+        """
+        通过内部API，使用用户名从Django后端获取JWT Token。
+        """
+        logger.info(f"准备为用户'{username}'请求内部登录以获取Token。")
+        try:
+            internal_api_key = os.getenv('INTERNAL_SERVICE_API_KEY', 'default-internal-secret-key-for-dev')
+            backend_login_url = os.getenv('BACKEND_INTERNAL_LOGIN_URL', 'http://localhost:8000/api/users/login/internal/')
+            
+            headers = {'Content-Type': 'application/json', 'X-Internal-API-Key': internal_api_key}
+            payload = {'username': username}
+
+            async with httpx.AsyncClient() as client:
+                response = await client.post(backend_login_url, headers=headers, json=payload, timeout=10)
+                response.raise_for_status()
+                logger.info(f"成功从主后端获取Token，用户: {username}")
+                return response.json()
+
+        except httpx.RequestError as e:
+            logger.error(f"调用主后端内部登录接口失败 (RequestError): {e}")
+            return None
+        except httpx.HTTPStatusError as e:
+            logger.error(f"调用主后端内部登录接口失败 (HTTPStatusError): {e.response.status_code} - {e.response.text}")
+            return None
+        except Exception as e:
+            logger.error(f"获取用户Token时发生未知错误: {e}", exc_info=True)
+            return None
 
     async def send_detection_to_websocket(self, camera_id: str, detection_results: dict):
         """通过WebSocket向前端发送检测结果数据 (非图像)"""
@@ -1343,7 +1449,7 @@ class AIServiceManager:
     def get_system_status(self) -> SystemStatus:
         return SystemStatus(
             active_streams_count=len(self._video_streams),
-            detectors_initialized={name: det is not None for name, det in self._detectors.items()},
+            detectors_initialized={name: det is not None for name, det in self._detectors.items() if det is not None},
             system_load=None,  # Placeholder for actual system load
             memory_usage=None  # Placeholder for actual memory usage
         )
@@ -1358,10 +1464,10 @@ class AIServiceManager:
                     stats["cache_info"][camera_id]["types"][obj_type] = stats["cache_info"][camera_id]["types"].get(
                         obj_type, 0) + 1
         stats["detector_status"] = {
-            "object_detection": "parallel_enabled" if "object" in self._detectors else "disabled",
-            "face_recognition": "adaptive_scaling_enabled" if "face" in self._detectors else "disabled",
-            "behavior_detection": "enabled" if "behavior" in self._detectors else "disabled",
-            "acoustic_detection": "enabled" if "acoustic" in self._detectors else "disabled"
+            "object_detection": "enabled" if self._detectors.get("object") else "disabled",
+            "face_recognition": "enabled" if self._detectors.get("face") else "disabled",
+            "behavior_detection": "enabled" if self._detectors.get("behavior") else "disabled",
+            "acoustic_detection": "enabled" if self._detectors.get("acoustic") else "disabled"
         }
         stats["performance_features"] = {
             "parallel_processing": True, "adaptive_image_scaling": {"object": "60%", "face": "60-85%"},
@@ -1394,7 +1500,8 @@ class AIServiceManager:
 
         try:
             logger.info("=== 收到API请求，开始在后台重新加载人脸数据库 ===")
-            await self.face_recognizer.reload_known_faces()
+            # 直接调用模块的实例方法
+            await face_recognizer.reload_known_faces()
             logger.info("=== 人脸数据库重新加载任务已成功调度 ===")
             return {"status": "success", "message": "Known faces reload has been scheduled."}
         except Exception as e:
@@ -1432,7 +1539,8 @@ service_manager = AIServiceManager(app_config)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """FastAPI 的生命周期管理器。"""
-    await service_manager.initialize_detectors()
+    # 由于模型已在全局初始化，这里可以留空或用于其他启动任务
+    logger.info("AI服务启动，生命周期管理器已激活。")
     yield  # 服务在此运行时，处理API请求
     await service_manager.shutdown_services()
 
@@ -1440,18 +1548,19 @@ async def lifespan(app: FastAPI):
 # 创建FastAPI应用实例
 app = FastAPI(
     title="SmartEye AI Service",
-    description="提供视频流处理、目标检测、行为识别、人脸识别和声学事件检测能力",
-    version="2.0.0",
+    description="提供视频分析、人脸识别、目标检测等功能的AI微服务。",
+    version="1.2.0",
     lifespan=lifespan
 )
 
-# 添加CORS中间件，允许前端访问
+# --- 【核心修复】添加CORS中间件 ---
+# 允许来自前端开发服务器的跨域请求
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5174", "http://127.0.0.1:5174", "*"],  # 允许的源列表，包括前端服务器
+    allow_origins=["http://localhost:5174", "http://127.0.0.1:5174"],  # 允许的源列表
     allow_credentials=True,
-    allow_methods=["*"],  # 允许所有HTTP方法
-    allow_headers=["*"],  # 允许所有headers
+    allow_methods=["*"],  # 允许所有方法
+    allow_headers=["*"],  # 允许所有头
 )
 
 # 全局帧ID计数器
@@ -1591,19 +1700,18 @@ class FaceVerificationResponse(BaseModel):
 # --- 人脸识别相关API ---
 @app.post("/face/register/", response_model=FaceRegistrationResponse, tags=["Face Recognition"])
 async def register_face(
-    name: str = Form(..., description="员工姓名"),
-    employee_id: str = Form(..., description="员工工号"),
-    department: str = Form(..., description="所属部门"),
-    face_image: UploadFile = File(..., description="包含人脸的图片文件")
+    username: str = Form(...),
+    department: str = Form(...),
+    face_image: UploadFile = File(...)
 ):
     """
     注册一个新的用户人脸。
-    接收表单数据（姓名、工号、部门）和一张人脸图片，
+    接收表单数据（用户名、部门）和一张人脸图片，
     将其存入人脸数据库，并动态更新内存中的模型。
     """
     try:
-        # 使用 工号__姓名 作为唯一标识符，便于登录时解析
-        person_id = f"{employee_id}__{name}"
+        # 使用 username 作为唯一标识符
+        person_id = username
         
         # 读取上传的图片文件
         image_contents = await face_image.read()
@@ -1689,26 +1797,182 @@ async def verify_face(data: FaceVerificationData):
         person_id = best_match["identity"]["name"]
         confidence = best_match["identity"]["confidence"]
         logger.info(f"人脸验证和活体检测全部通过: ID='{person_id}', 置信度='{confidence:.2f}'")
-        
-        try:
-            employee_id, name = person_id.split('__', 1)
-        except ValueError:
-            employee_id, name = person_id, "N/A"
 
-        user_data = {
-            "username": name, "employee_id": employee_id, "name": name,
-        }
-        
-        return {
-            "success": True, "message": "登录成功",
-            "token": f"fake-access-token-for-{employee_id}",
-            "refresh_token": f"fake-refresh-token-for-{employee_id}",
-            "user": user_data
-        }
+        # 【核心变更】person_id 现在直接就是 username
+        username = person_id
+
+        # 4. 【核心变更】调用主后端服务进行内部登录
+        try:
+            internal_api_key = os.getenv('INTERNAL_SERVICE_API_KEY', 'default-internal-secret-key-for-dev')
+            backend_login_url = os.getenv('BACKEND_INTERNAL_LOGIN_URL', 'http://localhost:8000/api/users/login/internal/')
+            
+            headers = {
+                'Content-Type': 'application/json',
+                'X-Internal-API-Key': internal_api_key
+            }
+            payload = {
+                'username': username
+            }
+
+            logger.info(f"正在向主后端 {backend_login_url} 发起内部登录请求，用户: {username}")
+            response = requests.post(backend_login_url, headers=headers, json=payload, timeout=10)
+            response.raise_for_status()  # 如果状态码不是 2xx，则抛出异常
+
+            # 5. 直接透传主后端返回的数据
+            backend_data = response.json()
+            logger.info(f"从主后端获取到登录凭证，用户: {username}")
+            
+            return {
+                "success": True,
+                "message": "登录成功",
+                "token": backend_data.get('access'),
+                "refresh_token": backend_data.get('refresh'),
+                "user": backend_data.get('user')
+            }
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"调用主后端内部登录接口失败: {e}", exc_info=True)
+            error_message = "无法连接认证服务器，请稍后重试。"
+            if e.response:
+                try:
+                    error_detail = e.response.json().get('error', '未知认证错误')
+                    error_message = f"认证失败: {error_detail}"
+                except json.JSONDecodeError:
+                    error_message = f"认证服务器返回格式错误 (状态码: {e.response.status_code})"
+            
+            return {"success": False, "message": error_message}
 
     except Exception as e:
         logger.error(f"人脸验证API出现异常: {e}", exc_info=True)
         return {"success": False, "message": f"服务器内部错误: {e}"}
+
+
+@app.websocket("/ws/face_verification")
+async def face_verification_ws(websocket: WebSocket):
+    """
+    通过WebSocket进行实时人脸验证。
+    接收视频帧，进行活体检测和识别，并返回实时状态。
+    """
+    await websocket.accept()
+    liveness_session = LivenessSession(timeout=15.0, num_challenges=2)
+    # <--- FIX: No longer getting from service_manager._detectors as it is globally available
+    
+    if not face_recognizer:
+        await websocket.send_json({"status": "failed", "message": "人脸识别服务未初始化"})
+        await websocket.close()
+        return
+
+    print(f"开启新的活体检测会话: {liveness_session.session_id}")
+    
+    try:
+        # 主循环，处理挑战和帧数据
+        while not liveness_session.is_finished() and not liveness_session.is_timed_out():
+            
+            # 1. 发送当前挑战给前端
+            current_challenge = liveness_session.get_current_challenge()
+            challenge_map = {
+                "blink": "请眨动您的眼睛",
+                "shake_head": "请左右摇头",
+                "nod_head": "请上下点头",
+                "open_mouth": "请张开您的嘴巴"
+            }
+            await websocket.send_json({
+                "status": "challenge", 
+                "challenge": current_challenge,
+                "message": challenge_map.get(current_challenge, "准备进行验证")
+            })
+
+            challenge_start_time = time.time()
+            challenge_timeout = 7.0  # 每个动作的超时时间
+
+            # 2. 等待并处理客户端视频帧，直到当前挑战完成或超时
+            action_completed = False
+            while not action_completed and time.time() - challenge_start_time < challenge_timeout:
+                try:
+                    # 使用 wait_for 确保接收操作不会无限期阻塞
+                    # --- FIX: Changed from websocket.receive() to websocket.receive_bytes() ---
+                    # This correctly handles the binary data being sent from the frontend.
+                    frame_bytes = await asyncio.wait_for(websocket.receive_bytes(), timeout=1.0)
+                    
+                    if frame_bytes:
+                        nparr = np.frombuffer(frame_bytes, np.uint8)
+                        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+                        if frame is None:
+                            logger.warning("接收到无法解码的视频帧。")
+                            continue
+
+                        # 进行人脸检测和关键点提取
+                        landmarks, head_pose = face_recognizer.get_landmarks_and_pose(frame)
+                        
+                        if landmarks is not None and head_pose is not None:
+                            liveness_session.process_frame(landmarks, head_pose)
+                            if liveness_session.get_current_challenge() != current_challenge:
+                                action_completed = True # 挑战已切换，说明当前动作完成
+                        else:
+                            await websocket.send_json({"status": "info", "message": "请将面部保持在画面中央"})
+                
+                except asyncio.TimeoutError:
+                    if liveness_session.is_timed_out() or (time.time() - challenge_start_time > challenge_timeout):
+                        liveness_session.failure_reason = f"challenge_timeout:{current_challenge}"
+                        break
+                    continue # 只是接收帧超时，继续等待
+                except WebSocketDisconnect:
+                    liveness_session.failure_reason = "client_disconnected"
+                    print("客户端在挑战中意外断开")
+                    raise  # 抛出异常，由外层 finally 处理
+
+            if not action_completed:
+                liveness_session.failure_reason = f"challenge_timeout:{current_challenge}"
+                break
+
+        # --- 循环结束，进行最终判断 ---
+        if liveness_session.is_successful:
+            await websocket.send_json({"status": "verifying", "message": "活体检测通过，正在进行身份识别..."})
+            
+            # 请求最后一张图片用于识别
+            final_frame_data = await websocket.receive_bytes()
+            nparr = np.frombuffer(final_frame_data, np.uint8)
+            final_frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+            user_info = face_recognizer.recognize_in_frame(final_frame)
+            
+            if user_info and user_info.get("identity") != "Unknown":
+                token_data = await service_manager.get_user_token(user_info["identity"])
+                if token_data:
+                    await websocket.send_json({"status": "success", "message": "验证成功", **token_data})
+                else:
+                    await websocket.send_json({"status": "failed", "message": "获取用户凭证失败"})
+            else:
+                await websocket.send_json({"status": "failed", "message": "未识别到已注册用户"})
+        else:
+            failure_message = f"活体检测失败: {liveness_session.failure_reason}"
+            await websocket.send_json({"status": "failed", "message": failure_message})
+            
+            # 发送欺骗攻击告警
+            service_manager.send_alert_to_backend(
+                AIAnalysisResult(
+                    camera_id="FaceAuth", # 特殊标识
+                    event_type="spoofing_attempt",
+                    level="high",
+                    timestamp=datetime.now().isoformat(),
+                    details={
+                        "message": "人脸识别登录时发生欺骗攻击尝试",
+                        "reason": liveness_session.failure_reason,
+                        "session_id": liveness_session.session_id
+                    }
+                )
+            )
+
+    except WebSocketDisconnect:
+        print("客户端断开连接。")
+    except Exception as e:
+        print(f"WebSocket处理中发生未知错误: {e}")
+        traceback.print_exc()
+    finally:
+        print(f"关闭会话: {liveness_session.session_id}，原因: {liveness_session.failure_reason or '正常结束'}")
+        if websocket.client_state == WebSocketState.CONNECTED:
+            await websocket.close()
 
 
 # 视频流连接测试

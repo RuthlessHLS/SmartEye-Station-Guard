@@ -1,10 +1,23 @@
 <!DOCTYPE html>
-<html lang="">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8">
     <link rel="icon" href="/favicon.ico">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Vite App</title>
+    <base href="/">
+    <title>智能监控平台</title>
+    <script>
+      // 处理SPA应用刷新404问题
+      window.__publicPath = window.location.origin + '/';
+      (function() {
+        const pathname = window.location.pathname;
+        // 如果不是根路径且不是静态资源
+        if (pathname !== '/' && !pathname.includes('.')) {
+          // 记录当前路径用于导航
+          sessionStorage.setItem('spa_path', pathname);
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="app"></div>

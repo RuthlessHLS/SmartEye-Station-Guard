@@ -169,6 +169,27 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
+  async function handleSuccessfulLogin(loginData) {
+    const { access, refresh, user: userData } = loginData;
+
+    if (!access || !userData) {
+      console.error('handleSuccessfulLogin: Missing access token or user data.');
+      throw new Error('登录数据不完整。');
+    }
+
+    token.value = access;
+    refreshToken.value = refresh;
+    user.value = userData;
+
+    localStorage.setItem(ACCESS_TOKEN_KEY, access);
+    if (refresh) {
+      localStorage.setItem(REFRESH_TOKEN_KEY, refresh);
+    }
+    localStorage.setItem(USER_KEY, JSON.stringify(userData));
+
+    api.backendService.defaults.headers.common['Authorization'] = `Bearer ${access}`;
+  }
+
   function logout() {
     clearAuth();
     router.push('/login');
@@ -219,6 +240,7 @@ export const useAuthStore = defineStore('auth', () => {
     fetchUser,
     updateUserProfile,
     changePassword,
+    handleSuccessfulLogin,
   };
 });
 

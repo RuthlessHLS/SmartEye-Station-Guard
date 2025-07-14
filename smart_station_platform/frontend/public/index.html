@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="refresh" content="0;url=/" />
+    <title>智能监控平台</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100vh;
+        margin: 0;
+        background-color: #f5f7fa;
+      }
+      .message {
+        text-align: center;
+        padding: 20px;
+      }
+      .loading {
+        display: inline-block;
+        width: 50px;
+        height: 50px;
+        border: 3px solid rgba(0,0,0,.1);
+        border-radius: 50%;
+        border-top-color: #409EFF;
+        animation: spin 1s ease-in-out infinite;
+      }
+      @keyframes spin {
+        to { transform: rotate(360deg); }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="message">
+      <div class="loading"></div>
+      <p>正在加载应用，请稍候...</p>
+    </div>
+    <script>
+      // 如果URL中包含路径，则保留该路径
+      const currentPath = window.location.pathname;
+      if (currentPath !== '/' && currentPath !== '/index.html') {
+        window.location.href = currentPath;
+      } else {
+        window.location.href = '/';
+      }
+    </script>
+  </body>
+</html> 

@@ -26,6 +26,14 @@
         <button type="submit" class="submit-btn" :disabled="loading">
           {{ loading ? '登录中...' : '登录' }}
         </button>
+        
+        <!-- 添加人脸识别登录选项 -->
+        <div class="alternative-login">
+          <span>或者</span>
+        </div>
+        <button type="button" @click="goToFaceLogin" class="face-login-btn">
+          <i class="face-icon">👤</i> 人脸识别登录
+        </button>
 
         <div class="switch-link">
           还没有账号？ <router-link to="/register">立即注册</router-link>
@@ -45,6 +53,7 @@
 
 <script setup>
 import { ref, reactive } from 'vue';
+import { useRouter } from 'vue-router';
 import SliderCaptcha from './SliderCaptcha.vue'; // 假设滑动验证码组件在同级目录
 
 // 1. 引入 useAuthStore，不再需要 axios 和 useRouter
@@ -52,6 +61,7 @@ import { useAuthStore } from '@/stores/auth';
 
 // 2. 初始化 Pinia store
 const authStore = useAuthStore();
+const router = useRouter();
 
 // 状态控制
 const loading = ref(false);
@@ -81,6 +91,11 @@ const handleLoginAttempt = () => {
   // 点击登录后立即进入 loading 状态
   loading.value = true;
   showCaptcha.value = true;
+};
+
+// 跳转到人脸登录页面
+const goToFaceLogin = () => {
+  router.push('/face-login');
 };
 
 // 监听验证码组件的 `success` 事件
@@ -232,6 +247,54 @@ const onCaptchaSuccess = async (result) => {
   font-size: 14px;
   margin-bottom: 15px;
   text-align: center;
+}
+/* 添加人脸识别登录样式 */
+.alternative-login {
+  display: flex;
+  align-items: center;
+  margin: 15px 0;
+  text-align: center;
+  position: relative;
+}
+.alternative-login span {
+  padding: 0 10px;
+  background-color: #fff;
+  color: #999;
+  position: relative;
+  z-index: 2;
+  margin: 0 auto;
+}
+.alternative-login::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 100%;
+  height: 1px;
+  background-color: #e8e8e8;
+  z-index: 1;
+}
+.face-login-btn {
+  width: 100%;
+  padding: 12px;
+  font-size: 16px;
+  color: #1890ff;
+  background-color: #f0f7ff;
+  border: 1px solid #91d5ff;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.3s;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+.face-login-btn:hover {
+  background-color: #e6f7ff;
+  border-color: #69c0ff;
+}
+.face-icon {
+  font-size: 18px;
+  margin-right: 8px;
 }
 </style>
 
