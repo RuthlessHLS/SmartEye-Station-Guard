@@ -1562,56 +1562,153 @@ async def stop_stream(camera_id: str):
     return {"status": "success", "message": f"视频流处理已停止"}
 
 
-# 人脸注册
-class FaceData(BaseModel):
-    person_name: str
-    image_data: str
+# --- Pydantic Models for API ---
+class LivenessFrame(BaseModel):
+    """用于活体检测的单帧数据模型"""
+    action: str = Field(..., description="该帧对应的动作指令, e.g., '请眨眨眼睛'")
+    image_data: str = Field(..., description="该帧的Base64编码图像数据")
+
+class FaceVerificationData(BaseModel):
+    """人脸验证请求的数据模型 (增强版)"""
+    primary_image: str = Field(..., description="用于身份识别的主要正面照 (Base64编码)")
+    liveness_frames: List[LivenessFrame] = Field(..., description="用于活体检测的动作帧序列")
+
+class FaceRegistrationResponse(BaseModel):
+    """人脸注册响应的数据模型"""
+    success: bool
+    message: str
+    person_id: Optional[str] = None
+    
+class FaceVerificationResponse(BaseModel):
+    """人脸验证响应的数据模型"""
+    success: bool
+    message: str
+    token: Optional[str] = None
+    refresh_token: Optional[str] = None
+    user: Optional[Dict[str, Any]] = None
 
 
-@app.post("/face/register/")
-async def register_face(face_data: FaceData):
+# --- 人脸识别相关API ---
+@app.post("/face/register/", response_model=FaceRegistrationResponse, tags=["Face Recognition"])
+async def register_face(
+    name: str = Form(..., description="员工姓名"),
+    employee_id: str = Form(..., description="员工工号"),
+    department: str = Form(..., description="所属部门"),
+    face_image: UploadFile = File(..., description="包含人脸的图片文件")
+):
+    """
+    注册一个新的用户人脸。
+    接收表单数据（姓名、工号、部门）和一张人脸图片，
+    将其存入人脸数据库，并动态更新内存中的模型。
+    """
     try:
-        image_bytes = base64.b64decode(face_data.image_data)
-        nparr = np.frombuffer(image_bytes, np.uint8)
+        # 使用 工号__姓名 作为唯一标识符，便于登录时解析
+        person_id = f"{employee_id}__{name}"
+        
+        # 读取上传的图片文件
+        image_contents = await face_image.read()
+        nparr = np.frombuffer(image_contents, np.uint8)
         image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
         if image is None:
-            raise HTTPException(status_code=400, detail="无效的Base64图像数据。")
+            raise HTTPException(status_code=400, detail="无效的图像文件或格式不受支持。")
 
-        # 调用人脸识别器的添加方法 (FaceRecognizer 类中需要实现此方法)
-        face_recognizer_instance = service_manager._detectors.get("face")
-        if not face_recognizer_instance:
-            raise HTTPException(status_code=500, detail="人脸识别器未初始化。")
+        face_recognizer = service_manager._detectors.get("face")
+        if not face_recognizer:
+            raise HTTPException(status_code=503, detail="人脸识别服务当前不可用。")
 
-        # 暂时返回成功，待FaceRecognizer实现add_face
-        print(f"收到人脸注册请求: {face_data.person_name}")
-        return {"status": "success", "message": "人脸注册请求已收到 (功能待FaceRecognizer实现)。"}
+        # 调用核心模块添 加人脸
+        success = face_recognizer.add_face(image, person_name=person_id)
+
+        if success:
+            logger.info(f"成功注册新的人脸: ID='{person_id}', Department='{department}'")
+            return {"success": True, "message": "人脸注册成功！", "person_id": person_id}
+        else:
+            logger.warning(f"为 '{person_id}' 注册人脸失败，可能图片中未检测到清晰人脸。")
+            raise HTTPException(status_code=400, detail="注册失败，请确保上传了清晰、单人的人脸正面照。")
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"人脸注册API出现异常: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"服务器内部错误: {str(e)}")
 
 
-@app.post("/verify_face")
-async def verify_face(request_data: dict):
+@app.post("/face/verify", response_model=FaceVerificationResponse, tags=["Face Recognition"])
+async def verify_face(data: FaceVerificationData):
+    """
+    通过人脸图像验证用户身份并执行活体检测。
+    """
     try:
-        image_data = base64.b64decode(request_data.get("image", ""))
-        nparr = np.frombuffer(image_data, np.uint8)
-        image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        if image is None:
-            return {"success": False, "message": "无法解码图像"}
+        face_recognizer = service_manager._detectors.get("face")
+        if not face_recognizer:
+            return {"success": False, "message": "人脸识别服务未初始化"}
 
-        user_id = request_data.get("user_id")
-        if not user_id:
-            return {"success": False, "message": "未提供用户ID"}
+        # 1. 解码主要识别图像并进行身份验证
+        primary_image_data = base64.b64decode(data.primary_image)
+        primary_image = cv2.imdecode(np.frombuffer(primary_image_data, np.uint8), cv2.IMREAD_COLOR)
+        if primary_image is None:
+            return {"success": False, "message": "无法解码用于识别的主图像"}
+        
+        recognized_faces = face_recognizer.detect_and_recognize(primary_image)
+        
+        best_match = None
+        if recognized_faces:
+            for face in recognized_faces:
+                identity = face.get("identity", {})
+                if identity.get("is_known"):
+                    if best_match is None or identity.get("confidence", 0) > best_match.get("identity", {}).get("confidence", 0):
+                        best_match = face
 
-        face_recognizer_instance = service_manager._detectors.get("face")
-        if not face_recognizer_instance:
-            return {"success": False, "message": "人脸识别器未初始化。"}
+        if not best_match:
+            logger.warning("人脸验证失败：未匹配到任何已知用户。")
+            return {"success": False, "message": "未识别到注册用户，请重试"}
 
-        # 暂时返回成功，待FaceRecognizer实现比对
-        print(f"收到人脸验证请求: user_id={user_id}")
-        return {"success": True, "matched": True, "confidence": 0.9,
-                "message": "人脸验证请求已收到 (功能待FaceRecognizer实现)。"}
+        # 2. 身份验证成功，开始进行活体检测
+        liveness_passed_count = 0
+        total_liveness_checks = len(data.liveness_frames)
+        
+        for frame_data in data.liveness_frames:
+            action = frame_data.action
+            liveness_image_data = base64.b64decode(frame_data.image_data)
+            liveness_image = cv2.imdecode(np.frombuffer(liveness_image_data, np.uint8), cv2.IMREAD_COLOR)
+            
+            if liveness_image is None:
+                logger.warning(f"活体检测解码失败，动作: {action}")
+                continue # 跳过解码失败的帧
+
+            if face_recognizer.verify_liveness_action(liveness_image, action):
+                liveness_passed_count += 1
+                logger.info(f"✅ 活体检测动作 '{action}' 验证通过。")
+            else:
+                logger.warning(f"❌ 活体检测动作 '{action}' 验证失败。")
+
+        # 验证通过率可以自定义，例如要求全部通过
+        if liveness_passed_count < total_liveness_checks:
+            return {"success": False, "message": f"活体检测失败，请按提示完成所有动作。({liveness_passed_count}/{total_liveness_checks} 通过)"}
+
+        # 3. 身份和活体均验证通过
+        person_id = best_match["identity"]["name"]
+        confidence = best_match["identity"]["confidence"]
+        logger.info(f"人脸验证和活体检测全部通过: ID='{person_id}', 置信度='{confidence:.2f}'")
+        
+        try:
+            employee_id, name = person_id.split('__', 1)
+        except ValueError:
+            employee_id, name = person_id, "N/A"
+
+        user_data = {
+            "username": name, "employee_id": employee_id, "name": name,
+        }
+        
+        return {
+            "success": True, "message": "登录成功",
+            "token": f"fake-access-token-for-{employee_id}",
+            "refresh_token": f"fake-refresh-token-for-{employee_id}",
+            "user": user_data
+        }
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"人脸验证API出现异常: {e}", exc_info=True)
+        return {"success": False, "message": f"服务器内部错误: {e}"}
 
 
 # 视频流连接测试

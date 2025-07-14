@@ -372,6 +372,38 @@ const wsConnected = ref(false);
 let ws = null;
 const wsUrl = import.meta.env.VITE_APP_WS_URL || 'ws://localhost:8000/ws/alerts/';
 
+// 【新增】一个可重用的函数来根据当前设置过滤检测结果
+const filterResults = (results) => {
+  if (!results || results.length === 0) {
+    return [];
+  }
+
+  return results.filter(det => {
+    const { type, class_name } = det;
+
+    // 人脸识别
+    if (type === 'face' || class_name === 'face') {
+      return aiSettings.faceRecognition;
+    }
+
+    // 火焰/烟雾检测
+    if (type === 'fire' || type === 'smoke' || class_name === 'fire' || class_name === 'smoke') {
+      return aiSettings.fireDetection;
+    }
+
+    // 目标检测 (涵盖常见物体: 人员、车辆、包裹等)
+    const objectTypes = ['person', 'car', 'bicycle', 'motorcycle', 'bus', 'truck', 'backpack', 'handbag', 'suitcase'];
+    if (objectTypes.includes(type) || objectTypes.includes(class_name)) {
+      return aiSettings.objectDetection;
+    }
+
+    // 行为分析和声音检测通常不会有独立的检测框，除非后端有特定实现
+    // 默认情况下，如果类型不匹配任何受控类别，则显示
+    return true;
+  });
+};
+
+
 // --- WebSocket Logic ---
 const disconnectWebSocket = () => {
   if (ws) {
@@ -401,7 +433,7 @@ const connectWebSocket = () => {
     console.log('[WebSocket] 📩 收到原始消息:', event.data);
     try {
       const messageData = JSON.parse(event.data);
-  
+
       // 【修改点】确保这段逻辑存在且正确
       if (messageData.type === 'stream_initialized') {
         const resolution = messageData.data.resolution;
@@ -420,29 +452,29 @@ const connectWebSocket = () => {
         } else if (messageData.data.detections.detections) {
           detections = messageData.data.detections.detections;
         } else {
-          detections = Array.isArray(messageData.data.detections) ? 
+          detections = Array.isArray(messageData.data.detections) ?
             messageData.data.detections : [messageData.data.detections];
         }
-        
+
         // 【新增】从消息中获取时间戳
         const timestamp = messageData.data.timestamp || Date.now();
         const frameId = messageData.data.frame_id || `frame_${timestamp}`;
-        
+
         // 【新增】记录当前视频时间
         const currentVideoTime = video.value ? video.value.currentTime : 0;
-        
+
         // 【新增】将时间戳信息添加到检测结果中
         detections.forEach(detection => {
           detection.frame_timestamp = timestamp;
           detection.frame_id = frameId;
           detection.video_time = currentVideoTime;
         });
-        
+
         console.log(`[检测结果] 收到数据 (帧ID: ${frameId}, 视频时间: ${currentVideoTime.toFixed(2)}s):`, detections);
-        
-        // 更新检测结果
-        detectionResults.value = detections;
-        
+
+        // 更新检测结果，并根据AI设置进行过滤
+        detectionResults.value = filterResults(detections);
+
         // 强制重新渲染Canvas
         if (aiAnalyzer.value) {
           // 延迟执行，确保DOM已更新
@@ -451,14 +483,14 @@ const connectWebSocket = () => {
               // 清空画布后重新渲染
               aiAnalyzer.value.clearCanvas();
               aiAnalyzer.value.renderDetections(detectionResults.value);
-              
+
               // 【新增】在画布上显示时间戳和帧ID，并检查同步状态
               if (aiAnalyzer.value.drawTimestamp) {
                 // 检查视频时间和检测结果时间是否匹配
                 const videoTimeFromDetection = detections[0]?.video_time;
                 const isSynchronized = videoTimeFromDetection ? Math.abs(currentVideoTime - videoTimeFromDetection) < 0.5 : true;
                 const timeDifference = videoTimeFromDetection ? Math.abs(currentVideoTime - videoTimeFromDetection) : 0;
-                
+
                 aiAnalyzer.value.drawTimestamp(frameId, currentVideoTime, isSynchronized, timeDifference);
               }
             } catch (error) {
@@ -694,50 +726,73 @@ const createPlayer = () => {
 };
 
 // --- AI Logic ---
-// 更新AI设置的函数
-const updateAISettings = async (settingName = '') => {
-  try {
-    let settings = {};
-
-    // 如果指定了具体设置名称，则只更新该设置
-    if (settingName) {
-      settings[settingName] = aiSettings[settingName];
-      console.log(`[AI设置] 尝试更新单个设置 '${settingName}': ${aiSettings[settingName]}`);
-    } else {
-      // 否则更新所有设置
-      settings = { ...aiSettings };
-      console.log('[AI设置] 尝试更新所有设置:', JSON.stringify(settings));
-    }
-
-    const response = await api.ai.updateSettings(cameraId.value, settings);
-
-    if (response?.status !== 'success') {
-      throw new Error(response?.message || '更新AI设置失败');
-    }
-
-    // 如果更新成功，更新本地设置
-    if (response?.settings) {
-      // 将后端返回的设置同步到本地
-      const oldSettings = { ...aiSettings };
-      Object.assign(aiSettings, response.settings);
-      console.log(`[AI设置] 更新成功! 更新前:`, oldSettings, '更新后:', response.settings);
-      
-      // 显示成功消息
-      ElMessage({
-        message: settingName ? `${translateSettingName(settingName)}已${aiSettings[settingName] ? '启用' : '禁用'}` : '所有AI设置已更新',
-        type: 'success',
-        duration: 2000
-      });
-    }
-
-    console.log(`[AI设置] ${settingName ? `${settingName}已更新` : '所有设置已更新'}:`, aiSettings);
-  } catch (error) {
-    const errorMessage = error.response?.data?.detail || error.message || '未知错误';
-    console.error('[AI设置] 更新设置失败:', errorMessage, error);
-    ElMessage.error(`更新AI设置失败: ${errorMessage}`);
-  }
+// 新增：前端设置项到后端API参数的映射
+const settingToApiMapping = {
+  faceRecognition: 'enable_face_recognition',
+  objectDetection: 'enable_object_detection',
+  behaviorAnalysis: 'enable_behavior_detection',
+  soundDetection: 'enable_sound_detection',
+  fireDetection: 'enable_fire_detection',
+  realtimeMode: 'realtime_mode'
 };
 
+    // 请将此函数复制，并替换掉 AIVideoMonitor.vue 中的同名函数
+
+    const updateAISettings = async (settingName = '') => {
+      // 确保 settingName 有效
+      if (!settingName) return;
+
+      // 【优化】实现乐观更新（Optimistic Update）
+      // 1. 立即更新UI，不等网络响应
+      // Vue的v-model已经同步更新了aiSettings的状态，所以我们可以立即过滤
+      console.log(`[AI设置 - 乐观更新] 立即过滤 '${settingName}' 的检测框`);
+      detectionResults.value = filterResults(detectionResults.value);
+
+      // 记住更新前的状态，以便在API请求失败时回滚
+      const previousValue = !aiSettings[settingName];
+
+      try {
+        const settingsPayload = {};
+        const apiKey = settingToApiMapping[settingName];
+
+        // 确保找到了对应的API key
+        if (apiKey) {
+          settingsPayload[apiKey] = aiSettings[settingName];
+        } else {
+          console.warn(`[AI设置] 未找到 '${settingName}' 的API映射`);
+          return;
+        }
+
+        console.log('[AI设置] 正在向后端发送负载:', settingsPayload);
+        const response = await api.ai.updateSettings(cameraId.value, settingsPayload);
+
+        // 检查后端是否明确返回失败
+        if (response?.status !== 'success') {
+          throw new Error(response?.message || '后端更新明确失败');
+        }
+
+        // 2. 更新成功，后端状态与前端一致，显示成功消息
+        ElMessage({
+          message: `${translateSettingName(settingName)} 已${aiSettings[settingName] ? '启用' : '禁用'}`,
+          type: 'success',
+          duration: 2000
+        });
+
+      } catch (error) {
+        // 3. 如果API请求失败，则回滚UI状态
+        console.error(`[AI设置 - 乐观更新] 更新 '${settingName}' 失败，正在回滚UI...`);
+
+        // a. 将开关的状态恢复到之前的值
+        aiSettings[settingName] = previousValue;
+
+        // b. 重新过滤检测框，恢复到之前的显示状态
+        detectionResults.value = filterResults(detectionResults.value);
+
+        // c. 向用户显示错误提示
+        const errorMessage = error.response?.data?.detail || error.message || '未知错误';
+        ElMessage.error(`更新失败，已恢复设置: ${errorMessage}`);
+      }
+    };
 // 设置名称翻译函数
 const translateSettingName = (settingName) => {
   const translations = {
@@ -768,12 +823,12 @@ const fetchAISettings = async () => {
         'fire_detection': 'fireDetection',
         'realtime_mode': 'realtimeMode'
       };
-      
+
       Object.keys(response.settings).forEach(key => {
         const frontendKey = reverseMapping[key] || key;
         mappedSettings[frontendKey] = response.settings[key];
       });
-      
+
       // 更新到本地状态
       Object.assign(aiSettings, mappedSettings);
       console.log('[AI设置] 已从服务器获取最新设置并映射:', mappedSettings);
@@ -794,6 +849,7 @@ const startAIAnalysis = async () => {
       enable_behavior_detection: aiSettings.behaviorAnalysis,
       enable_sound_detection: aiSettings.soundDetection,
       enable_fire_detection: aiSettings.fireDetection,
+      realtime_mode: aiSettings.realtimeMode, // 补全实时模式参数
     };
     const response = await api.ai.startStream(payload);
     if (response?.status !== 'success') {
@@ -1025,24 +1081,20 @@ onUnmounted(() => {
   overflow: hidden;
 }
 
-/* 添加CSS调试工具，确保视频容器和AIAnalyzer显示正确 */
-.video-player-wrapper::after {
-  content: "视频容器";
-  position: absolute;
-  top: 10px;
-  left: 10px;
-  background: rgba(255, 0, 0, 0.5);
-  color: white;
-  padding: 5px;
-  font-size: 12px;
-  z-index: 1000;
-  pointer-events: none;
-}
-
 .video-element, .dplayer-container {
   width: 100%;
   height: 100%;
   object-fit: contain;
+}
+
+/* 确保DPlayer可以正确全屏 */
+:deep(.dplayer-fulled) {
+  z-index: 9999 !important;
+  position: fixed !important;
+  width: 100% !important;
+  height: 100% !important;
+  left: 0 !important;
+  top: 0 !important;
 }
 
 .overlay-canvas {
@@ -1089,6 +1141,19 @@ onUnmounted(() => {
 /* 确保DPlayer视频元素不会覆盖AIAnalyzer */
 :deep(.dplayer-video-wrap) {
   z-index: 1 !important;
+}
+
+/* 确保全屏按钮可见并正常工作 */
+:deep(.dplayer-controller) {
+  z-index: 100 !important;
+}
+
+:deep(.dplayer-controller .dplayer-icons .dplayer-icon) {
+  pointer-events: auto !important;
+}
+
+:deep(.dplayer-controller .dplayer-icons .dplayer-full) {
+  display: block !important;
 }
 
 /* 确保DPlayer控制栏不会覆盖AIAnalyzer */
