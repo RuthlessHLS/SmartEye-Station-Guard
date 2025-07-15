@@ -43,9 +43,10 @@
 <script setup>
 import { ref, reactive, onMounted, onUnmounted, nextTick } from 'vue';
 import { ElMessage } from 'element-plus';
-import api from '../api'; // 导入API请求服务
+import api from '@/api'; // 导入API请求服务
 import * as echarts from 'echarts'; // 导入 ECharts
 import mapboxgl from 'mapbox-gl'; // 导入 Mapbox GL JS
+import 'mapbox-gl/dist/mapbox-gl.css'; // 导入Mapbox GL CSS
 
 // Mapbox token，请替换为你自己的
 mapboxgl.accessToken = 'YOUR_MAPBOX_ACCESS_TOKEN'; // <<<< IMPORTANT: 替换为你的 Mapbox Access Token
@@ -226,7 +227,7 @@ const updateCharts = () => {
           },
           pointer: {
             itemStyle: {
-              color: 'auto'
+              color: 'inherit'
             }
           },
           axisTick: {
@@ -246,14 +247,14 @@ const updateCharts = () => {
             }
           },
           axisLabel: {
-            color: 'auto',
+            color: 'inherit',
             distance: 40,
-            fontSize: 15
+            fontSize: 12
           },
           detail: {
             valueAnimation: true,
             formatter: '{value} km/h',
-            color: 'auto',
+            color: 'inherit',
             fontSize: 20
           },
           data: [{
@@ -265,41 +266,40 @@ const updateCharts = () => {
   }
 };
 
-const fetchDashboardData = async () => {
+async function fetchDashboardData() {
   try {
-    // 假设后端数据大屏API接口为 /api/data-analysis/dashboard/
-    const response = await api.get('/api/data-analysis/dashboard/');
-    // 模拟数据填充，实际应从response.data中获取
-    Object.assign(mapData, {
-      heatmap: response.heatmap || [
-        { coordinates: [116.4074, 39.9042], intensity: 0.8 },
-        { coordinates: [116.3913, 39.9110], intensity: 0.6 },
-        { coordinates: [116.4172, 39.9200], intensity: 0.9 },
-      ],
-      trafficTrend: response.traffic_trend || [
-        { time: '00:00', count: 100 }, { time: '06:00', count: 500 },
-        { time: '12:00', count: 1200 }, { time: '18:00', count: 900 },
-        { time: '23:00', count: 200 }
-      ],
-      distanceDistribution: response.distance_distribution || [
-        { name: '0-5km', value: 300 }, { name: '5-10km', value: 500 },
-        { name: '10-20km', value: 400 }, { name: '>20km', value: 150 }
-      ],
-      weatherTraffic: response.weather_traffic || [
-        { weather: '晴', traffic: 1000, temperature: 25 },
-        { weather: '阴', traffic: 800, temperature: 20 },
-        { weather: '雨', traffic: 500, temperature: 18 },
-        { weather: '雪', traffic: 200, temperature: -2 }
-      ],
-      avgSpeed: response.avg_speed || 45.5,
-    });
-    updateHeatmap(mapData.heatmap);
+    const response = await api.alerts.getList({ page: 1, page_size: 10 });
+    // 处理响应数据
+    // Object.assign(mapData, { // This line was removed as per the new_code, as the response structure is different
+    //   heatmap: response.heatmap || [
+    //     { coordinates: [116.4074, 39.9042], intensity: 0.8 },
+    //     { coordinates: [116.3913, 39.9110], intensity: 0.6 },
+    //     { coordinates: [116.4172, 39.9200], intensity: 0.9 },
+    //   ],
+    //   trafficTrend: response.traffic_trend || [
+    //     { time: '00:00', count: 100 }, { time: '06:00', count: 500 },
+    //     { time: '12:00', count: 1200 }, { time: '18:00', count: 900 },
+    //     { time: '23:00', count: 200 }
+    //   ],
+    //   distanceDistribution: response.distance_distribution || [
+    //     { name: '0-5km', value: 300 }, { name: '5-10km', value: 500 },
+    //     { name: '10-20km', value: 400 }, { name: '>20km', value: 150 }
+    //   ],
+    //   weatherTraffic: response.weather_traffic || [
+    //     { weather: '晴', traffic: 1000, temperature: 25 },
+    //     { weather: '阴', traffic: 800, temperature: 20 },
+    //     { weather: '雨', traffic: 500, temperature: 18 },
+    //     { weather: '雪', traffic: 200, temperature: -2 }
+    //   ],
+    //   avgSpeed: response.avg_speed || 45.5,
+    // });
+    // updateHeatmap(mapData.heatmap); // This line was removed as per the new_code, as the response structure is different
     updateCharts();
   } catch (error) {
     ElMessage.error('获取数据大屏数据失败！');
     console.error('Fetch dashboard data error:', error);
   }
-};
+}
 
 const playTrajectory = async () => {
   if (!vehicleId.value) {

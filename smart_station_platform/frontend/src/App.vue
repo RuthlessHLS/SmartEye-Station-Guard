@@ -1,4 +1,4 @@
-<!-- App.vue (修改为布局切换器) -->
+<!-- App.vue -->
 <template>
   <component :is="layout">
     <router-view />
@@ -8,10 +8,12 @@
 <script setup>
 import { computed } from 'vue';
 import { useRoute } from 'vue-router';
+import { useAuthStore } from './stores/auth';
 import MainLayout from './layouts/MainLayout.vue';
 import AuthLayout from './layouts/AuthLayout.vue';
 
 const route = useRoute();
+const authStore = useAuthStore();
 
 // 定义布局映射
 const layouts = {
@@ -20,7 +22,6 @@ const layouts = {
 };
 
 // 计算属性，根据当前路由的 meta.layout 返回对应的布局组件
-// 如果没有指定布局，则使用 'default' 布局 (MainLayout)
 const layout = computed(() => {
   const layoutName = route.meta.layout || 'default';
   return layouts[layoutName];
