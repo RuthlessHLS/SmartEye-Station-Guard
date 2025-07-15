@@ -35,12 +35,11 @@
           </div>
         </div>
       </el-header>
-
       <el-main>
-        <el-row :gutter="20">
+        <el-row :gutter="32" style="height:100%;">
           <!-- 左侧视频显示区 -->
-          <el-col :span="16">
-            <el-card class="video-card" shadow="always">
+          <el-col :span="14" style="display:flex;flex-direction:column;height:100%;">
+            <el-card class="video-card" shadow="always" body-style="padding:0;height:100%;display:flex;flex-direction:column;">
               <template #header>
                 <div class="card-header">
                   <span>📹 实时视频监控</span>
@@ -52,7 +51,6 @@
                   </el-tag>
                 </div>
               </template>
-
               <div class="video-container" ref="videoContainer">
                 <video
                   ref="videoElement"
@@ -62,13 +60,11 @@
                   playsinline
                   @loadedmetadata="onVideoLoaded"
                 ></video>
-
                 <!-- AI检测结果覆盖层 -->
                 <canvas
                   ref="overlayCanvas"
                   class="overlay-canvas"
                 ></canvas>
-
                 <!-- 摄像头选择对话框 -->
                 <div v-if="!isStreaming" class="camera-placeholder">
                   <el-icon class="placeholder-icon"><VideoCamera /></el-icon>
@@ -89,15 +85,13 @@
               </div>
             </el-card>
           </el-col>
-
           <!-- 右侧控制和信息面板 -->
-          <el-col :span="8">
+          <el-col :span="10" style="display:flex;flex-direction:column;height:100%;">
             <!-- AI分析设置 -->
-            <el-card class="control-panel" shadow="never">
+            <el-card class="control-panel" shadow="never" body-style="padding:18px 18px 8px 18px;">
               <template #header>
                 <span>🎯 AI分析设置</span>
               </template>
-
               <div class="analysis-settings">
                 <el-form label-width="100px">
                   <el-form-item label="人脸识别">
@@ -285,7 +279,6 @@
                 </el-form>
               </div>
             </el-card>
-
             <!-- 实时检测结果 -->
             <el-card class="results-panel" shadow="never">
               <template #header>
@@ -294,7 +287,6 @@
                   <el-badge :value="detectionResults.length" class="badge" />
                 </div>
               </template>
-
               <el-scrollbar height="300px">
                 <div class="detection-list">
                   <div
@@ -324,13 +316,11 @@
                 </div>
               </el-scrollbar>
             </el-card>
-
             <!-- 性能监控 -->
             <el-card class="performance-panel" shadow="never" v-show="aiAnalysisEnabled">
               <template #header>
                 <span>📊 性能监控</span>
               </template>
-
               <div class="performance-stats">
                 <div class="stat-item">
                   <span class="stat-label">检测FPS</span>
@@ -354,7 +344,6 @@
                 </div>
               </div>
             </el-card>
-
             <!-- 实时告警 -->
             <el-card class="alerts-panel" shadow="never">
               <template #header>
@@ -363,7 +352,6 @@
                   <el-badge :value="realtimeAlerts.length" class="badge" type="danger" />
                 </div>
               </template>
-
               <el-scrollbar height="200px">
                 <div class="alerts-list">
                   <el-alert
@@ -2148,10 +2136,9 @@ onUnmounted(() => {
 
 <style scoped>
 .ai-video-monitor {
-  height: 100vh;
-  background-color: #f5f7fa;
+  min-height: 100vh;
+  background: linear-gradient(135deg, #f5f7fa 60%, #e0e7ef 100%);
 }
-
 .header-content {
   height: 100%;
   display: flex;
@@ -2159,31 +2146,33 @@ onUnmounted(() => {
   align-items: center;
   padding: 0 20px;
 }
-
 .header-content h2 {
   margin: 0;
   color: #2c3e50;
 }
-
 .video-card {
   height: calc(100vh - 140px);
+  min-height: 480px;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 2px 12px #0001;
+  display: flex;
+  flex-direction: column;
 }
-
 .video-container {
   position: relative;
   width: 100%;
   height: 100%;
   background-color: #000;
-  border-radius: 8px;
+  border-radius: 10px;
   overflow: hidden;
+  box-shadow: 0 1px 8px #0002;
 }
-
 .video-player {
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
-
 .overlay-canvas {
   position: absolute;
   top: 0;
@@ -2192,352 +2181,45 @@ onUnmounted(() => {
   height: 100%;
   pointer-events: none;
 }
-
 .camera-placeholder {
   position: absolute;
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
   text-align: center;
-  color: #909399;
+  color: #b0b3b8;
+  background: #fff8;
+  border-radius: 10px;
+  padding: 32px 24px 18px 24px;
+  box-shadow: 0 2px 12px #0001;
 }
-
 .placeholder-icon {
   font-size: 64px;
   margin-bottom: 20px;
+  color: #a0a4ad;
 }
-
 .device-select {
   margin-top: 20px;
-  width: 200px;
+  width: 220px;
 }
-
 .control-panel,
 .results-panel,
 .performance-panel,
 .alerts-panel {
-  margin-bottom: 20px;
+  margin-bottom: 18px;
+  border-radius: 10px;
+  box-shadow: 0 1px 6px #0001;
+  background: #fafbfc;
 }
-
 .card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  padding-bottom: 2px;
+  border-bottom: 1px solid #f0f0f0;
+  margin-bottom: 6px;
 }
-
 .analysis-settings {
-  padding: 10px 0;
-}
-
-.frequency-hint {
-  margin-top: 5px;
-  text-align: center;
-}
-
-.frequency-hint small {
-  color: #909399;
-  font-size: 11px;
-}
-
-.performance-stats {
-  display: flex;
-  justify-content: space-between;
-  gap: 15px;
-}
-
-.stat-item {
-  text-align: center;
-  flex: 1;
-}
-
-.stat-label {
-  display: block;
-  font-size: 12px;
-  color: #909399;
-  margin-bottom: 5px;
-}
-
-.stat-value {
-  display: block;
-  font-size: 18px;
-  font-weight: 600;
-  color: #409EFF;
-}
-
-.detection-list,
-.alerts-list {
-  max-height: 300px;
-}
-
-.detection-item {
-  display: flex;
-  align-items: center;
-  padding: 12px;
-  margin-bottom: 8px;
-  border-radius: 6px;
-  background-color: #f8f9fa;
-  border-left: 4px solid #409EFF;
-}
-
-.detection-item.type-face {
-  border-left-color: #67C23A;
-}
-
-.detection-item.type-unknown_face {
-  border-left-color: #F56C6C;
-}
-
-.detection-icon {
-  font-size: 24px;
-  margin-right: 12px;
-}
-
-.detection-info {
-  flex: 1;
-}
-
-.detection-name {
-  font-weight: 600;
-  color: #2c3e50;
-}
-
-.detection-details {
-  font-size: 12px;
-  color: #606266;
-  margin: 2px 0;
-}
-
-.detection-time {
-  font-size: 11px;
-  color: #909399;
-}
-
-.no-results,
-.no-alerts {
-  text-align: center;
-  padding: 40px 20px;
-  color: #909399;
-}
-
-.no-results .el-icon,
-.no-alerts .el-icon {
-  font-size: 48px;
-  margin-bottom: 10px;
-}
-
-.alert-item {
-  margin-bottom: 10px;
-}
-
-.badge {
-  margin-left: 10px;
-}
-
-/* 性能优化状态显示 */
-.optimization-status {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.opt-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: #67c23a;
-}
-
-.opt-item .el-icon {
-  color: #67c23a;
-}
-
-/* 音频监控显示 */
-.audio-monitor {
-  width: 100%;
-}
-
-.audio-level-display {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.audio-text {
-  font-size: 13px;
-  color: #606266;
-}
-
-.audio-bar {
-  width: 100%;
-  height: 8px;
-  background-color: #e4e7ed;
-  border-radius: 4px;
-  overflow: hidden;
-}
-
-.audio-level {
-  height: 100%;
-  border-radius: 4px;
-  transition: all 0.3s ease;
-  min-width: 2px;
-}
-
-/* 性能监控面板增强 */
-.performance-stats {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
-  gap: 15px;
-}
-
-.stat-item {
-  background-color: #f8f9fa;
-  padding: 10px 8px;
-  border-radius: 6px;
-  text-align: center;
-  border: 1px solid #e4e7ed;
-}
-
-.stat-item:hover {
-  border-color: #409eff;
-  box-shadow: 0 2px 8px rgba(64, 158, 255, 0.1);
-}
-
-/* 性能建议样式 */
-.performance-advice {
-  margin-top: 10px;
-}
-
-.performance-advice .el-alert {
-  border-radius: 6px;
-}
-
-/* 优化状态动画 */
-.opt-item {
-  transition: all 0.3s ease;
-}
-
-.opt-item:hover {
-  transform: translateX(2px);
-}
-
-/* 延迟状态颜色指示 */
-.el-text {
-  font-weight: 500;
-}
-
-/* 测试控制面板 */
-.test-controls {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  align-items: flex-start;
-}
-
-.test-controls .el-button {
-  width: 100%;
-}
-
-.test-controls .el-text {
-  font-size: 11px;
-  color: #909399;
-}
-
-/* 危险区域管理样式 */
-.zone-controls {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  align-items: flex-start;
-}
-
-.zone-controls .el-button {
-  width: 100%;
-}
-
-.zone-controls .el-text {
-  font-size: 11px;
-  color: #909399;
-}
-
-.zone-manager {
-  max-height: 600px;
-  overflow-y: auto;
-}
-
-.zone-list {
-  margin-bottom: 20px;
-}
-
-.zone-list h4 {
-  margin: 0 0 15px 0;
-  color: #2c3e50;
-  font-size: 16px;
-}
-
-.no-zones {
-  text-align: center;
-  padding: 40px 20px;
-  color: #909399;
-}
-
-.no-zones .el-icon {
-  font-size: 48px;
-  margin-bottom: 10px;
-}
-
-.new-zone-form {
-  background-color: #f8f9fa;
-  padding: 20px;
-  border-radius: 8px;
-  border: 1px solid #e4e7ed;
-}
-
-.new-zone-form h4 {
-  margin: 0 0 15px 0;
-  color: #2c3e50;
-  font-size: 16px;
-}
-
-.new-zone-form .el-form-item {
-  margin-bottom: 15px;
-}
-
-.new-zone-form small {
-  display: block;
-  margin-top: 5px;
-  color: #909399;
-  font-size: 12px;
-}
-
-.dialog-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-}
-
-/* Canvas绘制相关 */
-.overlay-canvas {
-  cursor: crosshair;
-}
-
-.overlay-canvas.drawing {
-  cursor: crosshair !important;
-}
-
-/* 响应式设计 */
-@media (max-width: 768px) {
-  .zone-manager {
-    max-height: 400px;
-  }
-  
-  .new-zone-form {
-    padding: 15px;
-  }
-  
-  .zone-controls .el-button {
-    font-size: 12px;
-    padding: 6px 12px;
-  }
+  padding: 10px 0 0 0;
 }
 </style>
