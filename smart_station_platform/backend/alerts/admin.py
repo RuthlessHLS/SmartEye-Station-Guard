@@ -2,6 +2,7 @@
 
 from django.contrib import admin
 from .models import Alert
+from .models import AlertLog
 
 @admin.register(Alert)
 class AlertAdmin(admin.ModelAdmin):
@@ -28,3 +29,11 @@ class AlertAdmin(admin.ModelAdmin):
             'classes': ('collapse',)
         }),
     )
+
+@admin.register(AlertLog)
+class AlertLogAdmin(admin.ModelAdmin):
+    list_display = ('id', 'alert', 'action', 'user', 'created_at', 'detail')
+    list_filter = ('action', 'user', 'created_at')
+    search_fields = ('alert__id', 'user__username', 'detail')
+    date_hierarchy = 'created_at'
+    readonly_fields = ('created_at',)

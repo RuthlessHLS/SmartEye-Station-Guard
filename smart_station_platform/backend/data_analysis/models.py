@@ -3,6 +3,7 @@ from django.contrib.auth.models import User
 from django.utils import timezone
 import json
 
+
 class TrafficData(models.Model):
     """交通数据模型"""
     timestamp = models.DateTimeField('时间戳', default=timezone.now)
@@ -83,3 +84,11 @@ class DataScreenConfig(models.Model):
         db_table = 'data_screen_config'
         verbose_name = '数据大屏配置'
         verbose_name_plural = '数据大屏配置'
+
+class DailyReport(models.Model):
+    date = models.DateField(auto_now_add=True, unique=True)
+    content = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"日报 {self.date}"

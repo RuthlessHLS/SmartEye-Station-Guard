@@ -1,5 +1,3 @@
-# G:\Web\smart_station_platform\backend\camera_management\urls.py (或 ai_reports/urls.py, data_analysis/urls.py)
-
 from django.urls import path
 from . import views
 
@@ -9,6 +7,7 @@ urlpatterns = [
     
     # 轨迹回放接口
     path('trajectory/<str:vehicle_id>/', views.TrajectoryView.as_view(), name='trajectory'),
+
     
     # 交通数据管理接口
     path('traffic-data/', views.TrafficDataView.as_view(), name='traffic_data'),

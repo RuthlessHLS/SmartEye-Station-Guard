@@ -27,6 +27,9 @@ import logging
 import os # Added for API key validation
 logger = logging.getLogger(__name__)
 
+from .models import AlertLog
+from .serializers import AlertLogSerializer
+
 
 class AlertPagination(PageNumberPagination):
     """告警列表分页配置"""
@@ -113,7 +116,15 @@ class AlertHandleView(generics.RetrieveUpdateAPIView):
     def perform_update(self, serializer):
         print("=== perform_update called ===")
         alert = serializer.save(handler=self.request.user)
-        
+        # 写入操作日志
+        from .models import AlertLog
+        action = '处理告警' if alert.status == 'in_progress' else '标记为已解决'
+        AlertLog.objects.create(
+            alert=alert,
+            user=self.request.user,
+            action=action,
+            detail=f'状态变为{alert.status}，备注：{alert.processing_notes}'
+        )
         # 发送WebSocket通知告警状态更新
         self._send_alert_update_notification(alert, 'handle')
 
@@ -416,3 +427,10 @@ class AlertTestView(APIView):
                 'status': 'error',
                 'message': f'测试失败: {str(e)}'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class AlertLogListView(generics.ListAPIView):
+    serializer_class = AlertLogSerializer
+    def get_queryset(self):
+        alert_id = self.kwargs['alert_id']
+        return AlertLog.objects.filter(alert_id=alert_id)
