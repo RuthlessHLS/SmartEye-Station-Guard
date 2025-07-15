@@ -267,6 +267,12 @@ const api = {
     getWebRTCStatus: () => {
       return aiService.get('/webrtc/status');
     },
+    getAISettings: (camera_id) => {
+      return requestWithRetry(aiService, {
+        url: `/frame/analyze/settings/${camera_id}`,
+        method: 'get'
+      });
+    },
     verifyFace: (data) => {
       return requestWithRetry(aiService, {
         url: '/face/verify',
@@ -359,12 +365,6 @@ const api = {
         url: `/detection/stabilization/preset/${preset}`,
         method: 'post',
         data: { camera_id }
-      });
-    },
-    getSystemStatus: () => {
-      return requestWithRetry(aiService, {
-        url: '/system/status/',
-        method: 'get'
       });
     }
   }
