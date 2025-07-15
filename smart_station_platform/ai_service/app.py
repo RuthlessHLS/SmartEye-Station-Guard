@@ -12,6 +12,7 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from typing import Dict, List, Optional, Any, Union, Tuple
+from threading import Lock
 
 import cv2
 import numpy as np
@@ -23,10 +24,12 @@ from fastapi import FastAPI, HTTPException, Body, File, UploadFile, Form, Query,
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, ConfigDict
 from requests.adapters import HTTPAdapter
+from starlette.responses import JSONResponse
 from urllib3.util.retry import Retry
 from starlette.websockets import WebSocketState
 import httpx # 确保导入 httpx
 from urllib.parse import urlparse, parse_qs
+from loguru import logger
 
 # 添加自定义JSON编码器处理datetime对象
 class DateTimeEncoder(json.JSONEncoder):
@@ -59,75 +62,16 @@ from smart_station_platform.ai_service.core.draw_utils import draw_detections
 from smart_station_platform.ai_service.core.webrtc_pusher import webrtc_pusher, start_cleanup_task
 
 # --- 全局变量和模型初始化 ---
-# 获取当前文件 (app.py) 的绝对路径
-current_file_path = os.path.dirname(os.path.abspath(__file__))
-# 构建 'assets' 目录的绝对路径
-assets_path = os.path.join(current_file_path, 'assets')
-known_faces_path = os.path.join(assets_path, 'known_faces')
-# --- FIX: Add explicit path for the YOLO model ---
-yolo_model_path = os.path.join(assets_path, 'models', 'torch', 'yolov8n.pt')
-
-
-# 初始化人脸识别模块，并传入资源路径
-try:
-    face_recognizer = FaceRecognizer(known_faces_dir=known_faces_path, asset_base_path=assets_path)
-    # FIX: LivenessDetector does not exist, and is not needed for initialization.
-    # liveness_detector is created per-session inside the WebSocket endpoint.
-    if not hasattr(face_recognizer, 'dlib_detector') or not face_recognizer.dlib_detector:
-        logger.error("人脸识别模块的 dlib 组件初始化失败，活体检测功能将受限。")
-except Exception as e:
-    logger.error(f"初始化 face_recognizer 时发生严重错误: {e}", exc_info=True)
-    face_recognizer = None
-
-
-# FIX: Corrected class name for the fire detector and provide full model path
-try:
-    if os.path.exists(yolo_model_path):
-        fire_detector = FlameSmokeDetector(model_path=yolo_model_path) 
-    else:
-        logger.error(f"YOLO model not found at {yolo_model_path}. Fire detector will be disabled.")
-        fire_detector = None
-except Exception as e:
-    logger.error(f"初始化 fire_detector 时发生严重错误: {e}", exc_info=True)
-    fire_detector = None
-    
-try:
-    # --- FINAL FIX: Load class names from the file and then initialize the detector ---
-    coco_names_path = os.path.join(assets_path, 'models', 'coco.names')
-    if os.path.exists(yolo_model_path) and os.path.exists(coco_names_path):
-        with open(coco_names_path, 'r', encoding='utf-8') as f:
-            coco_class_names = [line.strip() for line in f.readlines()]
-        
-        logger.info(f"成功从 {coco_names_path} 加载 {len(coco_class_names)} 个类别名称。")
-        
-        object_detector = ObjectDetector(
-            model_weights_path=yolo_model_path,
-            num_classes=len(coco_class_names),
-            class_names=coco_class_names
-        )
-    else:
-        if not os.path.exists(yolo_model_path):
-            logger.error(f"YOLO model not found at {yolo_model_path}. Object detector will be disabled.")
-        if not os.path.exists(coco_names_path):
-            logger.error(f"COCO names file not found at {coco_names_path}. Object detector will be disabled.")
-        object_detector = None
-except Exception as e:
-    logger.error(f"初始化 object_detector 时发生严重错误: {e}", exc_info=True)
-    object_detector = None
-    
-try:
-    # FIX: MultiObjectTracker does not exist. We should use DeepSORTTracker.
-    # Note: DeepSORTTracker itself is a wrapper for a simpler tracker in your code.
-    tracker = DeepSORTTracker()
-except Exception as e:
-    logger.error(f"初始化 tracker 时发生严重错误: {e}", exc_info=True)
-    tracker = None
-
-try:
-    danger_zone_detector = DangerZoneDetector()
-except Exception as e:
-    logger.error(f"初始化 danger_zone_detector 时发生严重错误: {e}", exc_info=True)
-    danger_zone_detector = None
+# 将所有模型和服务管理器的实例变量声明为全局，并初始化为None
+# 它们的实际初始化将在lifespan管理器中进行
+face_recognizer: Optional[FaceRecognizer] = None
+fire_detector: Optional[FlameSmokeDetector] = None
+object_detector: Optional[ObjectDetector] = None
+tracker: Optional[DeepSORTTracker] = None
+danger_zone_detector: Optional[DangerZoneDetector] = None
+app_config = None
+service_manager = None
+known_faces_path = None # 将 known_faces_path 提升为全局变量
 
 
 # --- 配置管理 ---
@@ -156,24 +100,49 @@ class AppConfig:
         print(f"--- 使用资源根目录: {self.ASSET_BASE_PATH} ---")
 
 
-# 初始化配置
-app_config = AppConfig()
-
 # 全局常量定义
-DETECTION_FRAME_SKIP = 1  # 每5帧处理一次检测，减少CPU/GPU负载
+DETECTION_FRAME_SKIP = 2  # 每5帧处理一次检测，减少CPU/GPU负载
+
+
+# --- 新增: 将AISettings移至全局作用域 ---
+class AISettings(BaseModel):
+    """
+    用于动态更新AI分析设置的Pydantic模型。
+    使用Optional表示并非所有字段都必须在每次请求中提供。
+    """
+    # model_config = ConfigDict(extra='ignore') # 允许未定义的字段，但不会被模型使用
+
+    # 开关类设置
+    face_recognition: Optional[bool] = None
+    object_detection: Optional[bool] = None
+    behavior_analysis: Optional[bool] = None
+    fire_detection: Optional[bool] = None
+    sound_detection: Optional[bool] = None
+    liveness_detection: Optional[bool] = None # 活体检测开关
+    realtime_mode: Optional[bool] = None # 实时模式开关
+
+    # 阈值和参数类设置
+    face_confidence_threshold: Optional[float] = Field(None, ge=0.0, le=1.0)
+    object_confidence_threshold: Optional[float] = Field(None, ge=0.0, le=1.0)
+    fall_detection_threshold: Optional[float] = Field(None, ge=0.0, le=1.0)
+    stabilization_level: Optional[str] = Field(None, pattern="^(default|responsive|balanced|stable|ultra_stable)$")
+
+    class Config:
+        extra = 'ignore' # 允许额外的字段，FastAPI会忽略它们
 
 # --- AIServiceManager 类：集中管理AI服务逻辑和数据 ---
 class AIServiceManager:
     def __init__(self, config: AppConfig):
         self.config = config
         self._detectors: Dict[str, Any] = {
+            # 在 __init__ 时，这些全局变量还是 None
             "object": object_detector,
             "fire": fire_detector,
             "face": face_recognizer,
-            "behavior": BehaviorDetector(),
-            # "acoustic": AcousticEventDetector() if config.ENABLE_SOUND_DETECTION else None,
+            "behavior": None,  # BehaviorDetector将在initialize_detectors中初始化
         }
         self._video_streams: Dict[str, VideoStream] = {}  # 存储活跃的VideoStream实例
+        self._video_streams_lock = Lock()  # 为视频流字典添加线程锁
         self._object_trackers: Dict[str, DeepSORTTracker] = {}  # 存储每个摄像头的DeepSORT追踪器
         self._detection_cache: Dict[str, Dict] = {}  # 存储每个摄像头的检测稳定化缓存
         self._thread_pool = ThreadPoolExecutor(max_workers=os.cpu_count() or 4)
@@ -190,6 +159,15 @@ class AIServiceManager:
         # 检测结果稳定化参数存储 (per camera_id)
         self._stabilization_config: Dict[str, Dict] = {}
         self._video_webrtc: Dict[str, str] = {}  # 用于存储 WebRTC 连接的 ID
+
+    def update_detectors(self):
+        """用已经初始化的全局检测器实例来更新内部字典"""
+        self._detectors["object"] = object_detector
+        self._detectors["fire"] = fire_detector
+        self._detectors["face"] = face_recognizer
+        # 确保 BehaviorDetector 也被正确初始化和赋值
+        if self._detectors["behavior"] is None:
+            self._detectors["behavior"] = BehaviorDetector()
 
     async def initialize_detectors(self):
         """初始化所有AI检测器模型。"""
@@ -1045,31 +1023,33 @@ class AIServiceManager:
         active_tasks = []
 
         # 火焰检测
-        if enable_fire_detection and "fire" in self._detectors:
-            try:
-                fire_detector = self._detectors["fire"]
-                # 【修复 1.5】移除 confidence_threshold 参数
-                fire_results = fire_detector.detect(frame)
-                for fire_obj in fire_results:
-                    bbox = [int(float(coord)) for coord in fire_obj["coordinates"]]
-                    detection = {
-                        "type": "fire_detection", "class_name": fire_obj["class_name"],
-                        "detection_type": fire_obj["type"], "confidence": float(fire_obj["confidence"]),
-                        "bbox": bbox, "timestamp": datetime.now().isoformat()
-                    }
-                    results["detections"].append(detection)
-                    self.send_alert_to_backend(
-                        AIAnalysisResult(
-                            camera_id=camera_id, event_type=f"fire_detection_{fire_obj['type']}",
-                            location={"box": bbox}, confidence=float(fire_obj["confidence"]),
-                            timestamp=datetime.now().isoformat(),
-                            details={"detection_type": fire_obj["type"], "object_type": fire_obj["class_name"],
-                                     "area": fire_obj["area"], "center": fire_obj["center"]}
+        if enable_fire_detection:
+            fire_detector = self._detectors.get("fire")
+            if fire_detector:
+                try:
+                    # 【修复 1.5】移除 confidence_threshold 参数
+                    fire_results = fire_detector.detect(frame)
+                    for fire_obj in fire_results:
+                        bbox = [int(float(coord)) for coord in fire_obj["coordinates"]]
+                        detection = {
+                            "type": "fire_detection", "class_name": fire_obj["class_name"],
+                            "detection_type": fire_obj["type"], "confidence": float(fire_obj["confidence"]),
+                            "bbox": bbox, "timestamp": datetime.now().isoformat()
+                        }
+                        results["detections"].append(detection)
+                        self.send_alert_to_backend(
+                            AIAnalysisResult(
+                                camera_id=camera_id, event_type=f"fire_detection_{fire_obj['type']}",
+                                location={"box": bbox}, confidence=float(fire_obj["confidence"]),
+                                timestamp=datetime.now().isoformat(),
+                                details={"detection_type": fire_obj["type"], "object_type": fire_obj["class_name"],
+                                         "area": fire_obj["area"], "center": fire_obj["center"]}
+                            )
                         )
-                    )
-            except Exception as e:
-                print(f"火焰检测失败: {e}")
-                traceback.print_exc()
+                except Exception as e:
+                    logger.error(f"火焰检测失败: {e}", exc_info=True)
+            else:
+                logger.warning(f"[摄像头 {camera_id}] 火焰检测已启用，但模型未加载。")
         else:
             logger.debug(f"[摄像头 {camera_id}] 火焰检测已禁用或未加载检测器，跳过检测")
 
@@ -1311,16 +1291,6 @@ class AIServiceManager:
 
         # 返回处理后的结果
         return results
-
-    # --- AISettings Model (for API) ---
-    class AISettings(BaseModel):
-        model_config = ConfigDict(extra='allow')  # 允许额外字段
-        face_recognition: Optional[bool] = None
-        object_detection: Optional[bool] = None
-        behavior_analysis: Optional[bool] = None
-        sound_detection: Optional[bool] = None
-        fire_detection: Optional[bool] = None
-        liveness_detection: Optional[bool] = None
 
     def get_ai_settings(self, camera_id: str) -> Dict:
         if camera_id not in self._ai_settings:
@@ -1570,21 +1540,61 @@ class AIServiceManager:
             logger.error(f"Error reloading face recognizer: {e}", exc_info=True)
             return {"status": "error", "message": str(e)}
 
-    def update_stream_settings(self, camera_id, settings):
-        """更新特定视频流的设置。"""
-        stream = self._video_streams.get(camera_id)
-        if stream:
-            stream.update_settings(settings)
-            # 同时更新AI设置存储
-            if camera_id not in self._ai_settings:
-                self._ai_settings[camera_id] = self.AISettings().model_dump()
+    def update_stream_settings(self, camera_id: str, settings: Dict) -> Optional[Dict]:
+        """
+        更新特定视频流的AI分析设置，并应用到正在运行的流。
+        同时，这也将成为该摄像头未来启动时的默认设置。
+        """
+        # 首先，更新全局AI设置，这样即使流当前未运行，下次启动也会使用新设置
+        current_settings = self.update_ai_settings(camera_id, settings)
+
+        # 检查火焰检测设置是否有变化
+        need_cache_clear = False
+        cache_types_to_clear = []
+
+        if 'face_recognition' in settings:
+            need_cache_clear = True
+            cache_types_to_clear.append('face')
+            print(f"[设置更新] 摄像头 {camera_id} 人脸识别设置已更改为: {settings['face_recognition']}")
+
+        if 'object_detection' in settings:
+            need_cache_clear = True
+            # 当目标检测关闭时，也应清除危险区域和行为分析的缓存
+            cache_types_to_clear.extend(['object', 'danger_zone', 'behavior'])
+            print(f"[设置更新] 摄像头 {camera_id} 目标检测设置已更改为: {settings['object_detection']}")
+
+        # 检查火焰检测设置是否有变化
+        if 'fire_detection' in settings:
+            need_cache_clear = True
+            cache_types_to_clear.append('fire')
+            print(f"[设置更新] 摄像头 {camera_id} 火焰检测设置已更改为: {settings['fire_detection']}")
+        
+        # 清除相关缓存以确保设置立即生效
+        if need_cache_clear and camera_id in self._detection_cache:
+            cache = self._detection_cache[camera_id]
             
-            # 更新存储的设置
-            self._ai_settings[camera_id].update(settings)
+            # 根据设置变更，选择性清除缓存
+            if 'face' in cache_types_to_clear and 'face_history' in cache:
+                cache['face_history'].clear()
+                print(f"[设置更新] 已清除摄像头 {camera_id} 的人脸历史缓存")
             
-            logger.info(f"成功更新摄像头 {camera_id} 的AI设置: {settings}")
-            return self._ai_settings[camera_id]
-        return None
+            if 'objects' in cache:
+                if 'all' in cache_types_to_clear:
+                    # 完全清除对象缓存
+                    cache['objects'] = {}
+                    print(f"[设置更新] 已清除摄像头 {camera_id} 的全部对象缓存")
+                else:
+                    # 选择性清除特定类型的对象缓存
+                    cache['objects'] = {k: v for k, v in cache['objects'].items() if v.get('type') not in cache_types_to_clear}
+                    print(f"[设置更新] 已清除摄像头 {camera_id} 的 {', '.join(cache_types_to_clear)} 类型缓存")
+        
+        # 如果VideoStream实例存在，更新其设置
+        if camera_id in self._video_streams:
+            self._video_streams[camera_id].update_settings(settings)
+            print(f"[设置更新] 已更新摄像头 {camera_id} 的视频流设置")
+            
+        # 返回更新后的设置
+        return current_settings
 
     # --- 【新增】URL转换辅助函数 ---
     def get_stream_key_from_url(self, url: str, source_type: str) -> Optional[str]:
@@ -1605,18 +1615,126 @@ class AIServiceManager:
             logger.error(f"从URL '{url}' (类型: {source_type}) 提取流密钥失败: {e}")
             return None
 
+    # --- AI 分析设置管理 (新方法) ---
+    def get_ai_settings(self, camera_id: str) -> Dict:
+        """获取指定摄像头的当前AI设置"""
+        # 返回一个副本，防止外部直接修改
+        return self._ai_settings.get(camera_id, self.get_default_ai_settings()).copy()
 
-# 创建服务管理器实例
-service_manager = AIServiceManager(app_config)
+    def get_default_ai_settings(self) -> Dict:
+        return {
+            'face_recognition': True,
+            'object_detection': True,
+            'behavior_analysis': False,
+            'sound_detection': False,
+            'fire_detection': True,
+            'liveness_detection': True,
+        }
+
+    async def start_stream(self, camera_id: str, stream_url: str, source_type: str,
+                           enable_face_recognition: bool, enable_object_detection: bool,
+                           enable_behavior_detection: bool, enable_fire_detection: bool,
+                           enable_sound_detection: bool, enable_liveness_detection: bool) -> Dict:
+        """启动一个新的视频流进行分析"""
+        return await self.process_single_frame(
+            frame=None,
+            camera_id=camera_id,
+            enable_face_recognition=enable_face_recognition,
+            enable_object_detection=enable_object_detection,
+            enable_behavior_detection=enable_behavior_detection,
+            enable_fire_detection=enable_fire_detection,
+            enable_liveness_detection=enable_liveness_detection,
+            performance_mode="fast"
+        )
 
 
 # --- FastAPI 应用生命周期管理器 ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """FastAPI 的生命周期管理器。"""
-    # 由于模型已在全局初始化，这里可以留空或用于其他启动任务
-    logger.info("AI服务启动，生命周期管理器已激活。")
+    global face_recognizer, fire_detector, object_detector, tracker, danger_zone_detector, service_manager, app_config, known_faces_path
+    print("--- 1. 服务器启动: 开始执行生命周期管理 ---")
+
+    # 初始化配置
+    app_config = AppConfig()
+
+    # --- 关键修复: 在服务管理器初始化之前定义好资源路径 ---
+    assets_path = app_config.ASSET_BASE_PATH
+    known_faces_path = os.path.join(assets_path, 'known_faces')
+    os.makedirs(known_faces_path, exist_ok=True) # 确保目录存在
     
+    # 初始化核心服务管理器
+    service_manager = AIServiceManager(app_config)
+
+    # 初始化所有检测器 (现在可以安全地访问已定义的路径)
+    model_weights_path = os.path.join(assets_path, "models", "torch", "yolov8n.pt")
+    class_names_path = os.path.join(assets_path, "models", "coco.names")
+
+    # 打印将要用于人脸识别器的路径
+    print(f"--- 准备初始化人脸识别器，使用路径: {known_faces_path} ---")
+
+    # 初始化人脸识别器
+    face_recognizer = FaceRecognizer(known_faces_dir=known_faces_path, asset_base_path=assets_path)
+
+    # 初始化火焰和烟雾检测器
+    try:
+        # 【修复】修正火焰检测模型的路径
+        fire_model_path = os.path.join(assets_path, 'models', 'torch', 'yolov8n-fire.pt')
+        if os.path.exists(fire_model_path):
+            fire_detector = FlameSmokeDetector(model_path=fire_model_path)
+            print(f"--- 火焰检测器初始化成功，使用模型: {fire_model_path} ---")
+        else:
+            print(f"--- 警告: 未找到火焰检测器模型于 '{fire_model_path}'，将使用通用模型或禁用此功能。 ---")
+            # 尝试使用通用模型作为备选
+            general_model_path = os.path.join(assets_path, "models", "torch", "yolov8n.pt")
+            if os.path.exists(general_model_path):
+                fire_detector = FlameSmokeDetector(model_path=general_model_path)
+                print(f"--- 使用通用模型进行火焰检测: {general_model_path} ---")
+            else:
+                fire_detector = None
+    except Exception as e:
+        print(f"--- 错误: 初始化火焰检测器时失败: {e} ---")
+        fire_detector = None
+
+    # 初始化通用对象检测器
+    try:
+        if os.path.exists(model_weights_path) and os.path.exists(class_names_path):
+            with open(class_names_path, 'r', encoding='utf-8') as f:
+                coco_class_names = [line.strip() for line in f.readlines()]
+            logger.info(f"成功从 {class_names_path} 加载 {len(coco_class_names)} 个类别名称。")
+            object_detector = ObjectDetector(
+                model_weights_path=model_weights_path,
+                num_classes=len(coco_class_names),
+                class_names=coco_class_names
+            )
+        else:
+            if not os.path.exists(model_weights_path):
+                logger.error(f"YOLO model not found at {model_weights_path}. Object detector will be disabled.")
+            if not os.path.exists(class_names_path):
+                logger.error(f"COCO names file not found at {class_names_path}. Object detector will be disabled.")
+            object_detector = None
+    except Exception as e:
+        logger.error(f"初始化 object_detector 时发生严重错误: {e}", exc_info=True)
+        object_detector = None
+
+    # 初始化追踪器和危险区域检测器
+    try:
+        tracker = DeepSORTTracker()
+    except Exception as e:
+        logger.error(f"初始化 tracker 时发生严重错误: {e}", exc_info=True)
+        tracker = None
+
+    try:
+        danger_zone_detector = DangerZoneDetector()
+    except Exception as e:
+        logger.error(f"初始化 danger_zone_detector 时发生严重错误: {e}", exc_info=True)
+        danger_zone_detector = None
+
+    # 【修复】使用已初始化的全局模型实例来更新管理器内部状态
+    service_manager.update_detectors()
+
+    logger.info("所有模型和服务初始化完成。")
+
     # 启动 WebRTC 清理任务
     cleanup_task = asyncio.create_task(start_cleanup_task())
     
@@ -1629,7 +1747,8 @@ async def lifespan(app: FastAPI):
     except asyncio.CancelledError:
         pass
     
-    await service_manager.shutdown_services()
+    if service_manager:
+        await service_manager.shutdown_services()
 
 
 # 创建FastAPI应用实例
@@ -2249,12 +2368,55 @@ async def start_stream_endpoint(
 # 添加一个健康检查接口
 @app.get("/system/status/")
 async def get_system_status():
-    return {"status": "ok", "message": "AI service is running"}
+    """
+    获取系统状态，主要用于前端检查视频流是否准备好进行WebRTC推流。
+    """
+    try:
+        if not service_manager:
+            logger.warning("get_system_status called before service_manager is initialized.")
+            raise HTTPException(status_code=503, detail="服务尚未完全初始化，请稍后再试。")
+
+        active_running_streams = {}
+        # 使用锁来安全地访问共享的 _video_streams 字典
+        with service_manager._video_streams_lock:
+            # 在锁内，我们仍然使用 .copy() 来迭代，这是一种更安全的做法，可以防止在 future 的某些实现中出现意外的副作用。
+            active_running_streams = {
+                cam_id: stream
+                for cam_id, stream in service_manager._video_streams.copy().items()
+                if stream.is_running
+            }
+        
+        # 构建前端期望的响应结构。
+        response_data = {
+            "status": "ok",
+            "active_streams": len(active_running_streams),
+            "frame_buffers": {cam_id: {"is_ready": True} for cam_id in active_running_streams}
+        }
+        
+        logger.debug(f"Returning system status: {response_data}")
+        return response_data
+    except Exception as e:
+        logger.error(f"获取系统状态时发生严重错误: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="获取系统状态时发生内部服务器错误。")
+
+
+@app.post("/alerts/")
+async def create_alert(alert: AIAnalysisResult):
+    """
+    创建新的告警通知。
+    """
+    try:
+        # 将告警通知发送给后端
+        await service_manager.send_alert_to_backend(alert)
+        return {"status": "success", "message": "告警通知已成功发送"}
+    except Exception as e:
+        logger.error(f"创建告警通知时发生错误: {e}", exc_info=True)
+        return {"status": "error", "message": f"服务器内部错误: {e}"}
 
 
 # AI分析设置
 @app.post("/frame/analyze/settings/{camera_id}")
-async def update_ai_settings(camera_id: str, settings: service_manager.AISettings = Body(...)):
+async def update_ai_settings(camera_id: str, settings: AISettings = Body(...)):
     """更新AI分析设置并将其传播到视频流"""
     # 【核心修复】使用 exclude_unset=True 来获取一个只包含客户端实际发送字段的字典
     update_data = settings.model_dump(exclude_unset=True)

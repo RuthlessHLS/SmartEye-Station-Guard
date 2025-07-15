@@ -123,3 +123,15 @@ class AlertConsumer(AsyncWebsocketConsumer):
             await self.send(json.dumps(message, cls=DateTimeEncoder))
         except Exception as e:
             logging.error(f"广播消息时出错: {str(e)}")
+
+    async def throttled_alert(self, event):
+        """处理被节流的告警消息"""
+        try:
+            alert_data = event.get('data', {})
+            await self.send(json.dumps({
+                'type': 'throttled_alert',
+                'data': alert_data,
+                'message': event.get('message', '告警被节流')
+            }, cls=DateTimeEncoder))
+        except Exception as e:
+            logging.error(f"发送节流告警时出错: {str(e)}")
