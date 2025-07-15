@@ -88,14 +88,43 @@ class DailyReportView(APIView):
             count = alerts.filter(timestamp__hour=h).count()
             trend.append({"hour": hour_str, "count": count})
 
-        # 关键事件（可根据实际业务挑选，这里简单选取最新3条）
+        # 关键事件打分函数，必须在调用前定义
+        def calc_alert_score(alert):
+            type_score = {
+                'fire_smoke': 10,
+                'person_fall': 8,
+                'stranger_intrusion': 6,
+                'spoofing_attempt': 4,
+                'other': 3
+            }
+            score = type_score.get(alert.event_type, 3)
+            if alert.status == 'pending':
+                score += 2
+            elif alert.status == 'in_progress':
+                score += 1
+            if hasattr(alert, 'confidence') and alert.confidence and alert.confidence > 0.9:
+                score += 2
+            if 22 <= alert.timestamp.hour or alert.timestamp.hour < 6:
+                score += 1
+            return score
+
+        # 关键事件（每种类型只取分数最高的一条，最多3条）
+        scored_alerts = [(alert, calc_alert_score(alert)) for alert in alerts]
+        sorted_alerts = sorted(scored_alerts, key=lambda x: x[1], reverse=True)
+        type_seen = set()
         key_events = []
-        for alert in alerts.order_by('-timestamp')[:3]:
-            key_events.append({
-                "title": f"{dict(Alert.EVENT_TYPE_CHOICES).get(alert.event_type, alert.event_type)}告警", 
-                "time": alert.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
-                "imageUrl": alert.image_snapshot_url or ''
-            })
+        for alert, score in sorted_alerts:
+            if alert.event_type not in type_seen:
+                key_events.append({
+                    "id": alert.id,
+                    "title": f"{dict(Alert.EVENT_TYPE_CHOICES).get(alert.event_type, alert.event_type)}告警",
+                    "time": alert.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+                    "imageUrl": alert.image_snapshot_url or '',
+                    "score": score
+                })
+                type_seen.add(alert.event_type)
+            if len(key_events) >= 3:
+                break
 
         # AI摘要
         prompt = (

@@ -24,9 +24,18 @@
           <span>{{ report.date ? `${report.date} 监控日报` : '请选择日期' }}</span>
         </div>
       </template>
-      <div v-if="report.summary">
+      <div v-if="report && (typeof report.totalAlerts === 'number' ? report.totalAlerts > 0 : false || (report.summary && (report.summary.overview || report.summary.type_summary)))">
         <h3 class="report-section-title">AI 摘要：</h3>
-        <p class="report-summary">{{ report.summary }}</p>
+        <p class="report-summary">
+          <!-- 支持 summary 为对象或字符串 -->
+          <template v-if="typeof report.summary === 'object' && report.summary !== null">
+            <span v-if="report.summary.overview">{{ report.summary.overview }}</span>
+            <span v-else>{{ report.summary | json }}</span>
+          </template>
+          <template v-else>
+            {{ report.summary }}
+          </template>
+        </p>
 
         <h3 class="report-section-title">告警总数统计：</h3>
         <el-row :gutter="20">
@@ -55,7 +64,7 @@
         <h3 class="report-section-title" style="margin-top: 30px;">关键告警事件：</h3>
         <el-row :gutter="20">
           <el-col :span="8" v-for="(event, index) in report.keyEvents" :key="index" style="margin-bottom: 20px;">
-            <el-card :body-style="{ padding: '0px' }">
+            <el-card :body-style="{ padding: '0px' }" @click="goToAlertDetail(event.id)" style="cursor: pointer;">
               <el-image
                 :src="event.imageUrl"
                 fit="contain"
@@ -74,6 +83,18 @@
       </div>
       <el-empty v-else description="暂无该日期报告数据，请选择其他日期或等待生成。"></el-empty>
     </el-card>
+
+    <el-dialog v-model="alertDetailDialogVisible" title="告警详情" width="600px">
+      <div v-if="alertDetail">
+        <p><b>类型：</b>{{ alertDetail.event_type || alertDetail.event_type_display }}</p>
+        <p><b>时间：</b>{{ formatTime(alertDetail.timestamp) }}</p>
+        <p><b>状态：</b>{{ alertDetail.status || alertDetail.status_display }}</p>
+        <p><b>置信度：</b>{{ alertDetail.confidence }}</p>
+        <p><b>处理人：</b>{{ alertDetail.handler_username }}</p>
+        <el-image v-if="alertDetail.image_snapshot_url" :src="alertDetail.image_snapshot_url" style="width:100%;height:200px;" />
+        <p v-if="alertDetail.processing_notes"><b>处理备注：</b>{{ alertDetail.processing_notes }}</p>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -82,6 +103,9 @@ import { ref, reactive, onMounted, nextTick } from 'vue';
 import { ElMessage } from 'element-plus';
 import api from '@/api'; // 导入API请求服务
 import * as echarts from 'echarts'; // 导入 ECharts
+import { useRouter } from 'vue-router';
+
+const router = useRouter();
 
 const loading = ref(false);
 const reportFilterForm = reactive({
@@ -98,6 +122,19 @@ const report = reactive({
   keyEvents: [], // [{ title: '事件描述', time: '时间', imageUrl: 'URL' }, ...]
 });
 
+// 弹窗相关
+const alertDetailDialogVisible = ref(false);
+const alertDetail = ref(null);
+
+// 格式化时间函数
+function formatTime(val) {
+  if (!val) return '';
+  const d = new Date(val);
+  if (isNaN(d.getTime())) return val;
+  const pad = n => n.toString().padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
 onMounted(() => {
   fetchReport(); // 页面加载时自动获取今天报告
 });
@@ -109,20 +146,18 @@ async function fetchReport() {
   }
   loading.value = true;
   try {
-    const response = await api.alerts.getList({
-      start_time: reportFilterForm.date,
-      end_time: reportFilterForm.date,
-      page: 1,
-      page_size: 100
-    });
-    if (response.data) {
-      Object.assign(report, response.data); // 赋值报告数据
-      report.date = reportFilterForm.date; // 确保日期显示正确
-      // 等待DOM更新，然后初始化图表
+    // 直接请求日报接口
+    const res = await api.get(`/api/data-analysis/reports/daily/${reportFilterForm.date}/`);
+    if (res) {
+      for (const key in res) {
+        report[key] = res[key];
+      }
+      console.log('日报接口返回:', res);
+      console.log('report:', report);
+      report.date = reportFilterForm.date;
       await nextTick();
       initCharts();
     } else {
-      // 清空报告数据
       Object.assign(report, {
         date: reportFilterForm.date,
         summary: '',
@@ -137,7 +172,6 @@ async function fetchReport() {
   } catch (error) {
     ElMessage.error('获取日报失败！');
     console.error('Fetch report error:', error);
-    // 清空报告数据
     Object.assign(report, {
         date: reportFilterForm.date,
         summary: '',
@@ -175,6 +209,8 @@ const initCharts = () => {
           radius: '55%',
           center: ['50%', '60%'],
           data: report.alertTypeDistribution,
+          labelLine: { show: false }, // 不显示引导线
+          label: { show: false },     // 不显示标签
           emphasis: {
             itemStyle: {
               shadowBlur: 10,
@@ -235,6 +271,18 @@ const initCharts = () => {
     window.addEventListener('resize', () => alertTrendChart.resize());
   }
 };
+
+async function goToAlertDetail(id) {
+  if (id) {
+    try {
+      const res = await api.alerts.getDetail(id);
+      alertDetail.value = res;
+      alertDetailDialogVisible.value = true;
+    } catch (e) {
+      ElMessage.error('获取告警详情失败');
+    }
+  }
+}
 </script>
 
 <style scoped>

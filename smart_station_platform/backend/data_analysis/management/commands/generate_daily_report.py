@@ -38,7 +38,7 @@ class Command(BaseCommand):
         prompt = (
             "请根据以下监控数据，严格只输出结构化JSON摘要，字段包括：overview（整体概览，字符串），type_summary（异常类型分布，数组，每项含type和desc），"
             "key_points（重点关注，数组），suggestions（建议，数组），所有内容用简洁正式中文。不要输出任何解释、markdown、注释，只要JSON。\n"
-            f"数据：告警数{total_alerts}，正常数100，异常类型：{','.join([d['name'] for d in type_dist])}"
+            f"数据：告警数{total_alerts}，异常类型：{','.join([d['name'] for d in type_dist])}"
         )
         summary_text = generate_ai_report(prompt)
         # 打印AI原始输出，便于调试
