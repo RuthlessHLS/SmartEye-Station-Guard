@@ -25,6 +25,9 @@ from datetime import datetime, timedelta
 from drf_yasg.utils import swagger_auto_schema
 import logging
 import os # Added for API key validation
+from django.utils import timezone
+from django.core.cache import cache
+
 logger = logging.getLogger(__name__)
 
 
@@ -130,17 +133,21 @@ class AlertHandleView(generics.RetrieveUpdateAPIView):
                 if alert.updated_at:
                     alert_data['updated_at'] = alert.updated_at.isoformat()
 
+                # 【修复】使用动态的、与摄像头关联的组名
+                camera_id = alert.camera.id if alert.camera else 'unknown'
+                group_name = f"camera_{camera_id}"
+
                 async_to_sync(channel_layer.group_send)(
-                    "alerts_group",
+                    group_name,
                     {
-                        "type": "alert_update_message",
+                        "type": "alert_update", # 使用与 consumer 中方法匹配的类型
                         "message": {
                             "action": action_type,
                             "alert": alert_data
                         }
                     }
                 )
-                print(f"告警 {alert.id} 的{action_type}操作已推送到WebSocket。")
+                print(f"告警 {alert.id} 的{action_type}操作已推送到WebSocket (Group: {group_name})。")
         except Exception as e:
             print(f"发送WebSocket通知时发生错误: {e}")
 
@@ -176,28 +183,118 @@ class AlertUpdateView(generics.RetrieveUpdateAPIView):
                 if alert.updated_at:
                     alert_data['updated_at'] = alert.updated_at.isoformat()
 
+                # 【修复】使用动态的、与摄像头关联的组名
+                camera_id = alert.camera.id if alert.camera else 'unknown'
+                group_name = f"camera_{camera_id}"
+                
                 async_to_sync(channel_layer.group_send)(
-                    "alerts_group",
+                    group_name,
                     {
-                        "type": "alert_update_message",
+                        "type": "alert_update", # 使用与 consumer 中方法匹配的类型
                         "message": {
                             "action": action_type,
                             "alert": alert_data
                         }
                     }
                 )
-                print(f"告警 {alert.id} 的{action_type}操作已推送到WebSocket。")
+                print(f"告警 {alert.id} 的{action_type}操作已推送到WebSocket (Group: {group_name})。")
         except Exception as e:
             print(f"发送WebSocket通知时发生错误: {e}")
+
+
+class AlertThrottleManager:
+    """
+    告警限流管理器，用于限制短时间内重复的告警数量
+    """
+    # 默认限流时间（秒）
+    DEFAULT_THROTTLE_SECONDS = 10
+    
+    # 缓存前缀
+    CACHE_PREFIX = "alert_throttle_"
+    
+    @classmethod
+    def should_throttle(cls, camera_id, event_type, throttle_seconds=None):
+        """
+        检查是否应该限流特定类型的告警
+        
+        参数:
+            camera_id: 摄像头ID
+            event_type: 告警类型
+            throttle_seconds: 限流时间（秒），默认为10秒
+            
+        返回:
+            (bool, int): 是否应该限流，以及当前累积的告警数量
+        """
+        if throttle_seconds is None:
+            throttle_seconds = cls.DEFAULT_THROTTLE_SECONDS
+            
+        # 构建缓存键
+        cache_key = f"{cls.CACHE_PREFIX}{camera_id}_{event_type}"
+        
+        # 获取当前缓存的告警信息
+        alert_data = cache.get(cache_key)
+        
+        now = timezone.now()
+        
+        if alert_data is None:
+            # 第一次出现该类型告警，不限流
+            cache.set(
+                cache_key, 
+                {"first_alert_time": now, "count": 1},
+                timeout=throttle_seconds * 2  # 设置缓存过期时间为限流时间的两倍
+            )
+            return False, 1
+            
+        # 更新计数
+        alert_data["count"] += 1
+        
+        # 计算时间差
+        first_alert_time = alert_data["first_alert_time"]
+        time_diff = (now - first_alert_time).total_seconds()
+        
+        # 更新缓存
+        cache.set(
+            cache_key,
+            alert_data,
+            timeout=throttle_seconds * 2  # 重置过期时间
+        )
+        
+        # 如果在限流时间内，则限流
+        if time_diff < throttle_seconds:
+            logger.info(
+                f"告警限流: 摄像头={camera_id}, 类型={event_type}, "
+                f"在{time_diff:.1f}秒内第{alert_data['count']}次触发"
+            )
+            return True, alert_data["count"]
+            
+        # 超过限流时间，重置计数器
+        cache.set(
+            cache_key,
+            {"first_alert_time": now, "count": 1},
+            timeout=throttle_seconds * 2
+        )
+        return False, 1
+    
+    @classmethod
+    def get_throttle_stats(cls):
+        """获取当前所有限流状态的统计信息"""
+        # 注意：此方法在实际应用中可能不可行，因为Redis不支持键模式搜索
+        # 这里只是一个示例，实际实现可能需要另外的跟踪机制
+        return {"message": "统计功能未实现"}
 
 
 class AIResultReceiveView(APIView):
     """
     接收AI服务发送的分析结果，保存为告警记录，并实时推送到前端。
     POST /alerts/ai-results/
+    
+    新增：集成告警限流功能，避免短时间内产生过多相同类型的告警
     """
     permission_classes = []
     authentication_classes = []
+    
+    # 告警限流时间（秒）
+    ALERT_THROTTLE_SECONDS = 10
 
     def check_api_key(self, request):
         """验证API密钥"""
@@ -210,7 +307,7 @@ class AIResultReceiveView(APIView):
 
     @swagger_auto_schema(request_body=AIResultReceiveSerializer)
     def post(self, request, *args, **kwargs):
-        """处理AI服务发送的分析结果"""
+        """处理AI服务发送的分析结果，并应用告警限流机制"""
         # 验证API密钥
         if not self.check_api_key(request):
             return Response(
@@ -231,8 +328,85 @@ class AIResultReceiveView(APIView):
                         {"error": "Missing required fields"},
                         status=status.HTTP_400_BAD_REQUEST
                     )
-
-                # 创建告警记录
+                
+                # 应用告警限流逻辑
+                camera_id = data['camera_id']
+                event_type = data['event_type']
+                
+                should_throttle, count = AlertThrottleManager.should_throttle(
+                    camera_id=camera_id,
+                    event_type=event_type,
+                    throttle_seconds=self.ALERT_THROTTLE_SECONDS
+                )
+                
+                # 如果应该限流，则不创建新告警记录，但仍然通过WebSocket发送通知
+                if should_throttle:
+                    logger.info(
+                        f"⏱️ 告警已限流: 摄像头={camera_id}, 类型={event_type}, "
+                        f"在{self.ALERT_THROTTLE_SECONDS}秒内第{count}次触发"
+                    )
+                    
+                    # 如果是第一次限流（count==2），发送一个通知
+                    if count == 2:
+                        try:
+                            channel_layer = get_channel_layer()
+                            if channel_layer:
+                                # 发送限流通知给前端
+                                throttle_message = {
+                                    "type": "throttled_alert",
+                                    "camera_id": camera_id,
+                                    "event_type": event_type,
+                                    "throttle_seconds": self.ALERT_THROTTLE_SECONDS,
+                                    "count": count,
+                                    "message": f"相同类型告警在{self.ALERT_THROTTLE_SECONDS}秒内多次触发，已限流",
+                                    "timestamp": timezone.now().isoformat()
+                                }
+                                
+                                # 【修复】发送到正确的摄像头组
+                                group_name = f"camera_{camera_id}"
+                                async_to_sync(channel_layer.group_send)(
+                                    group_name,
+                                    {
+                                        "type": "throttled_alert",
+                                        "message": throttle_message
+                                    }
+                                )
+                        except Exception as e:
+                            logger.error(f"发送告警限流通知时出错: {e}")
+                    
+                    # 仍然发送最新的检测结果到WebSocket（但不创建告警记录）
+                    try:
+                        channel_layer = get_channel_layer()
+                        if channel_layer:
+                            # 修改消息类型，表明这是被限流的检测结果
+                            detection_data = data.copy()
+                            detection_data["is_throttled"] = True
+                            detection_data["throttle_count"] = count
+                            
+                            # 【修复】发送到正确的摄像头组
+                            group_name = f"camera_{camera_id}"
+                            async_to_sync(channel_layer.group_send)(
+                                group_name,
+                                {
+                                    "type": "detection_result",
+                                    "message": {
+                                        "type": "detection_result",
+                                        "data": detection_data
+                                    }
+                                }
+                            )
+                    except Exception as e:
+                        logger.error(f"发送限流后的检测结果时出错: {e}")
+                    
+                    # 返回自定义响应，表明告警已被限流
+                    return Response({
+                        "status": "throttled",
+                        "message": f"Alert throttled: {count} similar alerts in {self.ALERT_THROTTLE_SECONDS} seconds",
+                        "event_type": event_type,
+                        "camera_id": camera_id
+                    }, status=status.HTTP_200_OK)
+                
+                # 未被限流，正常创建告警记录
                 alert = serializer.save()
 
                 try:
@@ -245,18 +419,19 @@ class AIResultReceiveView(APIView):
                         # 手动将部分字段转换为字符串以确保JSON序列化成功
                         alert_data_for_ws['timestamp'] = alert.timestamp.isoformat()
                         
+                        # 【修复】发送到正确的摄像头组
+                        group_name = f"camera_{alert.camera_id}"
                         async_to_sync(channel_layer.group_send)(
-                            "alerts_group",
+                            group_name,
                             {
-                                "type": "alert_message", # 注意这里是 alert_message
+                                "type": "new_alert", # 注意这里是 new_alert
                                 "message": {
                                     "action": "new_alert",
-                                    # "alert": alert_data # 旧代码
-                                    "alert": alert_data_for_ws # 新代码
+                                    "alert": alert_data_for_ws
                                 }
                             }
                         )
-                        print(f"✅ 新告警 {alert.id} 已通过WebSocket推送到前端。")
+                        logger.info(f"✅ 新告警 {alert.id} 已通过WebSocket推送到前端 (Group: {group_name})。")
                 except Exception as e:
                     logger.error(f"发送WebSocket通知时发生严重错误: {e}", exc_info=True)
 
@@ -283,13 +458,12 @@ class AIResultReceiveView(APIView):
 
 class WebSocketBroadcastView(APIView):
     """
-    WebSocket广播接口，用于向前端推送实时数据
+    WebSocket广播接口，用于向前端推送实时检测数据
     POST /alerts/websocket/broadcast/
     """
     permission_classes = []
     authentication_classes = []
 
-    # 【重要修复】恢复被删除的 post 方法的完整逻辑
     def post(self, request, *args, **kwargs):
         """
         接收来自AI服务的实时检测数据并将其广播到WebSocket频道组。
@@ -303,23 +477,43 @@ class WebSocketBroadcastView(APIView):
                 status=status.HTTP_401_UNAUTHORIZED
             )
 
+        # 获取请求数据
         data = request.data
+        
+        # 【修复】从请求数据中获取camera_id来确定目标组
+        camera_id = data.get("camera_id")
+        if not camera_id:
+            return Response({"error": "camera_id is required for broadcast"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        group_name = f"camera_{camera_id}"
         message_type = data.get("type", "unknown_broadcast")
-        logger.info(f"📡 收到WebSocket广播请求: {message_type}")
+        logger.info(f"📡 收到定向WebSocket广播请求: Group={group_name}, Type={message_type}")
 
         try:
             channel_layer = get_channel_layer()
             if channel_layer:
+                # 【修复】使用与Consumer匹配的事件类型
+                event_type = "detection_result" # 默认为检测结果
+                if message_type == "stream_initialized":
+                    event_type = "stream_initialized"
+                elif message_type == "new_alert":
+                    event_type = "new_alert"
+                elif message_type == "alert_update":
+                    event_type = "alert_update"
+                elif message_type == "throttled_alert":
+                    event_type = "throttled_alert"
+                
+                # 【关键修复】确保message以单独的键存在，而不是直接传递整个数据对象
                 async_to_sync(channel_layer.group_send)(
-                    "alerts_group",
+                    group_name,
                     {
-                        "type": "broadcast_message",
-                        "message": data
+                        "type": event_type,
+                        "message": data  # 发送完整的数据包作为message
                     }
                 )
-                logger.info(f"✅ WebSocket消息已广播: {message_type}")
+                logger.info(f"✅ WebSocket消息已定向广播到 {group_name}: {message_type}")
                 return Response(
-                    {"status": "broadcasted", "type": message_type},
+                    {"status": "broadcasted", "group": group_name, "type": message_type},
                     status=status.HTTP_200_OK
                 )
             else:
@@ -331,7 +525,7 @@ class WebSocketBroadcastView(APIView):
         except Exception as e:
             logger.error(f"❌ 广播WebSocket消息时发生错误: {e}", exc_info=True)
             return Response(
-                {"error": "Failed to broadcast message"},
+                {"error": f"Failed to broadcast message: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
@@ -361,7 +555,6 @@ class AlertStatsView(APIView):
                 }
             
             # 最近24小时告警数量
-            from django.utils import timezone
             twenty_four_hours_ago = timezone.now() - timedelta(hours=24)
             recent_alerts = Alert.objects.filter(timestamp__gte=twenty_four_hours_ago).count()
             

@@ -1,87 +1,125 @@
 # backend/alerts/consumers.py
 
 import json
+import logging
+from datetime import datetime
+from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
+
+# 添加自定义JSON编码器处理datetime对象
+class DateTimeEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        return super().default(obj)
 
 class AlertConsumer(AsyncWebsocketConsumer):
     async def connect(self):
-        # 将新的连接加入到名为 'alerts_group' 的组中
+        # 从URL中获取camera_id
+        self.camera_id = self.scope['url_route']['kwargs']['camera_id']
+        self.group_name = f"camera_{self.camera_id}"
+
+        # 将客户端加入摄像头对应的组
         await self.channel_layer.group_add(
-            'alerts_group',
+            self.group_name,
             self.channel_name
         )
+
         await self.accept()
-        print(f"WebSocket连接已建立: {self.channel_name}")
+        await self.send(json.dumps({
+            'type': 'subscription_confirmed',
+            'camera_id': self.camera_id,
+            'group': self.group_name
+        }, cls=DateTimeEncoder))  # 使用自定义编码器
 
     async def disconnect(self, close_code):
-        # 当连接关闭时，将其从组中移除
+        # 当客户端断开连接时，将其从组中移除
         await self.channel_layer.group_discard(
-            'alerts_group',
+            self.group_name,
             self.channel_name
         )
-        print(f"WebSocket连接已断开: {self.channel_name} (关闭代码: {close_code})")
 
-    # 接收新告警消息
-    async def alert_message(self, event):
-        alert_data = event['message']
-        # 发送新告警通知到前端
-        message_to_send = {
-            'type': 'new_alert',  # 告诉前端这是新告警消息
-            'data': alert_data
-        }
-        await self.send(text_data=json.dumps(message_to_send))
-        print(f"已向 {self.channel_name} 发送新告警: {alert_data.get('id', 'unknown')}")
-
-    # 接收告警更新消息
-    async def alert_update_message(self, event):
-        update_data = event['message']
-        # 发送告警更新通知到前端
-        message_to_send = {
-            'type': 'alert_update',  # 告诉前端这是告警更新消息
-            'action': update_data.get('action', 'update'),  # handle 或 update
-            'data': update_data.get('alert', {})
-        }
-        await self.send(text_data=json.dumps(message_to_send))
-        print(f"已向 {self.channel_name} 发送告警更新: {update_data.get('alert', {}).get('id', 'unknown')} - {update_data.get('action', 'update')}")
-
-    async def broadcast_message(self, event):
-        """
-        处理从后端视图（例如 WebSocketBroadcastView）发来的通用广播消息。
-        """
-        message_data = event['message']
-        # 将收到的完整消息直接发送到前端
-        await self.send(text_data=json.dumps(message_data))
-        # 可选：在后端日志中打印一条确认信息
-        message_type = message_data.get("type", "unknown")
-        print(f"已向 {self.channel_name} 广播实时消息: {message_type}")
-
-    # 接收来自WebSocket的消息（前端发送的）
     async def receive(self, text_data):
-        # 【修复】处理前端可能发送的纯文本 "ping"
-        if text_data == "ping":
-            await self.send(text_data=json.dumps({'type': 'pong'}))
-            return
-
+        # 接收客户端发送的消息
         try:
             text_data_json = json.loads(text_data)
-            message_type = text_data_json.get('type', '')
-            
+            message_type = text_data_json.get('type', 'unknown')
+
+            # 处理不同类型的消息
             if message_type == 'ping':
-                # 响应心跳检测
-                await self.send(text_data=json.dumps({
+                await self.send(json.dumps({
                     'type': 'pong',
-                    'timestamp': text_data_json.get('timestamp', '')
-                }))
+                    'timestamp': datetime.now().isoformat()
+                }, cls=DateTimeEncoder))  # 使用自定义编码器
             elif message_type == 'subscribe':
-                # 处理订阅请求（如果需要）
-                await self.send(text_data=json.dumps({
-                    'type': 'subscription_confirmed',
-                    'message': '已成功订阅告警通知'
-                }))
-            else:
-                print(f"收到未知消息类型: {message_type}")
-                
+                new_camera_id = text_data_json.get('camera_id')
+                if new_camera_id and new_camera_id != self.camera_id:
+                    # 如果客户端请求订阅新的摄像头，先从旧组中移除
+                    await self.channel_layer.group_discard(
+                        self.group_name,
+                        self.channel_name
+                    )
+                    # 更新摄像头ID和组名
+                    self.camera_id = new_camera_id
+                    self.group_name = f"camera_{self.camera_id}"
+                    # 添加到新组
+                    await self.channel_layer.group_add(
+                        self.group_name,
+                        self.channel_name
+                    )
+                    # 发送确认消息
+                    await self.send(json.dumps({
+                        'type': 'subscription_confirmed',
+                        'camera_id': self.camera_id,
+                        'group': self.group_name
+                    }, cls=DateTimeEncoder))  # 使用自定义编码器
         except json.JSONDecodeError:
-            print(f"收到无效的JSON数据: {text_data}")
+            logging.error(f"接收到无效的JSON消息: {text_data}")
         except Exception as e:
-            print(f"处理WebSocket消息时发生错误: {e}")
+            logging.error(f"处理WebSocket消息时出错: {str(e)}")
+
+    # 以下是可以通过channel_layer触发的处理程序
+
+    async def detection_result(self, event):
+        # 将检测结果广播给客户端
+        try:
+            # 提取数据部分
+            data = event.get('data', {})
+            # 发送给客户端
+            await self.send(json.dumps({
+                'type': 'detection_result',
+                'data': data
+            }, cls=DateTimeEncoder))  # 使用自定义编码器
+        except Exception as e:
+            logging.error(f"发送检测结果时出错: {str(e)}")
+
+    async def new_alert(self, event):
+        # 将告警广播给客户端
+        try:
+            alert_data = event.get('data', {})
+            await self.send(json.dumps({
+                'type': 'new_alert',
+                'data': alert_data
+            }, cls=DateTimeEncoder))  # 使用自定义编码器
+        except Exception as e:
+            logging.error(f"发送告警时出错: {str(e)}")
+
+    async def stream_initialized(self, event):
+        # 将视频流初始化消息广播给客户端
+        try:
+            stream_data = event.get('data', {})
+            await self.send(json.dumps({
+                'type': 'stream_initialized',
+                'data': stream_data
+            }, cls=DateTimeEncoder))  # 使用自定义编码器
+        except Exception as e:
+            logging.error(f"发送流初始化消息时出错: {str(e)}")
+
+    async def broadcast_message(self, event):
+        # 通用广播处理程序
+        try:
+            message = event.get('message', {})
+            # 使用自定义编码器处理datetime
+            await self.send(json.dumps(message, cls=DateTimeEncoder))
+        except Exception as e:
+            logging.error(f"广播消息时出错: {str(e)}")

@@ -10,7 +10,7 @@ const backendService = axios.create({
 
 // AI服务实例
 const aiService = axios.create({
-  baseURL: import.meta.env.VITE_APP_AI_SERVICE_URL || 'http://127.0.0.1:8001',
+  baseURL: import.meta.env.VITE_APP_AI_SERVICE_URL || 'http://127.0.0.1:8002', // <-- 【修复】修正AI服务的正确端口
   timeout: 120000,  // 增加超时时间到120秒
   withCredentials: false, // AI服务不需要携带凭证
 });
@@ -227,17 +227,11 @@ const api = {
   // AI服务相关接口
   ai: {
     startStream: (config) => {
+      // 【修复】为startStream请求直接传递完整的配置
       return requestWithRetry(aiService, {
         url: '/stream/start/',
         method: 'post',
-        data: {
-          camera_id: config.camera_id,
-          stream_url: config.stream_url,
-          enable_face_recognition: config.enable_face_recognition,
-          enable_object_detection: config.enable_object_detection,
-          enable_behavior_detection: config.enable_behavior_detection,
-          enable_fire_detection: config.enable_fire_detection
-        }
+        data: config
       });
     },
     stopStream: (camera_id) => {
@@ -246,6 +240,23 @@ const api = {
         method: 'post'
       });
     },
+    // WebRTC相关接口
+    createWebRTCOffer: (camera_id) => {
+      return requestWithRetry(aiService, {
+        url: `/webrtc/offer/${camera_id}`,
+        method: 'post'
+      });
+    },
+    sendWebRTCAnswer: (connection_id, answer) => {
+      return aiService.post(`/webrtc/answer/${connection_id}`, answer);
+    },
+    closeWebRTCConnection: (connection_id) => {
+      return aiService.delete(`/webrtc/connection/${connection_id}`);
+    },
+    // 添加获取WebRTC状态的方法
+    getWebRTCStatus: () => {
+      return aiService.get('/webrtc/status');
+    },
     verifyFace: (data) => {
       return requestWithRetry(aiService, {
         url: '/face/verify',
@@ -253,11 +264,28 @@ const api = {
         data: data
       });
     },
-    registerFace: (formData) => {
+    checkFaceExists: (params) => {
+      return requestWithRetry(aiService, {
+        url: '/face/check/',
+        method: 'get',
+        params
+      });
+    },
+    extractFramesFromVideo: (data) => {
+      return requestWithRetry(aiService, {
+        url: '/face/extract_frames/',
+        method: 'post',
+        data,
+        headers: {
+          'Content-Type': 'multipart/form-data'
+        }
+      });
+    },
+    registerFace: (data) => {
       return requestWithRetry(aiService, {
         url: '/face/register/',
         method: 'post',
-        data: formData,
+        data,
         headers: {
           'Content-Type': 'multipart/form-data'
         }

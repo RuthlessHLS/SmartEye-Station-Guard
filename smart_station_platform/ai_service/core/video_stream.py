@@ -63,6 +63,12 @@ class VideoStream:
 
         logger.info(f"VideoStream 初始化: Camera ID={self.camera_id}, URL={self.stream_url}")
 
+        # 【核心修复】在初始化时就尝试打开视频流，但不在这里阻塞
+        # 这确保了在调用start()之前，cap对象就已经存在
+        self.cap = cv2.VideoCapture(self.stream_url)
+        if not self.cap.isOpened():
+            logger.error(f"在初始化阶段无法打开视频流: {self.stream_url}。将在start()时重试。")
+
     async def test_connection(self) -> bool:
         """
         测试视频流连接是否可用。
@@ -109,6 +115,7 @@ class VideoStream:
         # 【修复 2.1 结束】
 
         while self.is_running:
+            # 【核心修复】直接从 self.cap 读取，不再需要在线程内重复打开
             ret, frame = self.cap.read()
             if not ret:
                 logger.warning(f"从视频流读取帧失败，可能流已结束或中断 for {self.camera_id}。尝试重新连接...")
@@ -161,6 +168,14 @@ class VideoStream:
         if self.is_running:
             logger.info(f"视频流 {self.camera_id} 已经在运行。")
             return True
+            
+        # 【核心修复】在启动时确保视频流是打开的
+        if not self.cap or not self.cap.isOpened():
+            logger.warning(f"捕获器未在初始化时打开，正在尝试重新打开 for {self.camera_id}...")
+            self.cap = cv2.VideoCapture(self.stream_url)
+            if not self.cap.isOpened():
+                logger.error(f"启动失败：无法打开视频流 {self.stream_url}")
+                return False
 
         self.is_running = True
         # 启动独立的帧读取线程

@@ -159,10 +159,25 @@ const startVerification = () => {
   isVerifying.value = true;
   statusMessage.value = '正在连接服务器...';
 
-  const wsUrl = `ws://${window.location.hostname}:8001/ws/face_verification`;
+  // 使用环境变量中的AI服务URL（端口8002）
+  const aiServiceUrl = import.meta.env.VITE_APP_AI_SERVICE_URL || 'http://127.0.0.1:8002';
+  // 将http://转换为ws://
+  const wsBaseUrl = aiServiceUrl.replace(/^http:\/\//, 'ws://');
+  
+  // 构建完整的WebSocket URL
+  let wsUrl = '';
+  if (wsBaseUrl.includes('/ws/')) {
+    // 确保在ws和face_verification之间有斜杠
+    wsUrl = wsBaseUrl.replace(/\/ws\/?$/, '/ws/') + 'face_verification';
+  } else {
+    wsUrl = `${wsBaseUrl.replace(/\/$/, '')}/ws/face_verification`;
+  }
+  
+  console.log(`[FaceLogin] 正在连接WebSocket: ${wsUrl}`);
   websocket.value = new WebSocket(wsUrl);
 
   websocket.value.onopen = () => {
+    console.log('[FaceLogin] WebSocket连接成功');
     statusMessage.value = '连接成功，准备接收挑战...';
     // 不再立即开始发送帧，等待服务器指令
   };

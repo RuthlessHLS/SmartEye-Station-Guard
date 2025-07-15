@@ -6,12 +6,12 @@
           <h2>人脸信息录入</h2>
         </div>
       </template>
-      
+
       <div class="guide-box">
         <div class="guide-icon"><i class="el-icon-info-filled">ℹ️</i></div>
         <div class="guide-content">
           <h4>使用说明</h4>
-          <p>请确保上传清晰的正面照片，光线充足且面部无遮挡，以确保人脸识别系统的准确性。</p>
+          <p>请确保上传清晰的正面照片，或在录制视频时保持面部正对、光线充足且无遮挡，以确保系统的准确性。</p>
         </div>
       </div>
 
@@ -31,11 +31,11 @@
               </el-select>
             </el-form-item>
           </div>
-          
+
           <div class="form-right">
-            <el-form-item label="人脸照片" required>
-              <div class="face-capture" :class="{'has-image': imageUrl}">
-                <div v-if="!imageUrl" class="capture-placeholder">
+            <el-form-item label="人脸数据" required>
+              <div class="face-capture" :class="{'has-image': previewUrl}">
+                <div v-if="!previewUrl" class="capture-placeholder">
                   <el-upload
                     class="face-uploader"
                     :show-file-list="false"
@@ -51,20 +51,21 @@
                       </div>
                     </div>
                   </el-upload>
-                  
+
                   <div class="divider">或者</div>
-                  
-                  <el-button type="primary" @click="startCamera" class="camera-btn">
+
+                  <el-button type="primary" @click="startRecordingMode" class="camera-btn">
                     <el-icon><Camera /></el-icon>
-                    使用摄像头拍摄
+                    开始录入
                   </el-button>
                 </div>
                 <div v-else class="preview-container">
-                  <img :src="imageUrl" class="preview-image" />
+                  <img v-if="mediaType === 'image'" :src="previewUrl" class="preview-image" />
+                  <video v-if="mediaType === 'video'" :src="previewUrl" class="preview-image" controls autoplay loop muted></video>
                   <div class="preview-actions">
-                    <el-button type="danger" @click="removeImage">
+                    <el-button type="danger" @click="removeMedia">
                       <el-icon><Delete /></el-icon>
-                      重新拍摄/上传
+                      重新选择
                     </el-button>
                   </div>
                 </div>
@@ -82,42 +83,34 @@
       </el-form>
     </el-card>
 
-    <!-- 摄像头对话框 -->
+    <!-- 摄像头录制对话框 -->
     <el-dialog
       v-model="showCamera"
-      title="拍摄人脸照片"
+      title="录制人脸视频"
       width="640px"
       :close-on-click-modal="false"
-      :show-close="true"
+      :show-close="!isRecording"
+      @close="closeCamera"
       class="camera-dialog"
     >
       <div class="camera-container">
-        <video
-          ref="video"
-          :width="640"
-          :height="480"
-          autoplay
-          class="camera-video"
-        ></video>
-        <canvas
-          ref="canvas"
-          :width="640"
-          :height="480"
-          style="display: none"
-        ></canvas>
-        
-        <!-- 添加人脸对齐辅助框 -->
+        <video ref="video" autoplay muted class="camera-video"></video>
+
         <div class="face-guide-overlay">
           <div class="face-guide-frame"></div>
-          <div class="guide-text">请将面部置于框内，保持正面朝向</div>
+          <div v-if="!isRecording" class="guide-text">请将面部置于框内，准备开始录制</div>
+          <div v-if="isRecording" class="guide-text recording-indicator">
+            <div class="recording-dot"></div>
+            正在录制... {{ recordingCountdown }}s
+          </div>
         </div>
       </div>
       <template #footer>
         <div class="dialog-footer">
-          <el-button @click="closeCamera">取消</el-button>
-          <el-button type="primary" @click="captureImage" class="capture-btn">
-            <el-icon><Camera /></el-icon>
-            拍摄照片
+          <el-button @click="closeCamera" :disabled="isRecording">取消</el-button>
+          <el-button type="primary" @click="startRecording" :disabled="isRecording" class="capture-btn">
+            <el-icon><VideoCamera /></el-icon>
+            开始录制
           </el-button>
         </div>
       </template>
@@ -127,29 +120,38 @@
 
 <script setup>
 import { ref, reactive, nextTick, computed } from 'vue'
-import { Plus, Camera, Delete } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { Plus, Camera, Delete, VideoCamera } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '@/api'
 
 // 表单数据
 const form = reactive({
   name: '',
   department: '',
-  faceImage: null
+  faceMedia: null
 })
+
+const mediaType = ref('') // 'image' or 'video'
 
 // 表单验证
 const formIsValid = computed(() => {
-  return form.name && form.department && form.faceImage;
+  return form.name && form.department && form.faceMedia;
 })
 
 // 状态变量
 const loading = ref(false)
-const imageUrl = ref('')
+const previewUrl = ref('')
 const showCamera = ref(false)
 const video = ref(null)
-const canvas = ref(null)
 const stream = ref(null)
+
+// 视频录制相关状态
+const isRecording = ref(false)
+const mediaRecorder = ref(null)
+const recordedChunks = ref([])
+const recordingCountdown = ref(5)
+const countdownTimer = ref(null)
+
 
 // 文件上传前的验证
 const beforeUpload = (file) => {
@@ -172,100 +174,167 @@ const customUpload = async ({ file }) => {
   try {
     const reader = new FileReader()
     reader.onload = (e) => {
-      imageUrl.value = e.target.result
-      form.faceImage = file
+      previewUrl.value = e.target.result
+      form.faceMedia = file
+      mediaType.value = 'image'
     }
     reader.readAsDataURL(file)
   } catch (error) {
-    ElMessage.error('图片上传失败')
+    ElMessage.error('图片预览失败')
     console.error('Upload error:', error)
   }
 }
 
-// 删除已上传的图片
-const removeImage = () => {
-  imageUrl.value = ''
-  form.faceImage = null
+// 删除已上传或录制的媒体
+const removeMedia = () => {
+  previewUrl.value = ''
+  form.faceMedia = null
+  mediaType.value = ''
 }
 
-// 打开摄像头
-const startCamera = async () => {
+// 打开摄像头录制模式
+const startRecordingMode = async () => {
+  showCamera.value = true
+  await nextTick()
   try {
-    // 1. 先把对话框显示出来
-    showCamera.value = true
-
-    // 2. 等待下一次DOM更新，确保 <video> 元素已存在
-    await nextTick()
-
-    // 3. 现在 video.value 肯定不是 null 了，可以安全操作
     stream.value = await navigator.mediaDevices.getUserMedia({
-      video: { 
+      video: {
         width: { ideal: 1280 },
         height: { ideal: 720 },
         facingMode: 'user'
       },
       audio: false
     })
-    video.value.srcObject = stream.value
+    if (video.value) {
+      video.value.srcObject = stream.value
+    }
   } catch (error) {
-    ElMessage.error('无法访问摄像头')
+    ElMessage.error('无法访问摄像头，请检查权限。')
     console.error('Camera error:', error)
-    // 如果出错，记得把对话框关掉
     showCamera.value = false
   }
 }
 
-// 关闭摄像头
+// 开始录制
+const startRecording = () => {
+  if (!stream.value) {
+    ElMessage.warning('摄像头尚未准备好。')
+    return
+  }
+
+  isRecording.value = true
+  recordedChunks.value = []
+
+  const options = { mimeType: 'video/webm; codecs=vp9' }
+  try {
+      mediaRecorder.value = new MediaRecorder(stream.value, options)
+  } catch(e) {
+      console.error('VP9 not supported, falling back to default.', e)
+      mediaRecorder.value = new MediaRecorder(stream.value)
+  }
+
+  mediaRecorder.value.ondataavailable = (event) => {
+    if (event.data.size > 0) {
+      recordedChunks.value.push(event.data)
+    }
+  }
+
+  mediaRecorder.value.onstop = () => {
+    const blob = new Blob(recordedChunks.value, { type: 'video/webm' })
+    previewUrl.value = URL.createObjectURL(blob)
+    form.faceMedia = new File([blob], 'face_video.webm', { type: 'video/webm' })
+    mediaType.value = 'video'
+    isRecording.value = false
+    ElMessage.success('视频录制完成！')
+    closeCamera()
+  }
+
+  mediaRecorder.value.start()
+
+  // 倒计时
+  recordingCountdown.value = 5
+  countdownTimer.value = setInterval(() => {
+    recordingCountdown.value--
+    if (recordingCountdown.value <= 0) {
+      stopRecording()
+    }
+  }, 1000)
+}
+
+// 停止录制
+const stopRecording = () => {
+    if(mediaRecorder.value && mediaRecorder.value.state === 'recording') {
+        mediaRecorder.value.stop()
+    }
+    if (countdownTimer.value) {
+        clearInterval(countdownTimer.value)
+        countdownTimer.value = null
+    }
+}
+
+// 关闭摄像头/对话框
 const closeCamera = () => {
+  stopRecording()
   if (stream.value) {
     stream.value.getTracks().forEach(track => track.stop())
+    stream.value = null
   }
   showCamera.value = false
 }
 
-// 拍摄照片
-const captureImage = () => {
-  const context = canvas.value.getContext('2d')
-  context.drawImage(video.value, 0, 0, 640, 480)
-  imageUrl.value = canvas.value.toDataURL('image/jpeg')
-  
-  // 将 Base64 转换为 File 对象
-  const base64 = imageUrl.value.split(',')[1]
-  const mimeType = 'image/jpeg'
-  const bytes = atob(base64)
-  const arr = new Uint8Array(bytes.length)
-  
-  for (let i = 0; i < bytes.length; i++) {
-    arr[i] = bytes.charCodeAt(i)
-  }
-  
-  form.faceImage = new File([arr], 'face.jpg', { type: mimeType })
-  closeCamera()
-  
-  // 提示用户照片已拍摄成功
-  ElMessage.success('照片拍摄成功')
-}
 
 // 提交表单
 const submitForm = async () => {
-  if (!form.name || !form.department || !form.faceImage) {
-    ElMessage.warning('请填写所有必填项并上传人脸照片')
+  if (!formIsValid.value) {
+    ElMessage.warning('请填写所有必填项并提供人脸数据')
     return
   }
-
   loading.value = true
+
   try {
+    // 步骤1: 检查用户是否存在
+    const checkRes = await api.ai.checkFaceExists({
+      username: form.name,
+      department: form.department,
+    });
+
+    if (checkRes.exists) {
+      // 步骤2: 如果存在，弹窗确认
+      await ElMessageBox.confirm(
+        '该用户已存在人脸数据，是否要覆盖或添加新的人脸信息？',
+        '用户已存在',
+        {
+          confirmButtonText: '继续注册',
+          cancelButtonText: '取消',
+          type: 'warning',
+        }
+      );
+    }
+    
+    // 步骤3: 执行注册
     const formData = new FormData()
     formData.append('username', form.name)
     formData.append('department', form.department)
-    formData.append('face_image', form.faceImage)
 
-    await api.ai.registerFace(formData)
-    ElMessage.success('人脸注册成功')
+    if (mediaType.value === 'image') {
+      formData.append('face_image', form.faceMedia)
+      await api.ai.registerFace(formData)
+    } else if (mediaType.value === 'video') {
+      formData.append('video_file', form.faceMedia)
+      await api.ai.registerFace(formData)
+    }
+
+    ElMessage.success('人脸注册请求已提交成功')
     resetForm()
   } catch (error) {
-    console.error('Registration error:', error)
-    ElMessage.error('人脸注册失败，请重试')
+    // 如果用户点击了“取消”或API调用失败
+    if (error === 'cancel') {
+      ElMessage.info('已取消注册操作');
+    } else {
+      console.error('Registration error:', error)
+      const errorMsg = error.response?.data?.detail || error.response?.data?.message || '人脸注册失败，请检查后端服务或视频/图片质量'
+      ElMessage.error(errorMsg)
+    }
   } finally {
     loading.value = false
   }
@@ -275,8 +344,9 @@ const submitForm = async () => {
 const resetForm = () => {
   form.name = ''
   form.department = ''
-  form.faceImage = null
-  imageUrl.value = ''
+  form.faceMedia = null
+  previewUrl.value = ''
+  mediaType.value = ''
 }
 </script>
 
@@ -462,6 +532,7 @@ const resetForm = () => {
   max-height: 300px;
   border-radius: 4px;
   box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
+  background-color: #000;
 }
 
 .preview-actions {
@@ -476,6 +547,7 @@ const resetForm = () => {
   border-radius: 4px;
   overflow: hidden;
   box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
+  background: #000;
 }
 
 .camera-video {
@@ -515,6 +587,27 @@ const resetForm = () => {
   border-radius: 4px;
 }
 
+.recording-indicator {
+    display: flex;
+    align-items: center;
+    background-color: #f56c6c;
+}
+
+.recording-dot {
+    width: 10px;
+    height: 10px;
+    background-color: white;
+    border-radius: 50%;
+    margin-right: 8px;
+    animation: pulse-rec 1.5s infinite;
+}
+
+@keyframes pulse-rec {
+    0% { opacity: 1; }
+    50% { opacity: 0.4; }
+    100% { opacity: 1; }
+}
+
 .camera-dialog :deep(.el-dialog__body) {
   padding: 0;
 }
@@ -538,14 +631,14 @@ const resetForm = () => {
   .face-registration {
     padding: 10px;
   }
-  
+
   .registration-card {
     margin-bottom: 10px;
   }
-  
+
   .form-layout {
     flex-direction: column;
     gap: 0;
   }
 }
-</style> 
+</style>

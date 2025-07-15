@@ -7,6 +7,7 @@ import time
 import base64
 import traceback
 import json
+import tempfile
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -16,6 +17,7 @@ import cv2
 import numpy as np
 import uvicorn
 import requests
+import aiohttp  # 添加aiohttp导入
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Body, File, UploadFile, Form, Query, Request, Depends, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,12 +26,21 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from starlette.websockets import WebSocketState
 import httpx # 确保导入 httpx
+from urllib.parse import urlparse, parse_qs
+
+# 添加自定义JSON编码器处理datetime对象
+class DateTimeEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        return super().default(obj)
 
 # 导入我们自定义的所有核心AI模块和模型
 import sys
 import logging
 
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 # 将当前目录添加到Python路径，确保可以导入核心模块
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
@@ -42,7 +53,10 @@ from smart_station_platform.ai_service.core.multi_object_tracker import DeepSORT
 from smart_station_platform.ai_service.core.danger_zone_detection import DangerZoneDetector
 from smart_station_platform.ai_service.core.liveness_detector import LivenessSession
 from smart_station_platform.ai_service.models.alert_models import AIAnalysisResult, CameraConfig, SystemStatus
-from smart_station_platform.ai_service.core.acoustic_detection import AcousticEventDetector
+# from smart_station_platform.ai_service.core.acoustic_detection import AcousticEventDetector
+# 导入新增的模块
+from smart_station_platform.ai_service.core.draw_utils import draw_detections
+from smart_station_platform.ai_service.core.webrtc_pusher import webrtc_pusher, start_cleanup_task
 
 # --- 全局变量和模型初始化 ---
 # 获取当前文件 (app.py) 的绝对路径
@@ -146,7 +160,7 @@ class AppConfig:
 app_config = AppConfig()
 
 # 全局常量定义
-DETECTION_FRAME_SKIP = 5  # 每5帧处理一次检测，减少CPU/GPU负载
+DETECTION_FRAME_SKIP = 1  # 每5帧处理一次检测，减少CPU/GPU负载
 
 # --- AIServiceManager 类：集中管理AI服务逻辑和数据 ---
 class AIServiceManager:
@@ -157,7 +171,7 @@ class AIServiceManager:
             "fire": fire_detector,
             "face": face_recognizer,
             "behavior": BehaviorDetector(),
-            "acoustic": AcousticEventDetector() if config.ENABLE_SOUND_DETECTION else None,
+            # "acoustic": AcousticEventDetector() if config.ENABLE_SOUND_DETECTION else None,
         }
         self._video_streams: Dict[str, VideoStream] = {}  # 存储活跃的VideoStream实例
         self._object_trackers: Dict[str, DeepSORTTracker] = {}  # 存储每个摄像头的DeepSORT追踪器
@@ -175,6 +189,7 @@ class AIServiceManager:
         }
         # 检测结果稳定化参数存储 (per camera_id)
         self._stabilization_config: Dict[str, Dict] = {}
+        self._video_webrtc: Dict[str, str] = {}  # 用于存储 WebRTC 连接的 ID
 
     async def initialize_detectors(self):
         """初始化所有AI检测器模型。"""
@@ -212,12 +227,12 @@ class AIServiceManager:
             )
 
             # 4. 初始化声学事件检测器
-            if self.config.ENABLE_SOUND_DETECTION:
-                try:
-                    self._detectors["acoustic"] = AcousticEventDetector()
-                    # 声学分析后台任务在start_stream时随VideoStream启动音频提取
-                except Exception as e:
-                    print(f"警告: 声学检测器初始化失败，将禁用此功能。错误: {e}")
+            # if self.config.ENABLE_SOUND_DETECTION:
+            #     try:
+            #         self._detectors["acoustic"] = AcousticEventDetector()
+            #         # 声学分析后台任务在start_stream时随VideoStream启动音频提取
+            #     except Exception as e:
+            #         print(f"警告: 声学检测器初始化失败，将禁用此功能。错误: {e}")
 
             # 5. 初始化火焰烟雾检测器
             try:
@@ -322,43 +337,49 @@ class AIServiceManager:
 
     async def get_user_token(self, username: str) -> Optional[Dict[str, Any]]:
         """
-        通过内部API，使用用户名从Django后端获取JWT Token。
+        根据识别出的用户名，请求主后端获取用户的JWT令牌。
         """
         logger.info(f"准备为用户'{username}'请求内部登录以获取Token。")
+        
+        login_payload = {
+            "username": username,
+        }
+
         try:
-            internal_api_key = os.getenv('INTERNAL_SERVICE_API_KEY', 'default-internal-secret-key-for-dev')
-            backend_login_url = os.getenv('BACKEND_INTERNAL_LOGIN_URL', 'http://localhost:8000/api/users/login/internal/')
-            
-            headers = {'Content-Type': 'application/json', 'X-Internal-API-Key': internal_api_key}
-            payload = {'username': username}
+            # 从环境变量获取内部API密钥
+            internal_api_key = os.getenv('INTERNAL_SERVICE_API_KEY', 'a-secure-default-key-for-dev')
+            headers = {'X-Internal-API-Key': internal_api_key}
 
-            async with httpx.AsyncClient() as client:
-                response = await client.post(backend_login_url, headers=headers, json=payload, timeout=10)
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                # 构建指向内部登录端点的URL
+                internal_login_url = self.config.BACKEND_ALERT_URL.replace('/api/alerts/ai-results/', '/api/users/login/internal/')
+                
+                response = await client.post(
+                    url=internal_login_url,
+                    json=login_payload,
+                    headers=headers
+                )
                 response.raise_for_status()
-                logger.info(f"成功从主后端获取Token，用户: {username}")
                 return response.json()
-
-        except httpx.RequestError as e:
-            logger.error(f"调用主后端内部登录接口失败 (RequestError): {e}")
-            return None
         except httpx.HTTPStatusError as e:
             logger.error(f"调用主后端内部登录接口失败 (HTTPStatusError): {e.response.status_code} - {e.response.text}")
             return None
-        except Exception as e:
-            logger.error(f"获取用户Token时发生未知错误: {e}", exc_info=True)
+        except httpx.RequestError as e:
+            logger.error(f"调用主后端内部登录接口时发生网络错误: {e}")
             return None
 
     async def send_detection_to_websocket(self, camera_id: str, detection_results: dict):
         """通过WebSocket向前端发送检测结果数据 (非图像)"""
 
-        def task():
+        # 创建一个异步任务
+        async def async_task():
             try:
-                # 【修复】修正发送到WebSocket的数据结构
+                # 【修复】确保将camera_id包含在发送的数据中，以便后端进行路由
                 websocket_data = {
                     "type": "detection_result",
+                    "camera_id": camera_id, # 确保 camera_id 在顶层
                     "data": {
-                        "camera_id": camera_id,
-                        "detections": detection_results  # 之前这里缺少了 "detections" 这个key
+                        "detections": detection_results.get("detections", [])
                     }
                 }
 
@@ -367,37 +388,52 @@ class AIServiceManager:
                     'X-API-Key': self.config.AI_SERVICE_API_KEY
                 }
 
-                response = requests.post(
-                    self.config.BACKEND_WEBSOCKET_BROADCAST_URL,
-                    data=json.dumps(websocket_data),
-                    headers=headers,
-                    timeout=2
-                )
-
-                if response.status_code == 200:
-                    print(f"✅ 检测数据已发送到WebSocket: {camera_id}")
-                else:
-                    print(f"❌ 发送检测数据到WebSocket失败: {response.status_code}, {response.text}")
+                # 使用aiohttp进行异步HTTP请求
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        self.config.BACKEND_WEBSOCKET_BROADCAST_URL,
+                        json=websocket_data,
+                        headers=headers,
+                        timeout=2
+                    ) as response:
+                        if response.status == 200:
+                            print(f"✅ 检测数据已发送到WebSocket: {camera_id}")
+                        else:
+                            response_text = await response.text()
+                            print(f"❌ 发送检测数据到WebSocket失败: {response.status}, {response_text}")
 
             except Exception as e:
                 print(f"发送WebSocket任务出错: {e}")
-
+        
+        # 使用线程池运行异步任务，确保不阻塞主线程
+        def run_async_task():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(async_task())
+            finally:
+                loop.close()
+                
         # 使用线程池异步执行，避免阻塞主循环
-        self._thread_pool.submit(task)
+        self._thread_pool.submit(run_async_task)
         
     def send_to_websocket(self, camera_id: str, message: dict):
         """直接通过WebSocket向前端发送任意类型的消息"""
         def task():
             try:
-                # 发送原始消息，不添加额外的包装
+                # 【修复】确保将 camera_id 添加到消息中，用于后端路由
+                if 'camera_id' not in message:
+                    message['camera_id'] = camera_id
+
                 headers = {
                     'Content-Type': 'application/json',
                     'X-API-Key': self.config.AI_SERVICE_API_KEY
                 }
 
+                # 使用自定义编码器处理datetime对象
                 response = requests.post(
                     self.config.BACKEND_WEBSOCKET_BROADCAST_URL,
-                    data=json.dumps(message),
+                    data=json.dumps(message, cls=DateTimeEncoder),
                     headers=headers,
                     timeout=2
                 )
@@ -417,9 +453,13 @@ class AIServiceManager:
         """关闭所有正在运行的服务和清理资源"""
         print("服务正在关闭，开始清理资源...")
         for stream in list(self._video_streams.values()):  # 使用list()避免在迭代时修改字典
-            stream.stop()
-        if "acoustic" in self._detectors:
-            self._detectors["acoustic"].stop_monitoring()
+            await stream.stop()
+        
+        # 【修复】在关闭前，检查声学检测器是否已初始化
+        acoustic_detector = self._detectors.get("acoustic")
+        if acoustic_detector:
+            acoustic_detector.stop_monitoring()
+            
         self._thread_pool.shutdown(wait=True)
         print("资源清理完毕。")
 
@@ -944,9 +984,8 @@ class AIServiceManager:
     # --- 性能优化策略函数 ---
     def _get_performance_strategy(self, performance_mode: str, frame_count: int, is_low_res: bool) -> Dict:
         if performance_mode == "fast":
-            is_object_frame = frame_count % 2 == 0
             return {
-                "run_object_detection": is_object_frame, "run_face_recognition": not is_object_frame,
+                "run_object_detection": True, "run_face_recognition": True,
                 "object_scale_factor": 0.4, "face_scale_factor": 0.5, "use_parallel": False,
                 "use_stabilization": frame_count % 4 == 0, "max_detections": 3, "face_limit": 2
             }
@@ -970,6 +1009,7 @@ class AIServiceManager:
     async def process_single_frame(self, frame: np.ndarray, camera_id: str,
                                    enable_face_recognition: bool, enable_object_detection: bool,
                                    enable_behavior_detection: bool, enable_fire_detection: bool,
+                                   enable_liveness_detection: bool,  # <-- 添加新参数
                                    performance_mode: str) -> Dict:
         start_time = time.time()
         # 简单帧计数，实际应用中可以更精确地管理
@@ -996,6 +1036,7 @@ class AIServiceManager:
             enable_object_detection = camera_settings.get('object_detection', enable_object_detection)
             enable_behavior_detection = camera_settings.get('behavior_analysis', enable_behavior_detection)
             enable_fire_detection = camera_settings.get('fire_detection', enable_fire_detection)
+            enable_liveness_detection = camera_settings.get('liveness_detection', enable_liveness_detection)
             if camera_settings.get('realtime_mode', False):
                 performance_mode = "fast"
 
@@ -1143,6 +1184,18 @@ class AIServiceManager:
         else:
             object_results = optimized_object_detection()
             face_results = optimized_face_recognition()
+            
+        # 确保检测结果使用正确的格式和字段名
+        for obj in object_results:
+            if 'bbox' in obj and 'box' not in obj:
+                obj['box'] = obj['bbox']  # 添加兼容的box字段
+                
+        for face in face_results:
+            if 'bbox' in face and 'box' not in face:
+                face['box'] = face['bbox']  # 添加兼容的box字段
+            if 'identity' in face and face['identity']:
+                if 'name' in face['identity'] and 'label' not in face:
+                    face['label'] = 'face'  # 确保有label字段
 
         # Deep SORT追踪
         tracked_object_results = []
@@ -1262,16 +1315,25 @@ class AIServiceManager:
     # --- AISettings Model (for API) ---
     class AISettings(BaseModel):
         model_config = ConfigDict(extra='allow')  # 允许额外字段
-        face_recognition: bool = True
-        object_detection: bool = True
-        behavior_analysis: bool = False
-        sound_detection: bool = False
-        fire_detection: bool = True
-        realtime_mode: bool = True
+        face_recognition: Optional[bool] = None
+        object_detection: Optional[bool] = None
+        behavior_analysis: Optional[bool] = None
+        sound_detection: Optional[bool] = None
+        fire_detection: Optional[bool] = None
+        liveness_detection: Optional[bool] = None
 
     def get_ai_settings(self, camera_id: str) -> Dict:
         if camera_id not in self._ai_settings:
-            self._ai_settings[camera_id] = self.AISettings().model_dump()
+            # 如果没有特定摄像头的设置，使用模型的默认值初始化
+            # 注意：Pydantic v2中，需要实例化模型以获取默认值
+            self._ai_settings[camera_id] = {
+                'face_recognition': True,
+                'object_detection': True,
+                'behavior_analysis': False,
+                'sound_detection': False,
+                'fire_detection': True,
+                'liveness_detection': True,
+            }
         return self._ai_settings[camera_id]
 
     def update_ai_settings(self, camera_id: str, settings: Dict):
@@ -1491,34 +1553,28 @@ class AIServiceManager:
         return status_info
 
     async def reload_face_recognizer(self):
-        """
-        异步触发人脸识别器重新加载已知人脸数据。
-        """
-        if not self.face_recognizer:
-            logger.warning("人脸识别器未初始化，无法重新加载。")
-            return {"status": "failed", "message": "Face recognizer not initialized."}
+        """重新加载人脸识别器中的已知人脸数据。"""
+        logger.info("ServiceManager is reloading face recognizer...")
+        
+        face_recognizer_instance = self._detectors.get("face")
 
+        if not face_recognizer_instance:
+            logger.warning("Face recognizer is not initialized in AIServiceManager, cannot reload.")
+            return {"status": "error", "message": "Face recognizer not initialized"}
+        
         try:
-            logger.info("=== 收到API请求，开始在后台重新加载人脸数据库 ===")
-            # 直接调用模块的实例方法
-            await face_recognizer.reload_known_faces()
-            logger.info("=== 人脸数据库重新加载任务已成功调度 ===")
-            return {"status": "success", "message": "Known faces reload has been scheduled."}
+            face_recognizer_instance.reload_known_faces()
+            logger.info("Face recognizer reloaded successfully.")
+            return {"status": "success"}
         except Exception as e:
-            logger.error(f"重新加载人脸数据库时出错: {e}", exc_info=True)
-            return {"status": "failed", "message": str(e)}
+            logger.error(f"Error reloading face recognizer: {e}", exc_info=True)
+            return {"status": "error", "message": str(e)}
 
     def update_stream_settings(self, camera_id, settings):
-        """
-        更新指定视频流的AI分析设置。
-        """
-        if camera_id not in self._video_streams:
-            logger.warning(f"尝试更新不存在的视频流设置: {camera_id}")
-            return None
-
-        stream_processor = self._video_streams[camera_id]
-        if stream_processor:
-            stream_processor.update_settings(settings)
+        """更新特定视频流的设置。"""
+        stream = self._video_streams.get(camera_id)
+        if stream:
+            stream.update_settings(settings)
             # 同时更新AI设置存储
             if camera_id not in self._ai_settings:
                 self._ai_settings[camera_id] = self.AISettings().model_dump()
@@ -1529,6 +1585,25 @@ class AIServiceManager:
             logger.info(f"成功更新摄像头 {camera_id} 的AI设置: {settings}")
             return self._ai_settings[camera_id]
         return None
+
+    # --- 【新增】URL转换辅助函数 ---
+    def get_stream_key_from_url(self, url: str, source_type: str) -> Optional[str]:
+        """从各种流URL中提取流密钥(stream key)"""
+        try:
+            if source_type == 'rtmp':
+                # rtmp://.../app/stream_key
+                return url.strip().split('/')[-1]
+            elif source_type == 'hls':
+                # http://.../app/stream_key.m3u8
+                return url.strip().split('/')[-1].replace('.m3u8', '')
+            elif source_type == 'flv':
+                # http://.../app?app=live&stream=stream_key
+                parsed_url = urlparse(url)
+                query_params = parse_qs(parsed_url.query)
+                return query_params.get('stream', [None])[0]
+        except Exception as e:
+            logger.error(f"从URL '{url}' (类型: {source_type}) 提取流密钥失败: {e}")
+            return None
 
 
 # 创建服务管理器实例
@@ -1541,15 +1616,27 @@ async def lifespan(app: FastAPI):
     """FastAPI 的生命周期管理器。"""
     # 由于模型已在全局初始化，这里可以留空或用于其他启动任务
     logger.info("AI服务启动，生命周期管理器已激活。")
+    
+    # 启动 WebRTC 清理任务
+    cleanup_task = asyncio.create_task(start_cleanup_task())
+    
     yield  # 服务在此运行时，处理API请求
+    
+    # 关闭 WebRTC 清理任务
+    cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except asyncio.CancelledError:
+        pass
+    
     await service_manager.shutdown_services()
 
 
 # 创建FastAPI应用实例
 app = FastAPI(
-    title="SmartEye AI Service",
-    description="提供视频分析、人脸识别、目标检测等功能的AI微服务。",
-    version="1.2.0",
+    title="SmartEye AI服务",
+    description="提供视频流分析、AI检测和人脸识别服务",
+    version="1.0.0",
     lifespan=lifespan
 )
 
@@ -1557,19 +1644,19 @@ app = FastAPI(
 # 允许来自前端开发服务器的跨域请求
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5174", "http://127.0.0.1:5174"],  # 允许的源列表
+    allow_origins=["*"],  # 允许所有来源，生产环境应该限制为特定域名
     allow_credentials=True,
     allow_methods=["*"],  # 允许所有方法
-    allow_headers=["*"],  # 允许所有头
+    allow_headers=["*"],  # 允许所有头部
 )
 
 # 全局帧ID计数器
 frame_id_counters = {}
-
 async def process_video_stream_async_loop(stream: VideoStream, camera_id: str):
     """异步处理视频流循环，从VideoStream获取帧并送入分析器"""
-    print(f"开始异步处理视频流循环: {camera_id}")
+    print(f"[{camera_id}] 异步处理循环已启动。")
     frame_process_counter = 0
+    loop_counter = 0
     video_start_time = time.time()  # 记录视频开始时间
     
     # 初始化此摄像头的帧ID计数器
@@ -1578,12 +1665,21 @@ async def process_video_stream_async_loop(stream: VideoStream, camera_id: str):
         
     stream_initialized_sent = False  # 只发送一次初始化消息
     while stream.is_running:
+        loop_counter += 1
         try:
             # 这里直接从 VideoStream 获取帧，VideoStream 内部负责读取
+            frame_get_start_time = time.time()
             success, frame = stream.get_raw_frame()  # VideoStream 需要暴露这个方法
+            frame_get_time = (time.time() - frame_get_start_time) * 1000
+            
             if not success or frame is None:
-                await asyncio.sleep(0.01)  # 短暂等待，避免空转
+                # 【新增】添加日志，以便调试
+                if loop_counter % 100 == 0: # 每100次循环打印一次，避免刷屏
+                    print(f"[{camera_id}] 未能获取帧. Success: {success}, Frame is None: {frame is None}. 耗时 {frame_get_time:.2f}ms. Retrying...")
+                await asyncio.sleep(0.02)  # 短暂等待，避免空转
                 continue
+            
+            print(f"[{camera_id}] 成功获取帧，大小: {frame.shape}")
 
             # 【修复】首次获取到帧时，直接发送stream_initialized消息，确保它是顶级消息
             if not stream_initialized_sent:
@@ -1601,8 +1697,16 @@ async def process_video_stream_async_loop(stream: VideoStream, camera_id: str):
 
             # 每X帧处理一次（根据FPS调整），避免处理过于频繁
             frame_process_counter += 1
+            
+            # 无论如何总是先推送原始帧到WebRTC，确保视频流畅
+            original_frame_for_display = frame.copy()
+            webrtc_pusher.push_frame(camera_id, original_frame_for_display)
+            
             if frame_process_counter % DETECTION_FRAME_SKIP != 0:
                 continue
+
+            # 【新增】添加日志，确认帧正在被处理
+            print(f"正在处理帧: {frame_process_counter} (摄像头: {camera_id})")
 
             # 【增强】更新帧ID计数器并生成唯一的帧ID
             frame_id_counters[camera_id] += 1
@@ -1624,6 +1728,7 @@ async def process_video_stream_async_loop(stream: VideoStream, camera_id: str):
                     enable_object_detection=settings.get('object_detection', True),
                     enable_behavior_detection=settings.get('behavior_analysis', False),
                     enable_fire_detection=settings.get('fire_detection', True),
+                    enable_liveness_detection=settings.get('liveness_detection', True), # <-- 传递新参数
                     performance_mode=performance_mode
                 )
             )
@@ -1642,8 +1747,14 @@ async def process_video_stream_async_loop(stream: VideoStream, camera_id: str):
                 detection["frame_timestamp"] = frame_timestamp
                 detection["video_time"] = video_time  # 添加视频时间戳到每个检测项
             
-            # 异步发送检测结果到WebSocket
-            service_manager.send_detection_to_websocket(camera_id, results)
+            # 【新增】在帧上绘制检测框
+            processed_frame = draw_detections(frame, results.get("detections", []))
+            
+            # 将处理后的帧推送到 WebRTC
+            webrtc_pusher.push_frame(camera_id, processed_frame)
+            
+            # 继续发送检测结果到WebSocket，以便前端可以获取详细信息
+            await service_manager.send_detection_to_websocket(camera_id, results)
             
             # 控制处理速率，避免CPU过载
             await asyncio.sleep(0.01)
@@ -1652,6 +1763,8 @@ async def process_video_stream_async_loop(stream: VideoStream, camera_id: str):
             print(f"视频处理错误: {e}")
             traceback.print_exc()
             await asyncio.sleep(0.5)  # 出错时稍微延迟，避免错误过于频繁
+    
+    print(f"[{camera_id}] 视频流处理循环已停止 (is_running: {stream.is_running})。")
 
 
 @app.post("/stream/stop/{camera_id}")
@@ -1659,6 +1772,9 @@ async def stop_stream(camera_id: str):
     if camera_id not in service_manager._video_streams:
         raise HTTPException(status_code=404, detail=f"未找到摄像头 {camera_id} 的视频流")
 
+    # 关闭该摄像头的所有 WebRTC 连接
+    await webrtc_pusher.close_all_camera_connections(camera_id)
+    
     stream_processor = service_manager._video_streams[camera_id]
     await stream_processor.stop()  # VideoStream 内部会停止音频提取和帧循环
 
@@ -1696,47 +1812,128 @@ class FaceVerificationResponse(BaseModel):
     refresh_token: Optional[str] = None
     user: Optional[Dict[str, Any]] = None
 
+class FrameExtractionResponse(BaseModel):
+    frames: List[str] = Field(..., description="从视频中提取的Base64编码的图像帧列表")
 
-# --- 人脸识别相关API ---
+@app.post("/face/extract_frames/", response_model=FrameExtractionResponse, tags=["Face Recognition"])
+async def extract_frames_from_video(video_file: UploadFile = File(...)):
+    """
+    从上传的视频文件中提取多个帧，用于用户手动选择。
+    """
+    logger.info("接收到视频帧提取请求...")
+    
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as tmp:
+        content = await video_file.read()
+        tmp.write(content)
+        video_path = tmp.name
+
+    extracted_frames = []
+    try:
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise HTTPException(status_code=400, detail="无法打开视频文件")
+        
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        if total_frames == 0 or fps == 0:
+            raise HTTPException(status_code=400, detail="视频文件无效或无法读取帧信息")
+
+        # 目标是提取最多5个高质量帧
+        target_indices = np.linspace(
+            0, total_frames - 1, 
+            min(5, total_frames) # 最多5帧，或视频总帧数
+        ).astype(int)
+
+        for idx in target_indices:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+            ret, frame = cap.read()
+            if ret and frame is not None:
+                # 检查图像是否过暗或过亮
+                if frame.mean() < 10 or frame.mean() > 245:
+                    continue
+                
+                _, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+                encoded_string = base64.b64encode(buffer).decode("utf-8")
+                extracted_frames.append(f"data:image/jpeg;base64,{encoded_string}")
+        
+    except Exception as e:
+        logger.error(f"提取视频帧时发生错误: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"服务器内部错误: {e}")
+    finally:
+        if 'cap' in locals() and cap.isOpened():
+            cap.release()
+        os.unlink(video_path)
+
+    if not extracted_frames:
+        raise HTTPException(status_code=400, detail="无法从视频中提取任何有效的图像帧。")
+        
+    logger.info(f"成功从视频中提取了 {len(extracted_frames)} 帧。")
+    return FrameExtractionResponse(frames=extracted_frames)
+
+@app.get("/face/check/", tags=["Face Recognition"])
+async def check_face_exists(username: str = Query(...), department: str = Query(...)):
+    """
+    检查指定用户是否已存在人脸数据。
+    """
+    person_id = f"{department}__{username}"
+    user_dir = os.path.join(known_faces_path, person_id)
+    
+    # 检查目录是否存在且目录内有 .npy 文件
+    exists = False
+    if os.path.isdir(user_dir):
+        for fname in os.listdir(user_dir):
+            if fname.endswith(".npy"):
+                exists = True
+                break
+                
+    return {"exists": exists, "person_id": person_id}
+
 @app.post("/face/register/", response_model=FaceRegistrationResponse, tags=["Face Recognition"])
 async def register_face(
     username: str = Form(...),
     department: str = Form(...),
-    face_image: UploadFile = File(...)
+    face_image: Optional[UploadFile] = File(None),
+    video_file: Optional[UploadFile] = File(None)
 ):
     """
-    注册一个新的用户人脸。
-    接收表单数据（用户名、部门）和一张人脸图片，
-    将其存入人脸数据库，并动态更新内存中的模型。
+    接收用户提交的人脸图像或视频，进行注册。
+    - 如果是图片，提取特征并保存。
+    - 如果是视频，从中选出高质量的帧进行注册。
     """
+    logger.info(f"开始为用户 '{username}' (部门: {department}) 处理人脸注册请求。")
+    if not face_recognizer:
+        logger.error("Face recognizer is not initialized.")
+        raise HTTPException(status_code=503, detail="人脸识别服务当前不可用")
+
+    if not face_image and not video_file:
+        raise HTTPException(status_code=400, detail="必须提供人脸图片或视频文件")
+
+    # 关键修复：不再拼接部门信息，直接使用纯粹的username作为唯一标识
+    person_id = username
+
     try:
-        # 使用 username 作为唯一标识符
-        person_id = username
+        if face_image:
+            image_bytes = await face_image.read()
+            result = face_recognizer.register_new_face(person_id, image_bytes)
         
-        # 读取上传的图片文件
-        image_contents = await face_image.read()
-        nparr = np.frombuffer(image_contents, np.uint8)
-        image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        elif video_file:
+            video_bytes = await video_file.read()
+            result = face_recognizer.register_from_video(person_id, video_bytes)
 
-        if image is None:
-            raise HTTPException(status_code=400, detail="无效的图像文件或格式不受支持。")
-
-        face_recognizer = service_manager._detectors.get("face")
-        if not face_recognizer:
-            raise HTTPException(status_code=503, detail="人脸识别服务当前不可用。")
-
-        # 调用核心模块添 加人脸
-        success = face_recognizer.add_face(image, person_name=person_id)
-
-        if success:
-            logger.info(f"成功注册新的人脸: ID='{person_id}', Department='{department}'")
-            return {"success": True, "message": "人脸注册成功！", "person_id": person_id}
+        if result and result.get("success"):
+            logger.info(f"用户 '{person_id}' 的人脸已成功注册。")
+            # 重新加载人脸数据，确保新注册的人脸可用
+            await service_manager.reload_face_recognizer()
+            return FaceRegistrationResponse(success=True, message=result.get("message", "人脸注册成功"), person_id=person_id)
         else:
-            logger.warning(f"为 '{person_id}' 注册人脸失败，可能图片中未检测到清晰人脸。")
-            raise HTTPException(status_code=400, detail="注册失败，请确保上传了清晰、单人的人脸正面照。")
+            error_message = result.get("message", "注册失败，未知原因。")
+            logger.warning(f"为用户 '{person_id}' 注册人脸失败: {error_message}")
+            raise HTTPException(status_code=400, detail=error_message)
 
+    except HTTPException as http_exc:
+        raise http_exc
     except Exception as e:
-        logger.error(f"人脸注册API出现异常: {e}", exc_info=True)
+        logger.error(f"处理人脸注册时发生未知错误: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"服务器内部错误: {str(e)}")
 
 
@@ -1937,8 +2134,11 @@ async def face_verification_ws(websocket: WebSocket):
 
             user_info = face_recognizer.recognize_in_frame(final_frame)
             
-            if user_info and user_info.get("identity") != "Unknown":
-                token_data = await service_manager.get_user_token(user_info["identity"])
+            # 关键修复：直接使用识别出的用户名（identity），不再进行任何拼接
+            if user_info and user_info.get("identity") and user_info.get("identity") != "Unknown":
+                recognized_username = user_info["identity"]
+                logger.info(f"准备为用户 '{recognized_username}' 请求内部登录以获取Token。")
+                token_data = await service_manager.get_user_token(recognized_username)
                 if token_data:
                     await websocket.send_json({"status": "success", "message": "验证成功", **token_data})
                 else:
@@ -1975,79 +2175,75 @@ async def face_verification_ws(websocket: WebSocket):
             await websocket.close()
 
 
-# 视频流连接测试
+# --- 【核心修复】修改视频流连接测试端点 ---
 @app.post("/stream/test/")
 async def test_stream_connection_endpoint(url: str = Body(...), type: str = Body(...)):
     print(f"正在测试视频流连接: {url} (类型: {type})")
-    # 为了测试，这里不传入实际的检测器实例
-    stream = VideoStream(stream_url=url, camera_id="test_connection_id")
+
+    # 自动将播放URL转换为AI服务需要的RTMP源URL
+    source_url_for_ai = url
+    stream_key = service_manager.get_stream_key_from_url(url, type)
+    if stream_key and type in ['hls', 'flv']:
+        source_url_for_ai = f"rtmp://localhost:1935/live/{stream_key}"
+        print(f"测试连接: 检测到播放URL，已自动转换为AI服务的源URL: {source_url_for_ai}")
+
+    stream = VideoStream(stream_url=source_url_for_ai, camera_id="test_connection_id")
     is_available = await stream.test_connection()
-    return {"status": "success" if is_available else "error",
-            "message": "视频流可用" if is_available else "无法连接到视频流"}
+    
+    # 无论成功失败，都返回200 OK，通过内容告诉前端结果
+    if is_available:
+        return {"status": "success", "message": "视频流可用"}
+    else:
+        return {"status": "error", "message": f"无法连接到视频流: {source_url_for_ai}"}
 
 
-# 启动视频流处理
+# --- 【核心修复】修改启动视频流处理端点 ---
 @app.post("/stream/start/")
-async def start_stream(
+async def start_stream_endpoint(
     camera_id: str = Body(...),
     stream_url: str = Body(...),
+    source_type: str = Body(...), # <--【新增】获取前端传入的原始类型
     enable_face_recognition: bool = Body(True),
     enable_object_detection: bool = Body(True),
     enable_behavior_detection: bool = Body(False),
     enable_fire_detection: bool = Body(True),
-    enable_sound_detection: bool = Body(False)
+    enable_sound_detection: bool = Body(False),
+    enable_liveness_detection: bool = Body(True)
 ):
-    """启动视频流处理
-    
-    Args:
-        camera_id: 摄像头ID
-        stream_url: 视频流URL
-        enable_face_recognition: 是否启用人脸识别
-        enable_object_detection: 是否启用目标检测
-        enable_behavior_detection: 是否启用行为分析
-        enable_fire_detection: 是否启用火焰检测
-        enable_sound_detection: 是否启用声音检测
-    """
+    """启动视频流处理"""
     if camera_id in service_manager._video_streams:
-        # 如果已经存在此摄像头的流，先停止它
         await service_manager._video_streams[camera_id].stop()
         del service_manager._video_streams[camera_id]
+
+    # 自动将播放URL转换为AI服务需要的RTMP源URL
+    source_url_for_ai = stream_url
+    stream_key = service_manager.get_stream_key_from_url(stream_url, source_type)
+    if stream_key and source_type in ['hls', 'flv']:
+        source_url_for_ai = f"rtmp://localhost:1935/live/{stream_key}"
+        print(f"启动流: 检测到播放URL，已自动转换为AI服务的源URL: {source_url_for_ai}")
+
+    print(f"正在启动视频流: {source_url_for_ai} (摄像头ID: {camera_id})")
     
-    print(f"正在启动视频流: {stream_url} (摄像头ID: {camera_id})")
-    
-    # 创建视频流对象
     stream_processor = VideoStream(
-        stream_url=stream_url,
+        stream_url=source_url_for_ai, # <-- 使用转换后的URL
         camera_id=camera_id,
     )
     
-    # 保存流对象
     service_manager._video_streams[camera_id] = stream_processor
     
-    # 初始化追踪器
     if camera_id not in service_manager._object_trackers:
-        service_manager._object_trackers[camera_id] = DeepSORTTracker()
-    
-    # 初始化检测缓存
-    if camera_id not in service_manager._detection_cache:
-        service_manager._detection_cache[camera_id] = {}
-    
-    # 更新该摄像头的AI设置
-    service_manager.update_ai_settings(camera_id, {
-        "face_recognition": enable_face_recognition,
-        "object_detection": enable_object_detection,
-        "behavior_analysis": enable_behavior_detection,
-        "fire_detection": enable_fire_detection,
-        "sound_detection": enable_sound_detection
-    })
-    
-    # 启动视频流
-    await stream_processor.start()
-    
-    # 启动异步处理循环
+        service_manager._object_trackers[camera_id] = DeepSORTTracker(max_age=30, n_init=3)
+        
+    # 【关键修复】必须调用 start() 方法来启动视频流的后台读取线程
+    # 并检查其是否成功启动
+    if not await stream_processor.start():
+        # 如果启动失败，从管理器中移除实例并返回错误
+        del service_manager._video_streams[camera_id]
+        raise HTTPException(status_code=500, detail=f"无法启动视频流: {stream_url}")
+        
     asyncio.create_task(process_video_stream_async_loop(stream_processor, camera_id))
     
-    return {"status": "success", "message": f"已启动视频流处理: {camera_id}"}
+    return {"status": "success", "message": f"视频流处理已在后台启动"}
 
 
 # 添加一个健康检查接口
@@ -2059,15 +2255,169 @@ async def get_system_status():
 # AI分析设置
 @app.post("/frame/analyze/settings/{camera_id}")
 async def update_ai_settings(camera_id: str, settings: service_manager.AISettings = Body(...)):
-    service_manager.update_ai_settings(camera_id, settings.model_dump())
-    return {"status": "success", "message": "AI分析设置已更新", "settings": service_manager.get_ai_settings(camera_id)}
+    """更新AI分析设置并将其传播到视频流"""
+    # 【核心修复】使用 exclude_unset=True 来获取一个只包含客户端实际发送字段的字典
+    update_data = settings.model_dump(exclude_unset=True)
+    
+    updated_settings = service_manager.update_stream_settings(camera_id, update_data)
+    
+    if updated_settings:
+        return {"status": "success", "message": "AI分析设置已更新", "settings": updated_settings}
+    else:
+        # 如果视频流不存在，仍然更新全局设置，以便在流启动时使用
+        service_manager.update_ai_settings(camera_id, update_data)
+        return {
+            "status": "success",
+            "message": "AI分析设置已为未来的流更新",
+            "settings": service_manager.get_ai_settings(camera_id)
+        }
 
 
 @app.get("/frame/analyze/settings/{camera_id}")
 async def get_ai_settings(camera_id: str):
-    return {"status": "success", "settings": service_manager.get_ai_settings(camera_id)}
+    """获取指定摄像头的AI分析配置"""
+    settings = service_manager.get_ai_settings(camera_id)
+    return settings
 
 
-# 启动Uvicorn
+# 添加 WebRTC 相关的 API 端点
+class WebRTCSessionDescription(BaseModel):
+    """WebRTC 会话描述模型"""
+    sdp: str
+    type: str
+
+class WebRTCConnectionResponse(BaseModel):
+    """WebRTC 连接响应模型"""
+    connection_id: str
+    sdp: str
+    type: str
+
+@app.post("/webrtc/offer/{camera_id}", response_model=WebRTCConnectionResponse, tags=["WebRTC"])
+async def create_webrtc_offer(camera_id: str):
+    """
+    为指定摄像头创建 WebRTC offer
+    """
+    logger.info(f"正在为摄像头 {camera_id} 创建WebRTC offer")
+    
+    # 检查摄像头是否存在
+    if camera_id not in service_manager._video_streams:
+        error_msg = f"未找到摄像头 {camera_id} 的视频流"
+        logger.error(error_msg)
+        raise HTTPException(status_code=404, detail=error_msg)
+    
+    try:
+        # 确保视频流中有数据
+        stream = service_manager._video_streams[camera_id]
+        success, _ = stream.get_raw_frame()
+        if not success:
+            logger.warning(f"摄像头 {camera_id} 尚未接收到视频帧，WebRTC连接可能没有内容")
+        
+        # 创建 WebRTC offer
+        offer_data = await webrtc_pusher.create_offer(camera_id)
+        logger.info(f"为摄像头 {camera_id} 创建WebRTC offer成功，连接ID: {offer_data['connection_id']}")
+        
+        return {
+            "connection_id": offer_data["connection_id"],
+            "sdp": offer_data["sdp"],
+            "type": offer_data["type"]
+        }
+    except Exception as e:
+        error_msg = f"创建WebRTC offer失败: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        raise HTTPException(status_code=500, detail=error_msg)
+
+@app.post("/webrtc/answer/{connection_id}", tags=["WebRTC"])
+async def process_webrtc_answer(connection_id: str, answer: WebRTCSessionDescription):
+    """
+    处理来自浏览器的 WebRTC answer
+    """
+    logger.info(f"正在处理连接ID {connection_id} 的WebRTC answer")
+    
+    try:
+        success = await webrtc_pusher.process_answer(connection_id, answer.sdp, answer.type)
+        if not success:
+            error_msg = f"处理WebRTC answer失败，可能是连接ID {connection_id} 不存在"
+            logger.error(error_msg)
+            raise HTTPException(status_code=400, detail=error_msg)
+        
+        logger.info(f"成功处理连接ID {connection_id} 的WebRTC answer")
+        return {"status": "success", "message": "WebRTC连接已建立"}
+    except Exception as e:
+        error_msg = f"处理WebRTC answer时发生错误: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        raise HTTPException(status_code=500, detail=error_msg)
+
+@app.delete("/webrtc/connection/{connection_id}", tags=["WebRTC"])
+async def close_webrtc_connection(connection_id: str):
+    """
+    关闭指定的 WebRTC 连接
+    """
+    logger.info(f"正在关闭WebRTC连接 {connection_id}")
+    
+    try:
+        await webrtc_pusher.close_connection(connection_id)
+        logger.info(f"已成功关闭WebRTC连接 {connection_id}")
+        return {"status": "success", "message": f"已关闭WebRTC连接 {connection_id}"}
+    except Exception as e:
+        error_msg = f"关闭WebRTC连接时发生错误: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        # 即使发生错误，也返回成功，因为客户端已经断开连接
+        return {"status": "success", "message": f"尝试关闭WebRTC连接 {connection_id}，但发生错误: {str(e)}"}
+
+# 添加一个新的调试接口
+@app.get("/webrtc/status", tags=["WebRTC"])
+async def get_webrtc_status():
+    """
+    获取当前WebRTC连接的状态信息
+    """
+    try:
+        # 确保导入了必要的模块和变量
+        from smart_station_platform.ai_service.core.webrtc_pusher import active_connections, frame_buffers
+        
+        active_count = len(active_connections)
+        active_cameras = {}
+        
+        # 统计每个摄像头的连接数
+        for connection_id, data in active_connections.items():
+            camera_id = data.get("camera_id", "unknown")
+            if camera_id not in active_cameras:
+                active_cameras[camera_id] = []
+            active_cameras[camera_id].append(connection_id)
+        
+        # 统计帧缓冲区信息
+        buffer_info = {}
+        for camera_id, frame in frame_buffers.items():
+            if frame is not None:
+                height, width = frame.shape[:2]
+                buffer_info[camera_id] = {
+                    "width": width,
+                    "height": height,
+                    "channels": frame.shape[2] if len(frame.shape) > 2 else 1,
+                    "dtype": str(frame.dtype)
+                }
+        
+        return {
+            "active_connections": active_count,
+            "active_cameras": {camera_id: len(connections) for camera_id, connections in active_cameras.items()},
+            "connection_details": {camera_id: connections for camera_id, connections in active_cameras.items()},
+            "frame_buffers": buffer_info
+        }
+    except Exception as e:
+        logger.error(f"获取WebRTC状态时出错: {str(e)}", exc_info=True)
+        return JSONResponse(
+            status_code=200,  # 即使出错也返回200，避免前端因错误状态码而不显示错误消息
+            content={
+                "status": "error",
+                "message": f"获取WebRTC状态时出错: {str(e)}",
+                "error_detail": traceback.format_exc()
+            }
+        )
+
+
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    # 启动Uvicorn服务器
+    # 监听所有网络接口(0.0.0.0)，端口为8002
+    # 注意：在生产环境中，建议关闭热重载 (reload=False)
+    # 【修复】为了启用热重载(reload=True)，必须以字符串形式传递应用 "文件名:FastAPI实例名"
+    uvicorn.run("app:app", host="0.0.0.0", port=8002, reload=True)
+
