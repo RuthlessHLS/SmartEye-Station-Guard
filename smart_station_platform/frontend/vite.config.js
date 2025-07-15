@@ -2,24 +2,19 @@ import { fileURLToPath, URL } from 'node:url'
 
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
-
-// 导入按需引入的插件
 import AutoImport from 'unplugin-auto-import/vite'
 import Components from 'unplugin-vue-components/vite'
 import { ElementPlusResolver } from 'unplugin-vue-components/resolvers'
-
 
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [
     vue(),
-    // 配置 AutoImport 插件
     AutoImport({
-      resolvers: [ElementPlusResolver()], // 解析 Element Plus 组件
+      resolvers: [ElementPlusResolver()],
     }),
-    // 配置 Components 插件
     Components({
-      resolvers: [ElementPlusResolver()], // 解析 Element Plus 组件
+      resolvers: [ElementPlusResolver()],
     }),
   ],
   resolve: {
@@ -28,15 +23,20 @@ export default defineConfig({
     }
   },
   server: {
+    https: false,
+    cors: true,
+    hmr: {
+      host: 'localhost',
+      protocol: 'ws',
+      clientPort: 5174
+    },
     host: '0.0.0.0',
     port: 5174,
-    strictPort: false,
-    cors: true,
+    strictPort: true,
     proxy: {
       '/api': {
         target: 'http://127.0.0.1:8000',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, '')
       },
       '/ai': {
         target: 'http://127.0.0.1:8001',
@@ -45,11 +45,15 @@ export default defineConfig({
       }
     }
   },
-  optimizeDeps: { // 确保这里添加了
+  optimizeDeps: {
     include: [
-      'echarts',
-      'mapbox-gl',
       'element-plus',
-    ],
-  },
+      'flv.js',
+      'hls.js',
+      'video.js',
+      'vue',
+      'vue-router',
+      'pinia'
+    ]
+  }
 })

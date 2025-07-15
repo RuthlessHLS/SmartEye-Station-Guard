@@ -239,36 +239,99 @@ class AIResultReceiveView(APIView):
                     # 发送WebSocket通知
                     channel_layer = get_channel_layer()
                     if channel_layer:
-                        alert_data = AlertDetailSerializer(alert).data
+                        # 【修复】使用 serializer.validated_data 替代 AlertDetailSerializer(alert).data
+                        # 因为前者包含AI服务发来的完整原始数据（包括坐标等 details），而后者可能会丢失字段
+                        alert_data_for_ws = serializer.validated_data
+                        # 手动将部分字段转换为字符串以确保JSON序列化成功
+                        alert_data_for_ws['timestamp'] = alert.timestamp.isoformat()
+                        
                         async_to_sync(channel_layer.group_send)(
                             "alerts_group",
                             {
-                                "type": "alert_message",
+                                "type": "alert_message", # 注意这里是 alert_message
                                 "message": {
                                     "action": "new_alert",
-                                    "alert": alert_data
+                                    # "alert": alert_data # 旧代码
+                                    "alert": alert_data_for_ws # 新代码
                                 }
                             }
                         )
-                except Exception as ws_error:
-                    logger.error(f"WebSocket通知发送失败: {str(ws_error)}")
-                    # 即使WebSocket发送失败，我们仍然返回成功，因为告警已经保存
-                
+                        print(f"✅ 新告警 {alert.id} 已通过WebSocket推送到前端。")
+                except Exception as e:
+                    logger.error(f"发送WebSocket通知时发生严重错误: {e}", exc_info=True)
+
                 return Response(
-                    {"message": "Alert created successfully", "id": alert.id},
+                    AlertDetailSerializer(alert).data, 
                     status=status.HTTP_201_CREATED
                 )
             else:
-                logger.error(f"数据验证失败: {serializer.errors}")
-                return Response(
-                    {"error": "Invalid data", "details": serializer.errors},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
+                logger.error(f"AI结果序列化失败: {serializer.errors}")
+                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        except json.JSONDecodeError:
+            return Response(
+                {"error": "Invalid JSON format"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
         except Exception as e:
-            logger.error(f"处理AI结果时发生错误: {str(e)}")
+            logger.error(f"处理AI结果时发生未知错误: {e}", exc_info=True)
             return Response(
                 {"error": "Internal server error"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class WebSocketBroadcastView(APIView):
+    """
+    WebSocket广播接口，用于向前端推送实时数据
+    POST /alerts/websocket/broadcast/
+    """
+    permission_classes = []
+    authentication_classes = []
+
+    # 【重要修复】恢复被删除的 post 方法的完整逻辑
+    def post(self, request, *args, **kwargs):
+        """
+        接收来自AI服务的实时检测数据并将其广播到WebSocket频道组。
+        """
+        # 验证API密钥
+        api_key = request.headers.get('X-API-Key')
+        valid_api_key = os.getenv('AI_SERVICE_API_KEY', 'smarteye-ai-service-key-2024')
+        if not api_key or api_key != valid_api_key:
+            return Response(
+                {"error": "Invalid or missing API key"},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+        data = request.data
+        message_type = data.get("type", "unknown_broadcast")
+        logger.info(f"📡 收到WebSocket广播请求: {message_type}")
+
+        try:
+            channel_layer = get_channel_layer()
+            if channel_layer:
+                async_to_sync(channel_layer.group_send)(
+                    "alerts_group",
+                    {
+                        "type": "broadcast_message",
+                        "message": data
+                    }
+                )
+                logger.info(f"✅ WebSocket消息已广播: {message_type}")
+                return Response(
+                    {"status": "broadcasted", "type": message_type},
+                    status=status.HTTP_200_OK
+                )
+            else:
+                logger.error("❌ Channel layer 未正确配置，无法广播。")
+                return Response(
+                    {"error": "Server not configured for WebSocket broadcast"},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+        except Exception as e:
+            logger.error(f"❌ 广播WebSocket消息时发生错误: {e}", exc_info=True)
+            return Response(
+                {"error": "Failed to broadcast message"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 

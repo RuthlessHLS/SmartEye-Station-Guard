@@ -31,8 +31,18 @@ DEBUG = True
 ALLOWED_HOSTS = ['127.0.0.1', 'localhost']
 
 # CORS配置
-CORS_ALLOW_ALL_ORIGINS = True  # 允许所有来源访问
-CORS_ALLOW_CREDENTIALS = True  # 允许携带cookie
+CORS_ALLOW_ALL_ORIGINS = False  # 禁用允许所有来源
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+
+# 允许携带认证信息
+CORS_ALLOW_CREDENTIALS = True
+
+# 允许的HTTP方法
 CORS_ALLOW_METHODS = [
     'DELETE',
     'GET',
@@ -41,6 +51,8 @@ CORS_ALLOW_METHODS = [
     'POST',
     'PUT',
 ]
+
+# 允许的请求头
 CORS_ALLOW_HEADERS = [
     'accept',
     'accept-encoding',
@@ -53,48 +65,49 @@ CORS_ALLOW_HEADERS = [
     'x-requested-with',
 ]
 
+# 暴露的响应头
+CORS_EXPOSE_HEADERS = [
+    'content-type',
+    'x-csrftoken',
+]
+
+# 确保 corsheaders.middleware.CorsMiddleware 位于最前面
+MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',  # 必须放在最前面
+    'django.middleware.security.SecurityMiddleware',
+    'django.contrib.sessions.middleware.SessionMiddleware',
+    'django.middleware.common.CommonMiddleware',
+    'django.middleware.csrf.CsrfViewMiddleware',
+    'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'django.contrib.messages.middleware.MessageMiddleware',
+    'django.middleware.clickjacking.XFrameOptionsMiddleware',
+]
+
+# 添加 CORS 调试设置
+CORS_REPLACE_HTTPS_REFERER = True
+
 # Application definition
 
 INSTALLED_APPS = [
-    'daphne',
-    'corsheaders',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    # 第三方应用
-    'django_filters',
     'rest_framework',
-    'rest_framework_simplejwt',
+    'corsheaders',
     'channels',
-    'drf_yasg', # Swagger
-    'django_celery_results', # Celery Results
-    'celery',   # Celery
-    # 本地应用
+    'drf_yasg',
     'users',
     'alerts',
     'camera_management',
     'ai_reports',
     'data_analysis',
-
-    'storages',
 ]
 
 # 指定自定义用户模型
 AUTH_USER_MODEL = 'users.UserProfile'
-
-MIDDLEWARE = [
-    'corsheaders.middleware.CorsMiddleware',
-    "django.middleware.security.SecurityMiddleware",
-    "django.contrib.sessions.middleware.SessionMiddleware",
-    "django.middleware.common.CommonMiddleware",
-    "django.middleware.csrf.CsrfViewMiddleware",
-    "django.contrib.auth.middleware.AuthenticationMiddleware",
-    "django.contrib.messages.middleware.MessageMiddleware",
-    "django.middleware.clickjacking.XFrameOptionsMiddleware",
-]
 
 ROOT_URLCONF = "smart_station.urls"
 
@@ -137,23 +150,23 @@ DATABASES = {
 # 华为云 OBS 存储配置
 # -----------------------------------------------------------
 
-OBS_ACCESS_KEY_ID = config('OBS_ACCESS_KEY_ID')
-OBS_SECRET_ACCESS_KEY = config('OBS_SECRET_ACCESS_KEY')
-OBS_ENDPOINT = config('OBS_ENDPOINT')
-OBS_BUCKET_NAME = config('OBS_BUCKET_NAME')
 
-DEFAULT_FILE_STORAGE = 'smart_station.custom_storages.HuaweiOBSStorage' # <--- 注意这里，如果是monitoring，改成monitoring
+OBS_ACCESS_KEY_ID = config('OBS_ACCESS_KEY_ID', default='temp_access_key')
+OBS_SECRET_ACCESS_KEY = config('OBS_SECRET_ACCESS_KEY', default='temp_secret_key')
+OBS_ENDPOINT = config('OBS_ENDPOINT', default='obs.cn-north-4.myhuaweicloud.com')
+OBS_BUCKET_NAME = config('OBS_BUCKET_NAME', default='smart-station-bucket')
 
-MEDIA_URL = f'https://{OBS_BUCKET_NAME}.{OBS_ENDPOINT}/'
-MEDIA_ROOT = os.path.join(BASE_DIR, 'media') # 可以保留，本地调试不实际使用
+# 文件存储配置
+MEDIA_URL = '/media/'
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
-# 如果静态文件在本地服务，这部分保持不变
+
+# 使用本地文件系统存储
+DEFAULT_FILE_STORAGE = 'django.core.files.storage.FileSystemStorage'
+
+# 静态文件配置
 STATIC_URL = '/static/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
-
-# （可选）如果未来你也要把静态文件也放到 OBS 上，可以这样配置，并创建 HuaweiStaticOBSStorage 类
-# STATIC_URL = f'https://{OBS_BUCKET_NAME}.{OBS_ENDPOINT}/static/'
-# STATICFILES_STORAGE = 'smart_station.custom_storages.HuaweiStaticOBSStorage'
 
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators

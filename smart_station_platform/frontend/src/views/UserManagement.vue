@@ -18,20 +18,38 @@
     </div>
 
     <!-- 用户列表表格 -->
-    <!-- v-loading 直接绑定 store.loading -->
-    <el-table :data="store.users" v-loading="store.loading" style="width: 100%" border>
+    <el-table 
+      :data="store.users" 
+      v-loading="store.loading" 
+      style="width: 100%" 
+      border
+      v-if="!store.error"
+    >
       <el-table-column prop="id" label="ID" width="80" />
       <el-table-column prop="username" label="用户名" width="180" />
-      <el-table-column prop="nickname" label="昵称" width="180" />
-      <el-table-column prop="email" label="邮箱" width="220" />
-      <el-table-column prop="phone_number" label="手机号" min-width="150" />
+      <el-table-column prop="nickname" label="昵称" width="180">
+        <template #default="scope">
+          {{ scope.row.nickname || '未设置' }}
+        </template>
+      </el-table-column>
+      <el-table-column prop="email" label="邮箱" width="220">
+        <template #default="scope">
+          {{ scope.row.email || '未设置' }}
+        </template>
+      </el-table-column>
+      <el-table-column prop="phone_number" label="手机号" min-width="150">
+        <template #default="scope">
+          {{ scope.row.phone_number || '未设置' }}
+        </template>
+      </el-table-column>
     </el-table>
 
     <!-- 错误状态显示 -->
-    <div v-if="store.error" class="error-state">
-      <p>{{ store.error }}</p>
-      <el-button @click="retryFetch" type="primary">重试</el-button>
-    </div>
+    <el-empty v-if="store.error" :description="store.error">
+      <template #extra>
+        <el-button type="primary" @click="retryFetch">重新加载</el-button>
+      </template>
+    </el-empty>
   </div>
 </template>
 
@@ -63,6 +81,7 @@ const debouncedSearch = _.debounce(() => {
 
 // 清除搜索框时，重新获取全部用户
 const clearSearch = () => {
+  searchQuery.value = '';
   store.fetchUsers();
 };
 
