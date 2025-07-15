@@ -5,6 +5,10 @@ from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 import random
 from datetime import datetime, timedelta
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from .models import DailyReport
+
 
 # Create your views here.
 
@@ -50,3 +54,76 @@ class TrajectoryView(APIView):
             [116.4100, 39.9150, 30],
         ]
         return Response({'trajectory': trajectory})
+        
+class DailyReportView(APIView):
+    def get(self, request, date_str):
+        from alerts.models import Alert
+        from datetime import datetime
+        import json, re
+        from .ai_report_utils import generate_ai_report
+
+        # 解析日期
+        try:
+            report_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except Exception:
+            return Response({'error': '日期格式错误，应为 YYYY-MM-DD'}, status=400)
+
+        alerts = Alert.objects.filter(timestamp__date=report_date)
+        total_alerts = alerts.count()
+        resolved_alerts = alerts.filter(status='resolved').count()
+        pending_alerts = alerts.filter(status='pending').count()
+
+        # 类型分布
+        type_dist = []
+        for t in alerts.values_list('event_type', flat=True).distinct():
+            type_dist.append({
+                "name": t,
+                "value": alerts.filter(event_type=t).count()
+            })
+
+        # 24小时趋势
+        trend = []
+        for h in range(24):
+            hour_str = f"{h:02d}:00"
+            count = alerts.filter(timestamp__hour=h).count()
+            trend.append({"hour": hour_str, "count": count})
+
+        # 关键事件（可根据实际业务挑选，这里简单选取最新3条）
+        key_events = []
+        for alert in alerts.order_by('-timestamp')[:3]:
+            key_events.append({
+                "title": f"{dict(Alert.EVENT_TYPE_CHOICES).get(alert.event_type, alert.event_type)}告警", 
+                "time": alert.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+                "imageUrl": alert.image_snapshot_url or ''
+            })
+
+        # AI摘要
+        prompt = (
+            "请根据以下监控数据，严格只输出结构化JSON摘要，字段包括：overview（整体概览，字符串），type_summary（异常类型分布，数组，每项含type和desc），"
+            "key_points（重点关注，数组），suggestions（建议，数组），所有内容用简洁正式中文。不要输出任何解释、markdown、注释，只要JSON。\n"
+            f"数据：告警数{total_alerts}，正常数100，异常类型：{','.join([d['name'] for d in type_dist])}"
+        )
+        summary_text = generate_ai_report(prompt)
+        try:
+            summary = json.loads(summary_text)
+        except Exception:
+            match = re.search(r'({[\s\S]*})', summary_text)
+            if match:
+                try:
+                    summary = json.loads(match.group(1))
+                except Exception:
+                    summary = {"overview": summary_text}
+            else:
+                summary = {"overview": summary_text}
+
+        report_data = {
+            "date": date_str,
+            "summary": summary,
+            "totalAlerts": total_alerts,
+            "resolvedAlerts": resolved_alerts,
+            "pendingAlerts": pending_alerts,
+            "alertTypeDistribution": type_dist,
+            "alertTrend": trend,
+            "keyEvents": key_events
+        }
+        return Response(report_data)

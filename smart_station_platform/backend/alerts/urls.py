@@ -8,7 +8,8 @@ from .views import (
     AlertUpdateView,
     AIResultReceiveView, 
     AlertStatsView,
-    AlertTestView
+    AlertTestView,
+    AlertLogListView,  # 新增
 )
 
 urlpatterns = [
@@ -23,4 +24,5 @@ urlpatterns = [
     path('<int:pk>/', AlertDetailView.as_view(), name='alert-detail'),  # GET 获取详情
     path('stats/', AlertStatsView.as_view(), name='alert-stats'),  # GET 获取统计信息
     path('test/', AlertTestView.as_view(), name='alert-test'),  # GET 测试接口
+    path('<int:alert_id>/logs/', AlertLogListView.as_view(), name='alert-logs'),  # 新增
 ]

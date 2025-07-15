@@ -4,7 +4,7 @@ import router from '../router';
 // 后端API服务实例
 const backendService = axios.create({
   baseURL: import.meta.env.VITE_APP_API_BASE_URL || 'http://127.0.0.1:8000',
-  timeout: 10000,
+  timeout: 30000, // 这里改成30000，表示30秒
 });
 
 // AI服务实例
@@ -12,6 +12,7 @@ const aiService = axios.create({
   baseURL: import.meta.env.VITE_APP_AI_SERVICE_URL || 'http://127.0.0.1:8001', // 修改为8001端口
   timeout: 30000, // AI服务可能需要更长的处理时间
 });
+
 
 // 请求重试配置
 const retryConfig = {
@@ -139,6 +140,10 @@ const requestWithRetry = async (service, config) => {
 
 // 默认导出API服务对象
 const api = {
+  get: (...args) => backendService.get(...args),
+  post: (...args) => backendService.post(...args),
+  patch: (...args) => backendService.patch(...args),
+  delete: (...args) => backendService.delete(...args),
   // 告警相关接口
   alerts: {
     getList: (params) => backendService.get('/api/alerts/', { params }),

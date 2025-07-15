@@ -26,7 +26,38 @@
       </template>
       <div v-if="report.summary">
         <h3 class="report-section-title">AI 摘要：</h3>
+        <template v-if="typeof report.summary === 'object' && report.summary !== null">
+          <div class="report-summary-block">
+            <div v-if="report.summary.overview">
+              <b>整体概览：</b>
+              <p class="report-summary">{{ report.summary.overview }}</p>
+            </div>
+            <div v-if="report.summary.type_summary && report.summary.type_summary.length">
+              <b>异常类型分布：</b>
+              <ul>
+                <li v-for="(item, idx) in report.summary.type_summary" :key="idx">
+                  {{ item.type }}：{{ item.desc }}
+                </li>
+              </ul>
+            </div>
+            <div v-if="report.summary.key_points && report.summary.key_points.length">
+              <b>重点关注：</b>
+              <ul>
+                <li v-for="(point, idx) in report.summary.key_points" :key="idx">{{ point }}</li>
+              </ul>
+            </div>
+            <div v-if="report.summary.suggestions && report.summary.suggestions.length">
+              <b>建议：</b>
+              <ul>
+                <li v-for="(sug, idx) in report.summary.suggestions" :key="idx">{{ sug }}</li>
+              </ul>
+            </div>
+          </div>
+        </template>
+        <template v-else>
         <p class="report-summary">{{ report.summary }}</p>
+        </template>
+        <!-- <pre>{{ report }}</pre> -->
 
         <h3 class="report-section-title">告警总数统计：</h3>
         <el-row :gutter="20">
@@ -103,37 +134,34 @@ onMounted(() => {
 });
 
 const fetchReport = async () => {
+  console.log('fetchReport 被调用');
   if (!reportFilterForm.date) {
     ElMessage.warning('请选择一个日期！');
     return;
   }
   loading.value = true;
   try {
-    // 假设后端日报接口为 /api/reports/daily/
-    const response = await api.get(`/reports/daily/${reportFilterForm.date}/`);
-    if (response.data) {
-      Object.assign(report, response.data); // 赋值报告数据
-      report.date = reportFilterForm.date; // 确保日期显示正确
-      // 等待DOM更新，然后初始化图表
+    const response = await api.get(`/api/data-analysis/reports/daily/${reportFilterForm.date}/`);
+    console.log('完整response', response);
+    const data = response && response.data ? response.data : response;
+    console.log('日报数据', data);
+    let parsed = data;
+    // 自动解析 content 字段为结构化对象
+    if (typeof data.content === 'string') {
+      try {
+        parsed = JSON.parse(data.content);
+        if (!parsed.date && data.date) parsed.date = data.date;
+      } catch (e) {
+        parsed = data;
+      }
+    }
+    Object.assign(report, parsed);
+    report.date = reportFilterForm.date;
       await nextTick();
       initCharts();
-    } else {
-      // 清空报告数据
-      Object.assign(report, {
-        date: reportFilterForm.date,
-        summary: '',
-        totalAlerts: 0,
-        resolvedAlerts: 0,
-        pendingAlerts: 0,
-        alertTypeDistribution: [],
-        alertTrend: [],
-        keyEvents: [],
-      });
-    }
   } catch (error) {
+    console.error('fetchReport error', error);
     ElMessage.error('获取日报失败！');
-    console.error('Fetch report error:', error);
-    // 清空报告数据
     Object.assign(report, {
         date: reportFilterForm.date,
         summary: '',
