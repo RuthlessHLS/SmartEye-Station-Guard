@@ -737,8 +737,8 @@ const pollWebRTCStatus = (camId, timeout = 10000, interval = 500) => {
       }
 
       try {
-        // 【最终修复】直接使用 api.ai.getStatus
-        const response = await api.ai.getStatus(camId);
+        // 【最终修复】直接使用 api.ai.getWebRTCStatus
+        const response = await api.ai.getWebRTCStatus();
         // 【最终修复】修正WebRTC状态的判断条件
         // 只要frame_buffers中存在当前camera_id，就说明后端已准备好
         if (response && response.frame_buffers && response.frame_buffers[camId]) {
@@ -965,8 +965,8 @@ const fetchAISettings = async () => {
 
   try {
     console.log(`[AI设置] 正在为摄像头 ${cameraId.value} 获取设置`);
-    // 【最终修复】直接使用 api.ai.getStatus
-    const response = await api.ai.getStatus(cameraId.value);
+    // 【最终修复】使用新的 getAISettings 方法
+    const response = await api.ai.getAISettings(cameraId.value);
 
     if (response?.settings) {
       // 将后端返回的设置直接更新到本地状态，因为键名现在已匹配
