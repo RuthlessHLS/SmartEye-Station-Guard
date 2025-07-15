@@ -12,6 +12,7 @@ from typing import Dict, Optional, List, Any
 from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
 from aiortc.contrib.media import MediaPlayer, MediaRelay, MediaStreamTrack
 from av import VideoFrame
+from fractions import Fraction # 导入Fraction
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +79,7 @@ class FrameTransformer(VideoStreamTrack):
             blank_frame = np.zeros((480, 640, 3), dtype=np.uint8)
             video_frame = VideoFrame.from_ndarray(blank_frame, format="bgr24")
             video_frame.pts = self.pts
-            video_frame.time_base = 1 / 90000
+            video_frame.time_base = Fraction(1, 90000)
             return video_frame
         
         # 确保我们有帧可以发送
@@ -99,17 +100,22 @@ class FrameTransformer(VideoStreamTrack):
         
         # 将OpenCV BGR格式转换为WebRTC可用的格式
         try:
+            # 转换并处理帧
             video_frame = VideoFrame.from_ndarray(self.last_frame, format="bgr24")
-            video_frame.pts = self.pts
-            video_frame.time_base = 1 / 90000
+
+            # 【修复】使用Fraction来设置时间基，避免浮点数转换错误
+            video_frame.pts = int(time.time() * 90000)
+            video_frame.time_base = Fraction(1, 90000)
+
+            self.frame_count += 1 # 确保frame_count在成功处理时增加
             return video_frame
+
         except Exception as e:
-            logger.error(f"摄像头 {self.camera_id} 转换帧失败: {str(e)}")
-            # 出错时返回黑色帧
-            blank_frame = np.zeros((480, 640, 3), dtype=np.uint8)
-            video_frame = VideoFrame.from_ndarray(blank_frame, format="bgr24")
-            video_frame.pts = self.pts
-            video_frame.time_base = 1 / 90000
+            logger.error(f"摄像头 {self.camera_id} 转换帧失败: {e}")
+            # 即使失败，也创建一个空的哑帧以避免卡死
+            video_frame = VideoFrame.from_ndarray(np.zeros((480, 640, 3), dtype=np.uint8), format="bgr24") # 使用黑色帧作为哑帧
+            video_frame.pts = int(time.time() * 90000)
+            video_frame.time_base = Fraction(1, 90000)
             return video_frame
     
     def stop(self):
