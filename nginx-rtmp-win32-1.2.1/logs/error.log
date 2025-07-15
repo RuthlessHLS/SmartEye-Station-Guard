@@ -4126,3 +4126,25 @@
 2025/07/15 18:09:33 [info] 28808#29504: *84 WSARecv() failed (10054: An existing connection was forcibly closed by the remote host), client: 127.0.0.1, server: 0.0.0.0:1935
 2025/07/15 18:09:33 [info] 28808#29504: *84 disconnect, client: 127.0.0.1, server: 0.0.0.0:1935
 2025/07/15 18:09:33 [info] 28808#29504: *84 deleteStream, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/15 18:11:00 [info] 28808#29504: *85 deleteStream, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/15 18:11:00 [info] 28808#29504: *85 WSASend() failed (10054: An existing connection was forcibly closed by the remote host), client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/15 18:11:00 [info] 28808#29504: *85 WSARecv() failed (10054: An existing connection was forcibly closed by the remote host), client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/15 18:11:00 [info] 28808#29504: *85 disconnect, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/15 18:11:00 [info] 28808#29504: *85 deleteStream, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/15 18:15:08 [info] 28808#29504: *86 client connected '127.0.0.1'
+2025/07/15 18:15:08 [info] 28808#29504: *86 connect: app='live' args='' flashver='LNX 9,0,124,2' swf_url='' tc_url='rtmp://localhost:1935/live' page_url='' acodecs=4071 vcodecs=252 object_encoding=0, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/15 18:15:08 [info] 28808#29504: *86 createStream, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/15 18:15:08 [info] 28808#29504: *86 play: name='test' args='' start=-2000 duration=0 reset=0 silent=0, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/15 18:15:09 [info] 28808#29504: *87 client connected '127.0.0.1'
+2025/07/15 18:15:09 [info] 28808#29504: *87 connect: app='live' args='' flashver='LNX 9,0,124,2' swf_url='' tc_url='rtmp://localhost:1935/live' page_url='' acodecs=4071 vcodecs=252 object_encoding=0, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/15 18:15:09 [info] 28808#29504: *87 createStream, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/15 18:15:09 [info] 28808#29504: *87 play: name='test' args='' start=-2000 duration=0 reset=0 silent=0, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/15 18:15:11 [info] 28808#29504: *86 deleteStream, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/15 18:15:11 [info] 28808#29504: *86 WSARecv() failed (10054: An existing connection was forcibly closed by the remote host), client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/15 18:15:11 [info] 28808#29504: *86 disconnect, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/15 18:15:11 [info] 28808#29504: *86 deleteStream, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/15 18:21:22 [info] 28808#29504: *87 deleteStream, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/15 18:21:22 [info] 28808#29504: *87 WSASend() failed (10054: An existing connection was forcibly closed by the remote host), client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/15 18:21:22 [info] 28808#29504: *87 WSARecv() failed (10054: An existing connection was forcibly closed by the remote host), client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/15 18:21:22 [info] 28808#29504: *87 disconnect, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/15 18:21:22 [info] 28808#29504: *87 deleteStream, client: 127.0.0.1, server: 0.0.0.0:1935
