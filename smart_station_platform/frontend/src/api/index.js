@@ -4,8 +4,11 @@ import router from '../router';
 // 后端API服务实例
 const backendService = axios.create({
   baseURL: import.meta.env.VITE_APP_API_BASE_URL || 'http://127.0.0.1:8000',
-  timeout: 10000,
+
+  timeout: 30000, // 这里改成30000，表示30秒
+
   withCredentials: true, // 允许跨域请求携带凭证
+
 });
 
 // AI服务实例
@@ -14,6 +17,7 @@ const aiService = axios.create({
   timeout: 120000,  // 增加超时时间到120秒
   withCredentials: false, // AI服务不需要携带凭证
 });
+
 
 // 请求重试配置
 const retryConfig = {
@@ -61,7 +65,7 @@ aiService.interceptors.request.use(
 backendService.interceptors.response.use(
   response => {
     // 对于登录、刷新令牌和验证码请求，直接返回响应
-    if (response.config.url.includes('/login/') || 
+    if (response.config.url.includes('/login/') ||
         response.config.url.includes('/token/refresh/') ||
         response.config.url.includes('/captcha/generate/')
     ) {
@@ -71,7 +75,7 @@ backendService.interceptors.response.use(
   },
   async error => {
     const originalRequest = error.config;
-    
+
     if (!error.response) {
       console.error('网络错误:', error.message);
       error.message = '网络连接错误，请检查网络后重试';
@@ -86,14 +90,14 @@ backendService.interceptors.response.use(
         if (refreshToken) {
           // 临时移除拦截器，避免无限递归
           const response = await axios.post(
-            (import.meta.env.VITE_APP_API_BASE_URL || 'http://127.0.0.1:8000') + '/api/users/token/refresh/', 
+            (import.meta.env.VITE_APP_API_BASE_URL || 'http://127.0.0.1:8000') + '/api/users/token/refresh/',
             { refresh: refreshToken },
             {
               headers: { 'Content-Type': 'application/json' },
               withCredentials: true
             }
           );
-          
+
           // 检查响应数据结构
           if (response && response.data && response.data.access) {
             // 更新本地存储的token
@@ -123,8 +127,8 @@ backendService.interceptors.response.use(
     if (originalRequest.url.includes('/captcha/') || originalRequest.url.includes('/login/')) {
       console.error('验证码/登录错误:', error.response.data);
       if (error.response.data?.captcha) {
-        error.message = Array.isArray(error.response.data.captcha) 
-          ? error.response.data.captcha[0] 
+        error.message = Array.isArray(error.response.data.captcha)
+          ? error.response.data.captcha[0]
           : error.response.data.captcha;
       } else if (error.response.status === 400) {
         if (error.response.data?.non_field_errors) {
@@ -184,7 +188,7 @@ aiService.interceptors.response.use(
 // 工具函数：带重试的请求
 const requestWithRetry = async (service, config) => {
   let retries = retryConfig.retries;
-  
+
   while (retries > 0) {
     try {
       return await service(config);
@@ -193,7 +197,7 @@ const requestWithRetry = async (service, config) => {
       if (retries === 0 || !retryConfig.retryCondition(error)) {
         throw error;
       }
-      await new Promise(resolve => 
+      await new Promise(resolve =>
         setTimeout(resolve, retryConfig.retryDelay(retryConfig.retries - retries))
       );
     }
@@ -202,9 +206,14 @@ const requestWithRetry = async (service, config) => {
 
 // 默认导出API服务对象
 const api = {
+
+  get: (...args) => backendService.get(...args),
+  post: (...args) => backendService.post(...args),
+  patch: (...args) => backendService.patch(...args),
+  delete: (...args) => backendService.delete(...args),
   backendService,  // 导出backendService实例
   aiService,       // 导出aiService实例
-  
+
   // 用户认证相关接口
   auth: {
     login: (data) => backendService.post('/api/users/login/', data),
@@ -216,6 +225,7 @@ const api = {
     getCaptcha: () => backendService.get('/api/users/captcha/generate/'),
     getUsers: (url) => backendService.get(url),
   },
+
   // 告警相关接口
   alerts: {
     getList: (params) => backendService.get('/api/alerts/', { params }),

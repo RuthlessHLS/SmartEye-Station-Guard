@@ -13,18 +13,18 @@
             <div id="distanceDistributionChart" class="chart-small"></div>
           </el-card>
         </el-col>
-
         <el-col :span="12" class="grid-col">
           <el-card class="grid-card map-card">
             <template #header>
-              <span>实时交通热力图与轨迹回放</span>
-              <el-input v-model="vehicleId" placeholder="输入车辆ID" style="width: 150px; margin-left: 20px;"></el-input>
-              <el-button @click="playTrajectory" type="primary" style="margin-left: 10px;">回放轨迹</el-button>
+              <span>我的图片展示</span>
             </template>
-            <div id="mapbox-container"></div>
+            <img
+              :src="myImage"
+              alt="我的图片"
+              style="width: 100%; height: 100%; object-fit: contain; min-height: 400px;"
+            />
           </el-card>
         </el-col>
-
         <el-col :span="6" class="grid-col">
           <el-card class="grid-card">
             <template #header><span>客流与天气关联</span></template>
@@ -46,7 +46,7 @@ import { ElMessage } from 'element-plus';
 import api from '@/api'; // 导入API请求服务
 import * as echarts from 'echarts'; // 导入 ECharts
 import mapboxgl from 'mapbox-gl'; // 导入 Mapbox GL JS
-import 'mapbox-gl/dist/mapbox-gl.css'; // 导入Mapbox GL CSS
+import myImage from '@/assets/IMG_20250711_161942.jpg';
 
 // Mapbox token，请替换为你自己的
 mapboxgl.accessToken = 'YOUR_MAPBOX_ACCESS_TOKEN'; // <<<< IMPORTANT: 替换为你的 Mapbox Access Token
@@ -66,9 +66,9 @@ const mapData = reactive({
 
 onMounted(async () => {
   await nextTick(); // 确保DOM渲染完成
-  initMap();
   initCharts();
   fetchDashboardData();
+  initIcelandSVGChart();
 });
 
 onUnmounted(() => {
@@ -215,9 +215,11 @@ const updateCharts = () => {
       series: [
         {
           type: 'gauge',
+          radius: '90%', // 调整半径
+          center: ['50%', '60%'], // 向下偏移，避免与标题重叠
           axisLine: {
             lineStyle: {
-              width: 10,
+              width: 12,
               color: [
                 [0.3, '#67e0e3'],
                 [0.7, '#37a2da'],
@@ -227,35 +229,41 @@ const updateCharts = () => {
           },
           pointer: {
             itemStyle: {
-              color: 'inherit'
-            }
+              color: 'auto'
+            },
+            width: 5, // 指针宽度
+            length: '60%' // 指针长度
           },
           axisTick: {
-            distance: -30,
-            length: 8,
+            distance: -20,
+            length: 6,
+            lineStyle: {
+              color: '#fff',
+              width: 1
+            }
+          },
+          splitLine: {
+            distance: -24,
+            length: 18,
             lineStyle: {
               color: '#fff',
               width: 2
             }
           },
-          splitLine: {
-            distance: -30,
-            length: 30,
-            lineStyle: {
-              color: '#fff',
-              width: 4
-            }
-          },
           axisLabel: {
-            color: 'inherit',
-            distance: 40,
+            color: '#888',
+            distance: 18,
             fontSize: 12
           },
           detail: {
             valueAnimation: true,
             formatter: '{value} km/h',
-            color: 'inherit',
-            fontSize: 20
+            color: '#2366b1',
+            fontSize: 22,
+            offsetCenter: [0, '60%'] // 数值显示在仪表盘下方
+          },
+          title: {
+            show: false // 不显示标题，避免重叠
           },
           data: [{
             value: mapData.avgSpeed
@@ -379,38 +387,102 @@ const playTrajectory = async () => {
     console.error('Fetch trajectory error:', error);
   }
 };
+
+const initIcelandSVGChart = () => {
+  const chartDom = document.getElementById('iceland-svg-chart');
+  if (!chartDom) return;
+  const myChart = echarts.init(chartDom);
+
+  // 你可以把图片放到 public 目录下，然后用相对路径
+  const myImageUrl = '/my-images/IMG_20250711_161942.jpg'; // 例如放到 public/my-images/ 下
+
+  fetch('https://echarts.apache.org/examples/data/asset/geo/Map_of_Iceland.svg')
+    .then(res => res.text())
+    .then(svg => {
+      echarts.registerMap('iceland_svg', { svg: svg });
+
+      const option = {
+        tooltip: {},
+        graphic: {
+          type: 'image',
+          left: 'center',
+          top: 'center',
+          style: {
+            image: myImageUrl,
+            width: 800, // 你可以自定义
+            height: 600
+          }
+        },
+        geo: {
+          tooltip: { show: true },
+          map: 'iceland_svg',
+          roam: true
+        },
+        series: {
+          type: 'effectScatter',
+          coordinateSystem: 'geo',
+          geoIndex: 0,
+          symbolSize: function (params) {
+            return (params[2] / 100) * 15 + 5;
+          },
+          itemStyle: { color: '#b02a02' },
+          encode: { tooltip: 2 },
+          data: [
+            [488.2358421078053, 459.70913833075736, 100],
+            [770.3415644319939, 757.9672194986475, 30],
+            [1180.0329284196291, 743.6141808346214, 80],
+            [894.03790632245, 1188.1985153835008, 61],
+            [1372.98925630313, 477.3839988649537, 70],
+            [1378.62251255796, 935.6708486282843, 81]
+          ]
+        }
+      };
+
+      myChart.setOption(option);
+
+      myChart.getZr().on('click', function (params) {
+        var pixelPoint = [params.offsetX, params.offsetY];
+        var dataPoint = myChart.convertFromPixel({ geoIndex: 0 }, pixelPoint);
+        console.log(dataPoint);
+      });
+    });
+};
 </script>
 
 <style scoped>
 .data-screen-container {
   padding: 10px;
-  background-color: #0f1c30; /* 深色背景 */
-  color: #eee;
+  background-color: #fff;
+  color: #333;
   min-height: calc(100vh - 80px);
 }
 .data-screen-container h1 {
   text-align: center;
-  color: #409eff;
+  color: #2366b1;
   margin-bottom: 20px;
   font-size: 2em;
 }
 .dashboard-grid {
-  height: calc(100vh - 150px); /* 占据大部分高度 */
+  height: calc(100vh - 150px);
+}
+.el-row {
+  height: 100%;
 }
 .grid-col {
   height: 100%;
   display: flex;
   flex-direction: column;
-  gap: 10px; /* 卡片之间的间距 */
+  gap: 10px;
+}
+.grid-col .grid-card:last-child {
+  margin-bottom: 0;
 }
 .grid-card {
-  background-color: #1a2a40; /* 卡片深色背景 */
-  border: 1px solid #0f1c30;
-  border-radius: 8px;
-  color: #eee;
-  flex-grow: 1; /* 占据可用空间 */
-  height: calc(50% - 5px); /* 每列两个卡片，减去gap的一半 */
-  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+  background-color: #f7f9fa;
+  border-radius: 10px;
+  color: #333;
+  flex-grow: 1;
+  height: calc(50% - 5px);
 }
 .grid-card .card-header {
   display: flex;
@@ -418,22 +490,26 @@ const playTrajectory = async () => {
   align-items: center;
   font-size: 1.1em;
   font-weight: bold;
-  color: #66b1ff;
+  color: #2366b1;
   padding: 10px 15px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom: 1px solid #f0f0f0;
 }
 .chart-small {
   width: 100%;
-  height: calc(100% - 40px); /* 减去header高度 */
+  height: calc(100% - 40px);
   min-height: 200px;
+  background: #fff;
+  border-radius: 6px;
 }
 .map-card {
   height: 100%;
 }
-#mapbox-container {
+#iceland-svg-chart {
   width: 100%;
-  height: calc(100% - 60px); /* 减去header高度 */
+  height: 100%;
   min-height: 400px;
-  background-color: #222;
+  background: #fff;
+  border-radius: 8px;
+  border: 1px solid #e0e3e8;
 }
 </style>

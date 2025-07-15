@@ -84,7 +84,7 @@ MIDDLEWARE = [
 ]
 
 # 添加 CORS 调试设置
-CORS_REPLACE_HTTPS_REFERER = True
+
 
 # Application definition
 

@@ -4,6 +4,7 @@ from rest_framework import serializers
 from .models import Alert
 from camera_management.models import Camera # 导入 Camera 模型
 from django.utils import timezone  # 添加导入
+from .models import AlertLog
 
 # Alert 列表和详情的序列化器
 class AlertSerializer(serializers.ModelSerializer):
@@ -120,3 +121,9 @@ class AlertDetailSerializer(serializers.ModelSerializer):
         if obj.handler:
             return f"{obj.handler.first_name} {obj.handler.last_name}".strip() or obj.handler.username
         return None
+
+class AlertLogSerializer(serializers.ModelSerializer):
+    user = serializers.StringRelatedField()
+    class Meta:
+        model = AlertLog
+        fields = ['id', 'user', 'action', 'detail', 'created_at']

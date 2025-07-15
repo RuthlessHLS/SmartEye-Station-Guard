@@ -52,9 +52,8 @@
               </el-tag>
             </div>
           </div>
-          </div>
-        </el-header>
-
+        </div>
+      </el-header>
       <el-main>
         <el-row :gutter="20">
           <el-col :span="16">
@@ -137,7 +136,6 @@
               <template #header>
                 <span>🎯 AI分析设置</span>
               </template>
-
               <div class="analysis-settings">
                 <el-form label-width="100px">
                   <el-form-item label="人脸识别">
@@ -194,6 +192,7 @@
               </div>
             </el-card>
 
+            <!-- 实时检测结果 -->
             <el-card class="results-panel" shadow="never">
               <template #header>
                 <div class="card-header">
@@ -201,7 +200,6 @@
                   <el-badge :value="detectionResults?.length || 0" class="badge" />
                 </div>
               </template>
-
               <el-scrollbar height="300px">
                 <div class="detection-list">
                   <div
@@ -233,7 +231,35 @@
                 </div>
               </el-scrollbar>
             </el-card>
-
+            <!-- 性能监控 -->
+            <el-card class="performance-panel" shadow="never" v-show="aiAnalysisEnabled">
+              <template #header>
+                <span>📊 性能监控</span>
+              </template>
+              <div class="performance-stats">
+                <div class="stat-item">
+                  <span class="stat-label">检测FPS</span>
+                  <span class="stat-value">{{ performanceStats.fps }}</span>
+                </div>
+                <div class="stat-item">
+                  <span class="stat-label">平均延迟</span>
+                  <span class="stat-value">{{ performanceStats.avgProcessTime }}ms</span>
+                </div>
+                <div class="stat-item">
+                  <span class="stat-label">并发跳过</span>
+                  <span class="stat-value">{{ performanceStats.skippedFrames }}</span>
+                </div>
+                <div class="stat-item">
+                  <span class="stat-label">无变化跳过</span>
+                  <span class="stat-value">{{ performanceStats.motionSkippedFrames }}</span>
+                </div>
+                <div class="stat-item" v-if="aiSettings.soundDetection">
+                  <span class="stat-label">音量级别</span>
+                  <span class="stat-value">{{ performanceStats.audioLevel }}%</span>
+                </div>
+              </div>
+            </el-card>
+            <!-- 实时告警 -->
             <el-card class="alerts-panel" shadow="never">
               <template #header>
                 <div class="card-header">
@@ -458,7 +484,7 @@ const connectWebSocket = () => {
   const backendHost = import.meta.env.VITE_APP_BACKEND_HOST || '127.0.0.1';
   const backendPort = import.meta.env.VITE_APP_BACKEND_PORT || 8000;
   const currentCameraId = cameraId.value || 'test';
-  
+
   // 简化并修正URL构建
   const wsFullUrl = `ws://${backendHost}:${backendPort}/ws/alerts/${currentCameraId}/`;
 
@@ -673,11 +699,11 @@ const startStream = async () => {
     if (!isReady) {
       throw new Error('后端服务超时，未能准备好WebRTC连接。');
     }
-    
+
     // 4. 连接WebRTC
     ElMessage.success(`[3/3] 后端已就绪，正在建立WebRTC连接...`);
     await webRTC.connect(uniqueCameraId, videoElement.value);
-    
+
     ElMessage.success('WebRTC连接成功，正在接收AI视频流！');
 
     // 5. 连接WebSocket以接收检测结果
@@ -1035,43 +1061,7 @@ const logVideoElementInfo = () => {
   console.log('[视频检查] 当前视频容器尺寸:', videoRef.value ? `${videoRef.value.clientWidth} x ${videoRef.value.clientHeight}` : '无法获取容器尺寸');
 };
 
-const getStreamPlaceholder = () => {
-  // 这个函数现在不再需要，但保留以防万一
-  const placeholders = {
-    rtsp: 'rtsp://username:password@ip:port/stream',
-    rtmp: 'rtmp://localhost:1935/live/stream_name',
-    hls: 'http://localhost:8080/hls/stream.m3u8',
-    flv: 'http://localhost:8080/live/stream.flv',
-    webrtc: 'webrtc://localhost/live/stream',
-    mp4: 'http://localhost:8080/video.mp4',
-  };
-  return placeholders[videoSource.value] || '请输入流地址';
-};
 
-const handleVideoSourceChange = () => {
-  // 这个函数现在不再需要，因为源是固定的
-  // rawInputStreamUrl.value = '';
-  // playbackUrl.value = '';
-  // if (videoSource.value === 'local') {
-  //   getVideoDevices();
-  // }
-};
-
-const getVideoDevices = async () => {
-  // 这个函数现在不再需要
-  // try {
-  //   // 请求摄像头权限
-  //   const devices = await navigator.mediaDevices.enumerateDevices();
-  //   videoDevices.value = devices.filter(device => device.kind === 'videoinput');
-  //
-  //   if (videoDevices.value.length > 0 && !selectedDeviceId.value) {
-  //     selectedDeviceId.value = videoDevices.value[0].deviceId;
-  //   }
-  // } catch (error) {
-  //   console.error('获取视频设备失败:', error);
-  //   ElMessage.error('无法获取摄像头列表，请检查浏览器权限。');
-  // }
-};
 
 const getVideoType = () => {
   if (playbackUrl.value.includes('.m3u8')) return 'hls';
@@ -1547,7 +1537,6 @@ onMounted(() => {
   height: 100%;
   padding: 20px;
 }
-
 .header-content {
   display: flex;
   justify-content: space-between;
@@ -1566,7 +1555,6 @@ onMounted(() => {
   align-items: center;
 }
 
-/* 修改视频容器样式 */
 .video-container {
   position: relative;
   width: 100%;
@@ -1574,6 +1562,7 @@ onMounted(() => {
   background-color: #000;
   border-radius: 4px;
   overflow: hidden;
+  box-shadow: 0 1px 8px #0002;
 }
 
 .video-player-wrapper {
@@ -1628,7 +1617,6 @@ onMounted(() => {
   left: 0 !important;
   top: 0 !important;
 }
-
 .overlay-canvas {
   position: absolute;
   top: 0;
@@ -1638,7 +1626,6 @@ onMounted(() => {
   pointer-events: none;
   z-index: 10;
 }
-
 .camera-placeholder {
   position: absolute;
   top: 50%;
@@ -1653,7 +1640,6 @@ onMounted(() => {
   align-items: center;
   gap: 20px;
 }
-
 .placeholder-icon {
   font-size: 48px;
 }
@@ -1729,6 +1715,31 @@ onMounted(() => {
 
 .control-panel, .results-panel, .alerts-panel {
   margin-bottom: 20px;
+  color: #a0a4ad;
+}
+.device-select {
+  margin-top: 20px;
+  width: 220px;
+}
+.control-panel,
+.results-panel,
+.performance-panel,
+.alerts-panel {
+  margin-bottom: 18px;
+  border-radius: 10px;
+  box-shadow: 0 1px 6px #0001;
+  background: #fafbfc;
+}
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 2px;
+  border-bottom: 1px solid #f0f0f0;
+  margin-bottom: 6px;
+}
+.analysis-settings {
+  padding: 10px 0 0 0;
 }
 
 .setting-description {

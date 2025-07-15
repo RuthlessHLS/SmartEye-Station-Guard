@@ -61,3 +61,13 @@ class Alert(models.Model):
 
     def __str__(self):
         return f"{self.event_type} - {self.camera.name if self.camera else '未知摄像头'} - {self.timestamp.strftime('%Y-%m-%d %H:%M:%S')}"
+
+class AlertLog(models.Model):
+    alert = models.ForeignKey('Alert', on_delete=models.CASCADE, related_name='logs')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
+    action = models.CharField(max_length=100)  # 如“处理告警”“状态变更”
+    detail = models.TextField(blank=True, null=True)  # 备注或详细内容
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
