@@ -170,8 +170,39 @@ class AIServiceManager:
             self._detectors["behavior"] = BehaviorDetector()
 
     async def initialize_detectors(self):
-        """初始化所有AI检测器模型。"""
-        print("--- 正在初始化所有检测器 ---")
+        """根据配置异步初始化所有AI检测器。"""
+        logger.info("正在初始化AI检测器...")
+        # 预定义"智慧车站"场景所需的核心检测类别
+        STATION_SCENE_CLASSES = [
+            "person", "bicycle", "car", "motorcycle", "bus", "truck",
+            "traffic light", "fire hydrant", "stop sign", "parking meter",
+            "bench", "backpack", "umbrella", "handbag", "suitcase"
+        ]
+        
+        # --- 通用目标检测器 ---
+        try:
+            # 确保我们有完整的类别列表来映射ID
+            coco_names_path = os.path.join(self.config.ASSET_BASE_PATH, "models", "coco.names")
+            if not os.path.exists(coco_names_path):
+                logger.error(f"FATAL: COCO类别文件不存在于: {coco_names_path}")
+                # 在这种情况下，我们无法继续，因为类别ID会不匹配
+                raise FileNotFoundError(f"COCO names file not found at {coco_names_path}")
+            
+            with open(coco_names_path, 'r') as f:
+                full_coco_classes = [line.strip() for line in f.readlines()]
+
+            self._detectors["object"] = ObjectDetector(
+                model_weights_path=os.path.join(self.config.ASSET_BASE_PATH, "models", "torch", "yolov8n.pt"),
+                # 【优化】只传入我们关心的类别白名单
+                allowed_classes=STATION_SCENE_CLASSES
+            )
+            logger.info(f"通用目标检测器初始化成功，将只检测以下类别: {STATION_SCENE_CLASSES}")
+        except Exception as e:
+            logger.critical(f"通用目标检测器初始化失败: {e}", exc_info=True)
+            # 在生产环境中，这可能是一个致命错误
+            self._detectors["object"] = None
+
+        # --- 人脸识别器 ---
         try:
             model_weights_path = os.path.join(self.config.ASSET_BASE_PATH, "models", "torch", "yolov8n.pt")
             class_names_path = os.path.join(self.config.ASSET_BASE_PATH, "models", "coco.names")
@@ -1097,7 +1128,11 @@ class AIServiceManager:
                 return []
                 
             try:
-                face_results = self._detectors["face"].detect_and_recognize(frame)
+                # 【修复与优化】根据视频流分析场景，明确禁用活体检测以提升性能
+                face_results = self._detectors["face"].detect_and_recognize(
+                    frame, 
+                    enable_liveness=enable_liveness_detection # 使用从函数参数传入的开关
+                )
                 processed_results = []
                 # 【重要修复】在使用前获取当前摄像头的AI设置
                 ai_settings = self.get_ai_settings(camera_id)

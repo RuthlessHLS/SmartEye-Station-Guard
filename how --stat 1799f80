@@ -1,0 +1,15 @@
+[33mcommit 1799f80c2be6d56ce07f9fe90c234d9ec643f909[m
+Author: xhy2539 <1121799294@qq.com>
+Date:   Wed Jul 16 01:35:14 2025 +0800
+
+    我成了我成了！！！！
+
+ smart_station_platform/ai_service/app.py           | 420 [32m++++++++[m[31m----[m
+ .../assets/models/class_labels_indices.csv         | 528 [32m++++++++++++++[m
+ .../ai_service/core/acoustic_detection.py          | 276 [32m+++[m[31m-----[m
+ .../ai_service/core/behavior_detection.py          | 503 [32m++++++++[m[31m------[m
+ smart_station_platform/backend/alerts/consumers.py |  14 [32m+[m[31m-[m
+ .../backend/smart_station/asgi.py                  |  16 [32m+[m[31m-[m
+ smart_station_platform/frontend/.env               |   6 [32m+[m
+ .../frontend/src/views/AIVideoMonitor.vue          | 762 [32m+++++++++++[m[31m----------[m
+ 8 files changed, 1625 insertions(+), 900 deletions(-)
