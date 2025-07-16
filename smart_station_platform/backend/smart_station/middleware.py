@@ -59,12 +59,7 @@ class InternalAPIMiddleware:
             # 从请求头中获取API密钥
             provided_key = request.headers.get('X-Internal-API-Key')
             
-            # 【调试代码】打印出期望的密钥和收到的密钥
-            print("--- INTERNAL API CALL DEBUG ---")
-            print(f"Request Path: {request.path}")
-            print(f"Expected Key: {self.internal_api_key}")
-            print(f"Provided Key: {provided_key}")
-            print("-----------------------------")
+
 
             if not provided_key or provided_key != self.internal_api_key:
                 return JsonResponse({'error': 'Unauthorized: Invalid or missing internal API key.'}, status=401)

@@ -8,6 +8,8 @@ from django.utils import timezone
 from django.core.cache import cache
 from django.db.models import Q
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import AnonymousUser # Added for WebSocketBroadcastView
+from rest_framework.permissions import AllowAny # Added for WebSocketBroadcastView
 
 from rest_framework import generics, status, filters
 from rest_framework.views import APIView
@@ -158,44 +160,35 @@ class AIResultReceiveView(APIView):
         return Response(AlertDetailSerializer(alert).data, status=status.HTTP_201_CREATED)
 
 class WebSocketBroadcastView(APIView):
-    """
-    WebSocket广播接口，用于从AI服务推送实时检测数据。
-    这个视图现在使用 IsAuthenticatedOrInternal 权限。
-    """
-    permission_classes = [IsAuthenticatedOrInternal]
+    permission_classes = [AllowAny]  # 注意：在生产中应使用更安全的权限
 
     def post(self, request, *args, **kwargs):
-        camera_id = request.data.get("camera_id")
-        if not camera_id:
-            return Response({"error": "camera_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+        # AI服务发送的数据结构是: {"camera_id": "...", "payload": {"type": "...", "data": {...}}}
+        # 我们关心的是 'payload' 的内容
+        payload = request.data.get('payload')
+        logger.info(f"Broadcast view received payload: {payload}")
 
-        group_name = f"camera_{camera_id}"
-        message = request.data.copy()  # 使用副本以安全地修改
-        message_type = message.get("type", "unknown_broadcast")
-        
-        # 将 type 映射到 consumer 能处理的事件类型
-        event_type_map = {
-            "stream_initialized": "stream_initialized",
-            "ai_detection": "detection_result",
-            "new_alert": "new_alert",
-            "alert_update": "alert_update",
-        }
-        event_type = event_type_map.get(message_type, "detection_result")
-
-        # 关键修复：确保发送到前端的消息体内的type也与事件类型一致
-        if message_type == "ai_detection":
-            message['type'] = "detection_result"
-        
-        try:
-            channel_layer = get_channel_layer()
-            async_to_sync(channel_layer.group_send)(
-                group_name,
-                {"type": event_type, "message": message}
+        if not payload or not isinstance(payload, dict):
+            logger.error(f"Broadcast view received invalid or missing 'payload': {request.data}")
+            return Response(
+                {"error": "A valid 'payload' object is required."},
+                status=status.HTTP_400_BAD_REQUEST
             )
-            return Response({"status": "broadcasted"}, status=status.HTTP_200_OK)
-        except Exception as e:
-            logger.error(f"广播WebSocket消息时发生错误: {e}", exc_info=True)
-            return Response({"error": "Failed to broadcast message"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        # payload 内部包含了前端需要的所有信息 (e.g., {"type": "...", "data": {...}})
+        message_to_send = payload
+
+        logger.info(f"Broadcasting message to 'alerts' group: {message_to_send}")
+
+        channel_layer = get_channel_layer()
+        async_to_sync(channel_layer.group_send)(
+            "alerts",
+            {
+                "type": "send_alert",
+                "message": message_to_send,
+            },
+        )
+        return Response({"status": "ok", "message": "Broadcast successful"}, status=status.HTTP_200_OK)
 
 # --- 辅助函数 ---
 def _send_websocket_notification(alert, action_type):

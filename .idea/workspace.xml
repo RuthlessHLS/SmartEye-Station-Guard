@@ -5,10 +5,15 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="5debb453-5ab6-428e-8ec1-9b25cd367293" name="更改" comment="我成了我成了！！！！">
+      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/nginx-rtmp-win32-1.2.1/logs/access.log" beforeDir="false" afterPath="$PROJECT_DIR$/nginx-rtmp-win32-1.2.1/logs/access.log" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/nginx-rtmp-win32-1.2.1/logs/error.log" beforeDir="false" afterPath="$PROJECT_DIR$/nginx-rtmp-win32-1.2.1/logs/error.log" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/nginx-rtmp-win32-1.2.1/logs/nginx.pid" beforeDir="false" afterPath="$PROJECT_DIR$/nginx-rtmp-win32-1.2.1/logs/nginx.pid" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/nginx-rtmp-win32-1.2.1/temp/hls/test-303.ts" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/nginx-rtmp-win32-1.2.1/temp/hls/test-304.ts" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/smart_station_platform/ai_service/app.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/ai_service/app.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/smart_station_platform/backend/alerts/views.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/backend/alerts/views.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/smart_station_platform/backend/smart_station/middleware.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/backend/smart_station/middleware.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -188,6 +193,7 @@
       <workItem from="1752634269757" duration="38000" />
       <workItem from="1752634318189" duration="634000" />
       <workItem from="1752635140509" duration="406000" />
+      <workItem from="1752637365124" duration="3730000" />
     </task>
     <task id="LOCAL-00001" summary="ai">
       <option name="closed" value="true" />
@@ -378,9 +384,9 @@
     <option name="LAST_COMMIT_MESSAGE" value="我成了我成了！！！！" />
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
-    <SUITE FILE_PATH="coverage/SmartEye_Station_Guard$Backend__Daphne_.coverage" NAME="Backend (Daphne) 覆盖结果" MODIFIED="1752636422902" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="G:\Web\SmartEye-Station-Guard\smart_station_platform\backend" />
+    <SUITE FILE_PATH="coverage/SmartEye_Station_Guard$Backend__Daphne_.coverage" NAME="Backend (Daphne) 覆盖结果" MODIFIED="1752644071057" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="G:\Web\SmartEye-Station-Guard\smart_station_platform\backend" />
     <SUITE FILE_PATH="coverage/SmartEye_Station_Guard_iml$start_nginx.coverage" NAME="start_nginx 覆盖结果" MODIFIED="1752496311272" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
-    <SUITE FILE_PATH="coverage/SmartEye_Station_Guard$AI_Service__FastAPI_.coverage" NAME="AI Service (FastAPI) 覆盖结果" MODIFIED="1752636847961" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="G:\Web\SmartEye-Station-Guard\smart_station_platform\ai_service" />
+    <SUITE FILE_PATH="coverage/SmartEye_Station_Guard$AI_Service__FastAPI_.coverage" NAME="AI Service (FastAPI) 覆盖结果" MODIFIED="1752644067783" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="G:\Web\SmartEye-Station-Guard\smart_station_platform\ai_service" />
     <SUITE FILE_PATH="coverage/SmartEye_Station_Guard_iml$rtmp_to_flv.coverage" NAME="rtmp_to_flv 覆盖结果" MODIFIED="1752495062669" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/SmartEye_Station_Guard_iml$acoustic_detection.coverage" NAME="acoustic_detection 覆盖结果" MODIFIED="1752590029538" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/smart_station_platform/ai_service/core" />
     <SUITE FILE_PATH="coverage/SmartEye_Station_Guard_iml$nginx.coverage" NAME="启动nginx 覆盖结果" MODIFIED="1752592934257" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="G:\Web\SmartEye-Station-Guard" />
@@ -391,6 +397,6 @@
     <SUITE FILE_PATH="coverage/SmartEye_Station_Guard_iml$test_rtmp_stream.coverage" NAME="test_rtmp_stream 覆盖结果" MODIFIED="1752311296298" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/SmartEye_Station_Guard$check_gpu.coverage" NAME="check_gpu 覆盖结果" MODIFIED="1752634426371" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/SmartEye_Station_Guard_iml$download_model.coverage" NAME="download_model 覆盖结果" MODIFIED="1752545658166" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/smart_station_platform/ai_service" />
-    <SUITE FILE_PATH="coverage/SmartEye_Station_Guard$nginx.coverage" NAME="启动nginx 覆盖结果" MODIFIED="1752636412449" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="G:\Web\SmartEye-Station-Guard" />
+    <SUITE FILE_PATH="coverage/SmartEye_Station_Guard$nginx.coverage" NAME="启动nginx 覆盖结果" MODIFIED="1752637487648" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="G:\Web\SmartEye-Station-Guard" />
   </component>
 </project>

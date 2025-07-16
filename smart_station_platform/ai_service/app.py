@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from typing import Dict, List, Optional, Any, Union, Tuple
 from threading import Lock
-
+import json
 import cv2
 import numpy as np
 import uvicorn
@@ -92,7 +92,7 @@ class AppConfig:
         # self.ASSET_BASE_PATH = os.getenv("G_DRIVE_ASSET_PATH", "/app/assets")
         self.ASSET_BASE_PATH = os.path.normpath(os.path.join(current_dir, 'assets'))
         # 【最终修复】硬编码密钥以确保与后端完全一致
-        self.INTERNAL_SERVICE_API_KEY = 'a-secure-default-key-for-dev'
+        self.   INTERNAL_SERVICE_API_KEY = 'a-secure-default-key-for-dev'
         
         self.AI_SERVICE_API_KEY = os.getenv('AI_SERVICE_API_KEY', 'smarteye-ai-service-key-2024')
         self.BACKEND_ALERT_URL = os.getenv('BACKEND_ALERT_URL', 'http://localhost:8000/api/alerts/ai-results/')
@@ -111,6 +111,10 @@ class AISettings(BaseModel):
     fire_detection: Optional[bool] = None
     sound_detection: Optional[bool] = None
     liveness_detection: Optional[bool] = None
+    # --- 新增行为检测细分选项 ---
+    fall_detection: Optional[bool] = Field(None, description="是否启用跌倒检测")
+    fighting_detection: Optional[bool] = Field(None, description="是否启用打架检测")
+    # ---
     realtime_mode: Optional[bool] = None
     face_confidence_threshold: Optional[float] = Field(None, ge=0.0, le=1.0)
     object_confidence_threshold: Optional[float] = Field(None, ge=0.0, le=1.0)
@@ -143,6 +147,7 @@ class AIServiceManager:
         default_settings = {
             "face_recognition": True, "object_detection": True, "behavior_analysis": False,
             "fire_detection": True, "sound_detection": False, "liveness_detection": True,
+            "fall_detection": False, "fighting_detection": False, # 默认关闭
             "realtime_mode": True, "face_confidence_threshold": 0.6, "object_confidence_threshold": 0.4,
         }
         return self._ai_settings.get(camera_id, default_settings.copy())
@@ -239,12 +244,17 @@ class AIServiceManager:
     ) -> Dict[str, Any]:
         """处理单帧图像，执行所有已启用的AI分析。"""
         all_detections = []
+        
+        # 为了进行行为分析，我们需要先进行目标检测
         if enable_object_detection and self._detectors.get("object"):
             # 【修复】调用正确的方法名 predict
-            all_detections.extend(self._detectors["object"].predict(frame))
+            object_results = self._detectors["object"].predict(frame)
+            all_detections.extend(object_results)
+
         if enable_fire_detection and self._detectors.get("fire"):
             # 【确认】火焰检测器的方法名是 detect，此处调用正确
             all_detections.extend(self._detectors["fire"].detect(frame))
+
         if enable_face_recognition and self._detectors.get("face"):
             # 【确认】人脸识别器的方法名是 detect_and_recognize，此处调用正确
             face_results = self._detectors["face"].detect_and_recognize(frame, enable_liveness=enable_liveness_detection)
@@ -255,9 +265,14 @@ class AIServiceManager:
                     "confidence": identity.get("confidence", 0.0), "coordinates": face.get("bbox"),
                     "details": identity,
                 })
-        # Placeholder for behavior detection
-        # if enable_behavior_detection and self._detectors.get("behavior"):
-        #     all_detections.extend(self._detectors["behavior"].detect(all_detections))
+
+        # --- 核心修改：启用并集成行为检测 ---
+        if enable_behavior_detection and self._detectors.get("behavior"):
+            # `detect_behavior` 需要原始帧和已经检测到的目标
+            behavior_results = self._detectors["behavior"].detect_behavior(frame, all_detections)
+            # 将行为分析结果添加到总结果中
+            all_detections.extend(behavior_results)
+            
         return {"detections": all_detections}
 
     async def shutdown_services(self):
@@ -485,11 +500,14 @@ async def process_video_stream_async_loop(stream: VideoStream, camera_id: str):
                 
                 last_known_detections = results.get("detections", [])
                 
+                # 在发送前记录详细的分析结果
+                logger.info(f"[AI-ANALYSIS-RESULT] Camera {camera_id}: {json.dumps(results, indent=2, ensure_ascii=False)}")
+
                 # 只有在进行新检测时才发送详细结果到WebSocket
                 await service_manager.send_detection_to_websocket(camera_id, results)
 
             # 【逻辑重构】总是在帧上绘制最新的检测框（或上一帧的框）
-            draw_detections(processed_frame, last_known_detections)
+            processed_frame = draw_detections(processed_frame, last_known_detections)
             
             # 【逻辑重构】将最终的（可能是处理过的）帧推送到 WebRTC
             webrtc_pusher.push_frame(camera_id, processed_frame)
