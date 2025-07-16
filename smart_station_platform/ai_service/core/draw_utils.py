@@ -36,8 +36,8 @@ def draw_detections(frame: np.ndarray, detections: List[Dict[str, Any]]) -> np.n
     output_frame = frame.copy()
 
     for detection in detections:
-        # 支持两种格式的检测框: 'box' 或 'bbox'
-        box = detection.get('box') or detection.get('bbox')
+        # 支持多种格式的检测框: 'box', 'bbox', 或 'coordinates'
+        box = detection.get('box') or detection.get('bbox') or detection.get('coordinates')
         if not box or len(box) != 4:
             continue
 

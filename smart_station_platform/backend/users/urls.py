@@ -29,8 +29,9 @@ router.register(r'registered-faces', RegisteredFaceViewSet, basename='registered
 
 urlpatterns = [
     # 认证相关路由
-    path('login/', UserLoginAPIView.as_view(), name='user-login'),
+    # 【修复】将更具体的internal-login路径放在前面，避免被'login/'提前匹配
     path('login/internal/', InternalLoginAPIView.as_view(), name='internal-login'),
+    path('login/', UserLoginAPIView.as_view(), name='user-login'),
     path('token/', MyTokenObtainPairView.as_view(), name='token-obtain'),
     path('token/refresh/', TokenRefreshView.as_view(), name='token-refresh'),
     

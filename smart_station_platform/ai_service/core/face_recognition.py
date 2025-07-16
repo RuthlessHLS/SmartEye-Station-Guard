@@ -22,44 +22,54 @@ class FaceRecognizer:
     """
     智能人脸识别器，负责加载、注册、识别以及提供活体检测所需的面部数据。
     """
-    def __init__(self, known_faces_dir, asset_base_path, tolerance=0.6, detection_model='hog'):
-        self.known_faces_dir = known_faces_dir
-        self.tolerance = tolerance
-        self.detection_model = detection_model
-        self.known_face_encodings = []
-        self.known_face_names = []
+    def __init__(self, asset_base_path, known_faces_dir=None):
+        """
+        初始化人脸识别器。
+        Args:
+            asset_base_path (str): 资源根目录的路径。
+            known_faces_dir (str, optional): 已知人脸特征的目录。如果为None，则从asset_base_path推断。
+        """
+        self.asset_base_path = asset_base_path
+        if known_faces_dir is None:
+            self.known_faces_dir = os.path.join(asset_base_path, 'known_faces')
+        else:
+            self.known_faces_dir = known_faces_dir
+        
+        os.makedirs(self.known_faces_dir, exist_ok=True)
+        
+        self.known_face_encodings = {}
+        self.known_face_metadata = {}
+        
+        # 活体检测模型初始化
+        self.anti_spoof_model_path = os.path.join(self.asset_base_path, 'models', 'anti_spoof', '4_0_0_80x80_MiniFASNetV1.pth')
+        self.anti_spoofing_predictor = self._load_anti_spoofing_model()
 
-        # --- 初始化深度学习反欺骗检测器 ---
+        # Dlib模型初始化
+        dlib_model_path = os.path.join(self.asset_base_path, 'models', 'dlib', 'shape_predictor_68_face_landmarks.dat')
         try:
-            anti_spoof_model_path = os.path.join(
-                asset_base_path, "models", "anti_spoof", "4_0_0_80x80_MiniFASNetV1.pth"
-            )
-            if os.path.exists(anti_spoof_model_path):
-                self.spoof_detector = AntiSpoofingPredictor(anti_spoof_model_path)
+            self.shape_predictor = dlib.shape_predictor(dlib_model_path)
+            logger.info(f"成功加载 Dlib shape predictor from {dlib_model_path}")
+        except Exception as e:
+            logger.error(f"无法加载 Dlib shape predictor: {e}. 活体检测功能将受限。")
+            self.shape_predictor = None
+
+        # 加载已知人脸
+        self._load_known_faces()
+
+    def _load_anti_spoofing_model(self):
+        """
+        初始化深度学习反欺骗检测器。
+        """
+        try:
+            if os.path.exists(self.anti_spoof_model_path):
+                self.spoof_detector = AntiSpoofingPredictor(self.anti_spoof_model_path)
                 logger.info("成功加载深度学习反欺骗模型。")
             else:
                 self.spoof_detector = None
-                logger.warning(f"未找到反欺骗模型 at '{anti_spoof_model_path}'，深度学习活体检测功能已禁用。")
+                logger.warning(f"未找到反欺骗模型 at '{self.anti_spoof_model_path}'，深度学习活体检测功能已禁用。")
         except Exception as e:
             self.spoof_detector = None
             logger.error(f"加载深度学习反欺骗模型失败: {e}", exc_info=True)
-
-
-        dlib_shape_predictor_path = os.path.join(
-            asset_base_path, "models", "dlib", "shape_predictor_68_face_landmarks.dat"
-        )
-
-        # 初始化Dlib的面部检测器和关键点预测器
-        try:
-            self.dlib_detector = dlib.get_frontal_face_detector()
-            self.dlib_predictor = dlib.shape_predictor(dlib_shape_predictor_path)
-            logger.info(f"成功加载 Dlib shape predictor from {dlib_shape_predictor_path}")
-        except Exception as e:
-            logger.error(f"无法加载 Dlib shape predictor: {e}. 活体检测功能将受限。")
-            self.dlib_detector = None
-            self.dlib_predictor = None
-
-        self._load_known_faces()
 
     def _load_known_faces(self):
         """
@@ -366,12 +376,12 @@ class FaceRecognizer:
         """
         从单帧图像中提取面部关键点和头部姿态，供活体检测使用。
         """
-        if not self.dlib_predictor or not self.dlib_detector:
+        if not self.shape_predictor:
             return None, None
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         try:
-            rects = self.dlib_detector(gray, 0)
+            rects = dlib.get_frontal_face_detector()(gray, 0)
         except Exception as e:
             logger.error(f"Dlib面部检测失败: {e}")
             return None, None
@@ -379,7 +389,7 @@ class FaceRecognizer:
         if len(rects) > 0:
             rect = rects[0]
             try:
-                shape = self.dlib_predictor(gray, rect)
+                shape = self.shape_predictor(gray, rect)
                 landmarks = np.array([[p.x, p.y] for p in shape.parts()])
                 head_pose = self._estimate_head_pose(shape, frame.shape)
                 return landmarks, head_pose
@@ -599,7 +609,7 @@ class FaceRecognizer:
             face_image_crop = frame[top:bottom, left:right]
             
             # --- 核心安全增强：打印攻击检测 ---
-            if self._is_print_attack(face_image_crop):
+            if enable_liveness and self._is_print_attack(face_image_crop):
                 logger.warning(f"检测到潜在的打印照片攻击 at [{top},{left},{bottom},{right}]。拒绝识别。")
                 recognized_faces.append({
                     "location": {"top": top, "right": right, "bottom": bottom, "left": left},

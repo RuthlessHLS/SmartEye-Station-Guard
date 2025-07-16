@@ -376,9 +376,6 @@ import { useAuthStore } from '@/stores/auth';
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Close, Cpu, VideoCamera, Warning, Search, SuccessFilled, CircleCloseFilled } from '@element-plus/icons-vue';
-import flvjs from 'flv.js';
-import DPlayer from 'dplayer';
-import Hls from 'hls.js';
 import useWebRTC from '@/composables/useWebRTC';
 
 // UUID生成函数
@@ -398,9 +395,6 @@ const api = useApi();
 const router = useRouter();
 const authStore = useAuthStore();
 const videoElement = ref(null);
-const videoRef = ref(null);
-const video = ref(null);
-const player = ref(null);
 const isStreaming = ref(false);
 const error = ref(null); // 【修复】声明缺失的error ref
 const videoSource = ref('rtmp'); // 直接锁定为 'rtmp'
@@ -521,7 +515,10 @@ const connectWebSocket = () => {
 
     ws.onmessage = (event) => {
       try {
-        const messageData = JSON.parse(event.data);
+        const rawData = JSON.parse(event.data);
+
+        // 【关键修复】后端通过channel layer转发时，会把原始消息包在'message'字段里
+        const messageData = rawData.message ? rawData.message : rawData;
 
         // 打印接收到的消息类型，帮助调试
         console.log(`[WebSocket] 收到消息，类型: ${messageData.type || '未知'}`, messageData);
@@ -547,7 +544,7 @@ const connectWebSocket = () => {
 
           const timestamp = data.timestamp || Date.now();
           const frameId = data.frame_id || `frame_${timestamp}`;
-          const currentVideoTime = video.value ? video.value.currentTime : 0;
+          const currentVideoTime = videoElement.value ? videoElement.value.currentTime : 0;
 
           detections.forEach(detection => {
             detection.frame_timestamp = timestamp;
@@ -649,10 +646,6 @@ const stopStream = async () => {
   // 断开WebRTC连接
   await webRTC.disconnect();
 
-  if (player.value) {
-    player.value.destroy();
-    player.value = null;
-  }
   if (videoElement.value && videoElement.value.srcObject) {
     videoElement.value.srcObject.getTracks().forEach((track) => track.stop());
     videoElement.value.srcObject = null;
@@ -683,7 +676,7 @@ const startStream = async () => {
 
   try {
     // 2. 启动后端AI分析流 (这是非阻塞的)
-    ElMessage.info(`[1/3] 正在请求后端启动视频流分析...`);
+    ElMessage.info(`[1/2] 正在请求后端启动视频流分析...`);
     const streamConfig = {
       camera_id: uniqueCameraId,
       stream_url: processedStreamUrl,
@@ -692,16 +685,11 @@ const startStream = async () => {
     };
     await api.ai.startStream(streamConfig);
 
-    // 3. 轮询检查WebRTC是否就绪
-    ElMessage.info(`[2/3] 等待后端准备WebRTC连接...`);
-    const isReady = await pollWebRTCStatus(uniqueCameraId);
-
-    if (!isReady) {
-      throw new Error('后端服务超时，未能准备好WebRTC连接。');
-    }
-
-    // 4. 连接WebRTC
-    ElMessage.success(`[3/3] 后端已就绪，正在建立WebRTC连接...`);
+    // 【关键修复】移除不必要的轮询等待，直接开始连接
+    ElMessage.info(`[2/2] 正在建立WebRTC连接...`);
+    // 后端启动需要一点时间来初始化，前端直接等待一小段时间
+    await new Promise(resolve => setTimeout(resolve, 1500)); 
+    
     await webRTC.connect(uniqueCameraId, videoElement.value);
 
     ElMessage.success('WebRTC连接成功，正在接收AI视频流！');
@@ -780,14 +768,12 @@ const startLocalCamera = async () => {
   const stream = await navigator.mediaDevices.getUserMedia(constraints);
   if (videoElement.value) {
     videoElement.value.srcObject = stream;
-    video.value = videoElement.value;
     videoElement.value.play();
   }
 };
 
 const startNetworkStream = async () => {
   await testStreamConnection();
-  await createPlayer();
 };
 
 const testStreamConnection = async () => {
@@ -812,73 +798,6 @@ const testStreamConnection = async () => {
     handleApiError(error);
     throw error;
   }
-};
-
-const createPlayer = () => {
-  if (player.value) player.value.destroy();
-  if (!videoRef.value) throw new Error("播放器容器不存在");
-
-  player.value = new DPlayer({
-    container: videoRef.value,
-    autoplay: true,
-    video: {
-      url: playbackUrl.value,
-      type: getVideoType(),
-      customType: {
-        flv: (video) => {
-          const flvPlayer = flvjs.createPlayer({ type: 'flv', url: video.src });
-          flvPlayer.attachMediaElement(video);
-          flvPlayer.load();
-        },
-        hls: (video) => {
-          if (Hls.isSupported()) {
-            const hls = new Hls();
-            hls.loadSource(video.src);
-            hls.attachMedia(video);
-          } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-            // eslint-disable-next-line no-self-assign
-            video.src = video.src;
-          }
-        },
-      },
-    },
-  });
-  video.value = player.value.video;
-
-  // 添加事件监听，确保视频加载后记录尺寸信息
-  video.value.addEventListener('loadedmetadata', () => {
-    console.log('[播放器] 视频元数据已加载，视频尺寸:', video.value.videoWidth, 'x', video.value.videoHeight);
-    onVideoLoaded();
-  });
-
-  // 添加播放准备就绪事件
-  player.value.on('playing', () => {
-    console.log('[播放器] 视频开始播放');
-    // 移除对aiAnalyzer的引用，因为该组件已被删除
-  });
-
-  // 播放进度变化时再次检查Canvas尺寸
-  player.value.on('timeupdate', () => {
-    // 每10秒检查一次
-    const currentTime = player.value.video.currentTime;
-    if (currentTime > 0 && Math.floor(currentTime) % 10 === 0) {
-      // 移除对aiAnalyzer的引用
-    }
-  });
-
-  // 监听视频调整尺寸事件
-  player.value.on('resize', () => {
-    console.log('[播放器] 视频尺寸已调整');
-    // 移除对aiAnalyzer的引用
-  });
-
-  // 监听全屏变化
-  player.value.on('fullscreen', () => {
-    console.log('[播放器] 视频全屏状态已变化');
-    // 移除对aiAnalyzer的引用
-  });
-
-  console.log('[播放器] 播放器创建完成，当前视频元素:', video.value);
 };
 
 // --- AI Logic ---
@@ -1050,22 +969,20 @@ const canStartStream = computed(() => {
 
 // 新增函数：记录视频元素信息
 const logVideoElementInfo = () => {
-  if (!video.value) {
+  if (!videoElement.value) {
     console.warn('[视频检查] 视频元素不存在');
     return;
   }
 
-  const videoWidth = video.value.videoWidth;
-  const videoHeight = video.value.videoHeight;
+  const videoWidth = videoElement.value.videoWidth;
+  const videoHeight = videoElement.value.videoHeight;
   console.log('[视频检查] 当前视频元素尺寸:', videoWidth, 'x', videoHeight);
-  console.log('[视频检查] 当前视频容器尺寸:', videoRef.value ? `${videoRef.value.clientWidth} x ${videoRef.value.clientHeight}` : '无法获取容器尺寸');
+  console.log('[视频检查] 当前视频容器尺寸:', videoElement.value ? `${videoElement.value.clientWidth} x ${videoElement.value.clientHeight}` : '无法获取容器尺寸');
 };
 
 
 
 const getVideoType = () => {
-  if (playbackUrl.value.includes('.m3u8')) return 'hls';
-  if (playbackUrl.value.includes('.flv')) return 'customFlv';
   return 'auto';
 };
 
@@ -1075,30 +992,30 @@ const toggleLocalTracking = () => {
 
 // 添加增强的视频元素处理
 const onVideoLoaded = () => {
-  if (!video.value) {
+  if (!videoElement.value) {
     console.warn('[视频] 视频元素尚未加载');
     return;
   }
 
-  console.log('[视频] 视频已加载，尺寸:', video.value.videoWidth, 'x', video.value.videoHeight);
+  console.log('[视频] 视频已加载，尺寸:', videoElement.value.videoWidth, 'x', videoElement.value.videoHeight);
   console.log('[视频] 视频元素属性:',
-    'currentSrc:', video.value.currentSrc,
-    'networkState:', video.value.networkState,
-    'readyState:', video.value.readyState,
-    'paused:', video.value.paused
+    'currentSrc:', videoElement.value.currentSrc,
+    'networkState:', videoElement.value.networkState,
+    'readyState:', videoElement.value.readyState,
+    'paused:', videoElement.value.paused
   );
 
   // 确保视频元素样式正确
-  video.value.style.display = 'block';
-  video.value.style.visibility = 'visible';
-  video.value.style.opacity = '1';
-  video.value.style.zIndex = '5';
+  videoElement.value.style.display = 'block';
+  videoElement.value.style.visibility = 'visible';
+  videoElement.value.style.opacity = '1';
+  videoElement.value.style.zIndex = '5';
 
   // 尝试强制播放视频
   try {
-    if (video.value.paused) {
+    if (videoElement.value.paused) {
       console.log('[视频] 尝试强制播放视频');
-      video.value.play().then(() => {
+      videoElement.value.play().then(() => {
         console.log('[视频] 强制播放成功');
       }).catch(err => {
         console.error('[视频] 强制播放失败:', err);
@@ -1112,7 +1029,7 @@ const onVideoLoaded = () => {
           retryCount++;
 
           console.log(`[视频] 尝试重新播放 (${retryCount}/${maxRetries})...`);
-          video.value.play().then(() => {
+          videoElement.value.play().then(() => {
             console.log('[视频] 重试播放成功');
           }).catch(retryErr => {
             console.warn(`[视频] 重试播放失败 (${retryCount}/${maxRetries}):`, retryErr);
@@ -1125,8 +1042,8 @@ const onVideoLoaded = () => {
 
         // 添加点击事件处理器以处理自动播放限制
         document.addEventListener('click', function tryPlayOnce() {
-          if (video.value && video.value.paused) {
-            video.value.play().catch(e => console.warn('[视频] 点击播放失败:', e));
+          if (videoElement.value && videoElement.value.paused) {
+            videoElement.value.play().catch(e => console.warn('[视频] 点击播放失败:', e));
           }
           document.removeEventListener('click', tryPlayOnce);
         }, { once: true });
@@ -1137,9 +1054,9 @@ const onVideoLoaded = () => {
   }
 
   // 确保video和videoElement引用一致
-  if (videoElement.value !== video.value && video.value) {
+  if (videoElement.value) {
     console.log('[视频] 同步videoElement引用');
-    videoElement.value = video.value;
+    videoElement.value = videoElement.value;
   }
 
   // 记录视频信息但不再尝试调整Canvas，因为AIAnalyzer组件已被移除
@@ -1493,11 +1410,8 @@ const onVideoError = (e) => {
 };
 
 const onVideoPlaying = () => {
-  console.log('[视频] 视频开始播放!',
-    'currentTime:', videoElement.value?.currentTime,
-    'videoWidth:', videoElement.value?.videoWidth,
-    'videoHeight:', videoElement.value?.videoHeight
-  );
+  console.log('[视频] 视频已开始播放');
+  error.value = null;
 };
 
 // 添加视频状态检查定时器

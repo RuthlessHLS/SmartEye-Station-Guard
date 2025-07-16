@@ -4148,3 +4148,27 @@
 2025/07/15 18:21:22 [info] 28808#29504: *87 WSARecv() failed (10054: An existing connection was forcibly closed by the remote host), client: 127.0.0.1, server: 0.0.0.0:1935
 2025/07/15 18:21:22 [info] 28808#29504: *87 disconnect, client: 127.0.0.1, server: 0.0.0.0:1935
 2025/07/15 18:21:22 [info] 28808#29504: *87 deleteStream, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/16 11:26:54 [notice] 28928#6744: nginx/1.13.12
+2025/07/16 11:26:54 [info] 28928#6744: OS: 260200 build:9200, "", suite:300, type:1
+2025/07/16 11:26:54 [notice] 28928#6744: create thread 30724
+2025/07/16 11:26:54 [notice] 28928#6744: create thread 26064
+2025/07/16 11:26:54 [notice] 28928#6744: create thread 20020
+2025/07/16 11:26:54 [notice] 27296#3960: nginx/1.13.12
+2025/07/16 11:26:54 [info] 27296#3960: OS: 260200 build:9200, "", suite:300, type:1
+2025/07/16 11:26:54 [notice] 27296#3960: create thread 34328
+2025/07/16 11:26:54 [notice] 27296#3960: create thread 19932
+2025/07/16 11:26:54 [notice] 27296#3960: create thread 18156
+2025/07/16 11:26:56 [notice] 4088#23880: using the "select" event method
+2025/07/16 11:26:56 [notice] 4088#23880: nginx/1.13.12
+2025/07/16 11:26:56 [info] 4088#23880: OS: 260200 build:9200, "", suite:300, type:1
+2025/07/16 11:26:56 [notice] 4088#23880: start worker processes
+2025/07/16 11:26:56 [notice] 4088#23880: start worker process 28004
+2025/07/16 11:26:56 [info] 27296#34328: *46 client connected '127.0.0.1'
+2025/07/16 11:26:56 [info] 27296#34328: *46 connect: app='live' args='' flashver='FMLE/3.0 (compatible; FMSc/1.0)' swf_url='rtmp://localhost:1935/live' tc_url='rtmp://localhost:1935/live' page_url='' acodecs=0 vcodecs=0 object_encoding=0, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/16 11:26:56 [info] 27296#34328: *46 createStream, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/16 11:26:56 [info] 27296#34328: *46 publish: name='test' args='' type=live silent=0, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/16 11:26:56 [notice] 28004#21684: nginx/1.13.12
+2025/07/16 11:26:56 [info] 28004#21684: OS: 260200 build:9200, "", suite:300, type:1
+2025/07/16 11:26:56 [notice] 28004#21684: create thread 31636
+2025/07/16 11:26:56 [notice] 28004#21684: create thread 22416
+2025/07/16 11:26:56 [notice] 28004#21684: create thread 6508
