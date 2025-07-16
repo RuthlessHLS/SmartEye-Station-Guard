@@ -78,22 +78,26 @@ class AppConfig:
     def __init__(self):
         # 从 .env 文件加载环境变量
         current_dir = os.path.dirname(os.path.abspath(__file__))
-        dotenv_path = os.path.join(current_dir, '.env')
-        if os.path.exists(dotenv_path):
-            print(f"--- 正在从 '{dotenv_path}' 加载环境变量 ---")
-            load_dotenv(dotenv_path=dotenv_path)
-        else:
-            print(f"--- 警告: 未找到 .env 文件 at '{dotenv_path}'，将使用系统环境变量 ---")
-            load_dotenv()
+        
+        # 【最终修复】不再加载.env文件，以避免环境差异导致密钥不匹配
+        # dotenv_path = os.path.join(current_dir, '.env')
+        # if os.path.exists(dotenv_path):
+        #     print(f"--- 正在从 '{dotenv_path}' 加载环境变量 ---")
+        #     load_dotenv(dotenv_path=dotenv_path)
+        # else:
+        #     print(f"--- 警告: 未找到 .env 文件 at '{dotenv_path}'，将使用系统环境变量 ---")
+        #     load_dotenv()
 
         # 【核心修复】不再使用环境变量，而是计算相对路径
         # self.ASSET_BASE_PATH = os.getenv("G_DRIVE_ASSET_PATH", "/app/assets")
         self.ASSET_BASE_PATH = os.path.normpath(os.path.join(current_dir, 'assets'))
+        # 【最终修复】硬编码密钥以确保与后端完全一致
+        self.INTERNAL_SERVICE_API_KEY = 'a-secure-default-key-for-dev'
+        
         self.AI_SERVICE_API_KEY = os.getenv('AI_SERVICE_API_KEY', 'smarteye-ai-service-key-2024')
         self.BACKEND_ALERT_URL = os.getenv('BACKEND_ALERT_URL', 'http://localhost:8000/api/alerts/ai-results/')
         self.BACKEND_WEBSOCKET_BROADCAST_URL = os.getenv('BACKEND_WEBSOCKET_BROADCAST_URL', 'http://localhost:8000/api/alerts/websocket/broadcast/')
         self.BACKEND_INTERNAL_LOGIN_URL = os.getenv('BACKEND_INTERNAL_LOGIN_URL', 'http://localhost:8000/api/users/login/internal/')
-        self.INTERNAL_SERVICE_API_KEY = os.getenv('INTERNAL_SERVICE_API_KEY', 'a-secure-default-key-for-dev')
         self.ENABLE_SOUND_DETECTION = os.getenv("ENABLE_SOUND_DETECTION", "false").lower() == "true"
         self.FASTAPI_TIMEOUT_SECONDS = float(os.getenv("FASTAPI_TIMEOUT_SECONDS", "120.0"))
 
@@ -353,6 +357,20 @@ async def lifespan(app: FastAPI):
     service_manager.update_detectors()
     logger.info("所有模型和服务初始化完成。")
 
+    # 【最终修复】确保将所有初始化成功的模型实例都注册到service_manager中
+    if face_recognizer:
+        service_manager._detectors['face'] = face_recognizer
+    if fire_detector:
+        service_manager._detectors['fire'] = fire_detector
+    if object_detector:
+        service_manager._detectors['object'] = object_detector
+    if danger_zone_detector:
+        service_manager.danger_zone_detector = danger_zone_detector
+
+    print("--- 2. 所有模型初始化完成，服务准备就绪 ---")
+    # ---
+    
+    # 启动后台任务
     cleanup_task = asyncio.create_task(start_cleanup_task())
     yield
     cleanup_task.cancel()

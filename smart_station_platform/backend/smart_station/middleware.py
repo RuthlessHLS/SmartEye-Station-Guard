@@ -40,7 +40,8 @@ class TokenAuthMiddleware:
 class InternalAPIMiddleware:
     def __init__(self, get_response):
         self.get_response = get_response
-        self.internal_api_key = os.getenv('INTERNAL_SERVICE_API_KEY', 'a-secure-default-key-for-dev')
+        # 【最终修复】硬编码密钥，以完全消除环境差异导致的问题
+        self.internal_api_key = 'a-secure-default-key-for-dev'
         
         # 定义需要内部API密钥认证的URL路径前缀
         self.internal_paths = [
@@ -57,6 +58,13 @@ class InternalAPIMiddleware:
         if is_internal_path:
             # 从请求头中获取API密钥
             provided_key = request.headers.get('X-Internal-API-Key')
+            
+            # 【调试代码】打印出期望的密钥和收到的密钥
+            print("--- INTERNAL API CALL DEBUG ---")
+            print(f"Request Path: {request.path}")
+            print(f"Expected Key: {self.internal_api_key}")
+            print(f"Provided Key: {provided_key}")
+            print("-----------------------------")
 
             if not provided_key or provided_key != self.internal_api_key:
                 return JsonResponse({'error': 'Unauthorized: Invalid or missing internal API key.'}, status=401)
