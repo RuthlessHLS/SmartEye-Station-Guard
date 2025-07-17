@@ -199,6 +199,104 @@ USE_I18N = True
 
 USE_TZ = True
 
+# 添加日志配置
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'standard': {
+            'format': '[%(asctime)s] [%(levelname)s] %(name)s: %(message)s'
+        },
+    },
+    'filters': {
+        'require_debug_false': {
+            '()': 'django.utils.log.RequireDebugFalse',
+        },
+        'require_debug_true': {
+            '()': 'django.utils.log.RequireDebugTrue',
+        },
+        'skip_static_requests': {
+            '()': 'django.utils.log.CallbackFilter',
+            'callback': lambda record: not record.getMessage().startswith('GET /static/'),
+        },
+        'skip_successful_requests': {
+            '()': 'django.utils.log.CallbackFilter',
+            'callback': lambda record: not (record.getMessage().startswith(('GET /api/', 'POST /api/')) and ('200' in record.getMessage() or '304' in record.getMessage())),
+        },
+    },
+    'handlers': {
+        'console': {
+            'level': 'INFO',
+            'formatter': 'standard',
+            'class': 'logging.StreamHandler',
+            'filters': ['skip_static_requests', 'skip_successful_requests'],
+        },
+        'file': {
+            'level': 'INFO',
+            'formatter': 'standard',
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': os.path.join(BASE_DIR, 'logs', 'django.log'),
+            'maxBytes': 5242880,  # 5MB
+            'backupCount': 5,
+        },
+    },
+    'loggers': {
+        'django': {
+            'handlers': ['console', 'file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'django.server': {
+            'handlers': ['console', 'file'],
+            'level': 'WARNING',  # 只记录警告及以上级别
+            'propagate': False,
+        },
+        'django.request': {
+            'handlers': ['console', 'file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'django.db.backends': {
+            'handlers': ['console', 'file'],
+            'level': 'WARNING',  # 只记录数据库警告
+            'propagate': False,
+        },
+        # 自定义应用日志
+        'alerts': {
+            'handlers': ['console', 'file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'camera_management': {
+            'handlers': ['console', 'file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'users': {
+            'handlers': ['console', 'file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'data_analysis': {
+            'handlers': ['console', 'file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        # 第三方应用日志
+        'channels': {
+            'handlers': ['console', 'file'],
+            'level': 'WARNING',  # 只记录警告级别
+            'propagate': False,
+        },
+        '': {  # 默认处理器
+            'handlers': ['console', 'file'],
+            'level': 'INFO',
+        },
+    }
+}
+
+# 创建日志目录
+os.makedirs(os.path.join(BASE_DIR, 'logs'), exist_ok=True)
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.2/howto/static-files/

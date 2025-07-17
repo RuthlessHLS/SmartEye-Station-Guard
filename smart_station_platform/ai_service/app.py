@@ -30,6 +30,67 @@ from starlette.websockets import WebSocketState
 import httpx
 from urllib.parse import urlparse, parse_qs
 from loguru import logger
+import logging.config
+from log_filters import QuietWebRTCFilter, QuietICEFilter
+
+# 定义日志配置
+LOG_CONFIG = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'standard': {
+            'format': '[%(asctime)s] [%(levelname)s] %(name)s: %(message)s'
+        },
+    },
+    'filters': {
+        'quiet_webrtc': {
+            '()': 'log_filters.QuietWebRTCFilter',
+        },
+        'quiet_ice': {
+            '()': 'log_filters.QuietICEFilter',
+        },
+    },
+    'handlers': {
+        'console': {
+            'level': 'INFO',
+            'formatter': 'standard',
+            'class': 'logging.StreamHandler',
+            'filters': ['quiet_webrtc', 'quiet_ice'],
+        },
+        'file': {
+            'level': 'INFO',
+            'formatter': 'standard',
+            'class': 'logging.FileHandler',
+            'filename': 'ai_service.log',
+            'mode': 'a',
+            'filters': ['quiet_webrtc', 'quiet_ice'],
+        },
+    },
+    'loggers': {
+        '': {  # root logger
+            'handlers': ['console', 'file'],
+            'level': 'INFO',
+        },
+        'aioice.ice': {
+            'handlers': ['console', 'file'],
+            'level': 'WARNING',  # 仅显示警告及以上级别
+            'propagate': False,
+        },
+        'smart_station_platform.ai_service.core.webrtc_pusher': {
+            'handlers': ['console', 'file'],
+            'level': 'INFO',  # 改为INFO，忽略DEBUG级别的帧发送日志
+            'propagate': False,
+        },
+        'httpx': {
+            'handlers': ['console', 'file'],
+            'level': 'WARNING',  # 仅显示警告及以上级别的HTTP请求
+            'propagate': False,
+        },
+    }
+}
+
+# 应用日志配置
+logging.config.dictConfig(LOG_CONFIG)
 
 # 添加自定义JSON编码器处理datetime对象
 class DateTimeEncoder(json.JSONEncoder):
@@ -42,8 +103,14 @@ class DateTimeEncoder(json.JSONEncoder):
 import sys
 import logging
 
-logger = logging.getLogger(__name__)
+# 设置日志级别
 logging.basicConfig(level=logging.INFO)
+
+# 显式设置各模块日志级别
+logging.getLogger('aioice.ice').setLevel(logging.WARNING)  # 只显示警告和错误
+logging.getLogger('smart_station_platform.ai_service.core.webrtc_pusher').setLevel(logging.INFO)  # 关闭DEBUG级别的帧发送日志
+
+logger = logging.getLogger(__name__)
 # 将当前目录添加到Python路径，确保可以导入核心模块
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
@@ -177,7 +244,7 @@ class AIServiceManager:
     async def send_alert_to_backend(self, alert_data: AIAnalysisResult):
         """将AI分析结果作为告警发送到主后端服务。"""
         alert_dict = alert_data.model_dump()
-        logger.info(f"准备发送告警到后端: {alert_dict}")
+        logger.info(f"[ALERT] 准备发送告警到后端: {alert_dict}")
         
         async with httpx.AsyncClient() as client:
             try:
@@ -188,13 +255,13 @@ class AIServiceManager:
                     timeout=10.0
                 )
                 response.raise_for_status()
-                logger.info(f"告警已成功发送到后端，响应: {response.json()}")
+                logger.info(f"[ALERT] 告警已成功发送到后端，响应: {response.json()}")
                 return True
             except httpx.RequestError as e:
-                logger.error(f"发送告警到后端时发生网络错误: {e}")
+                logger.error(f"[ALERT] 发送告警到后端时发生网络错误: {e}")
                 return False
             except Exception as e:
-                logger.error(f"发送告警到后端时发生未知错误: {e}", exc_info=True)
+                logger.error(f"[ALERT] 发送告警到后端时发生未知错误: {e}", exc_info=True)
                 return False
 
     async def broadcast_via_backend(self, camera_id: str, payload: Dict[str, Any]):
@@ -240,7 +307,8 @@ class AIServiceManager:
     async def process_single_frame(
         self, frame: np.ndarray, camera_id: str, enable_face_recognition: bool,
         enable_object_detection: bool, enable_behavior_detection: bool,
-        enable_fire_detection: bool, enable_liveness_detection: bool, **kwargs
+        enable_fire_detection: bool, enable_liveness_detection: bool, 
+        enable_fall_detection: bool, enable_fighting_detection: bool, **kwargs
     ) -> Dict[str, Any]:
         """处理单帧图像，执行所有已启用的AI分析。"""
         all_detections = []
@@ -269,10 +337,50 @@ class AIServiceManager:
         # --- 核心修改：启用并集成行为检测 ---
         if enable_behavior_detection and self._detectors.get("behavior"):
             # `detect_behavior` 需要原始帧和已经检测到的目标
-            behavior_results = self._detectors["behavior"].detect_behavior(frame, all_detections)
+            behavior_results = self._detectors["behavior"].detect_behavior(
+                frame, all_detections,
+                enable_fall=enable_fall_detection, 
+                enable_fight=enable_fighting_detection
+            )
             # 将行为分析结果添加到总结果中
             all_detections.extend(behavior_results)
+            # 触发行为告警
+            for behavior in behavior_results:
+                if behavior.get('need_alert'):
+                    alert_data = AIAnalysisResult(
+                        camera_id=camera_id,
+                        event_type=behavior.get('event_type'),
+                        confidence=behavior.get('confidence', 0.0),
+                        timestamp=datetime.now().isoformat(),
+                        metadata={"details": behavior}
+                    )
+                    await self.send_alert_to_backend(alert_data)
             
+        # 确保检测到火焰或其他危险情况时发送告警
+        for detection in all_detections:
+            # 检查是否为火焰，并且置信度超过阈值
+            if detection.get('class_name') == 'fire' and detection.get('confidence') > 0.5:
+                # 创建告警对象 - 修正时间戳为ISO字符串格式
+                alert_data = AIAnalysisResult(
+                    camera_id=camera_id,
+                    event_type="fire_detected",
+                    confidence=detection.get('confidence', 0.0),
+                    timestamp=datetime.now().isoformat(),  # 修正：使用ISO格式字符串而非datetime对象
+                    image_data=None,
+                    metadata={
+                        "detection": detection,
+                        "coordinates": detection.get('coordinates'),
+                        "area": detection.get('area', 0)
+                    }
+                )
+                
+                # 发送告警到后端
+                success = await self.send_alert_to_backend(alert_data)
+                if not success:
+                    logger.error(f"[ALERT] 发送火焰检测告警失败: camera_id={camera_id}")
+                else:
+                    logger.info(f"[ALERT] 发送火焰检测告警成功: camera_id={camera_id}, 置信度={detection.get('confidence'):.2f}")
+
         return {"detections": all_detections}
 
     async def shutdown_services(self):
@@ -484,6 +592,9 @@ async def process_video_stream_async_loop(stream: VideoStream, camera_id: str):
                         enable_fire_detection=settings.get('fire_detection', True),
                         # 在视频流中默认关闭活体，仅在专门的人脸验证场景开启
                         enable_liveness_detection=False,
+                        # 传递新开关的状态
+                        enable_fall_detection=settings.get('fall_detection', False),
+                        enable_fighting_detection=settings.get('fighting_detection', False),
                         performance_mode=performance_mode
                     )
                 )
@@ -957,13 +1068,16 @@ async def test_stream_connection_endpoint(url: str = Body(...), type: str = Body
 async def start_stream_endpoint(
     camera_id: str = Body(...),
     stream_url: str = Body(...),
-    source_type: str = Body(...), # <--【新增】获取前端传入的原始类型
+    source_type: str = Body(...), 
     enable_face_recognition: bool = Body(True),
     enable_object_detection: bool = Body(True),
     enable_behavior_detection: bool = Body(False),
     enable_fire_detection: bool = Body(True),
     enable_sound_detection: bool = Body(False),
-    enable_liveness_detection: bool = Body(True)
+    enable_liveness_detection: bool = Body(True),
+    # 新增的开关
+    enable_fall_detection: bool = Body(False),
+    enable_fighting_detection: bool = Body(False)
 ):
     """启动视频流处理"""
     if camera_id in service_manager._video_streams:

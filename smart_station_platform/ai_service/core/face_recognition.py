@@ -603,15 +603,14 @@ class FaceRecognizer:
         face_locations = face_recognition.face_locations(frame, model=model_to_use)
         face_encodings = face_recognition.face_encodings(frame, face_locations)
 
-        recognized_faces = []
-
+        results = []
         for (top, right, bottom, left), face_encoding in zip(face_locations, face_encodings):
             face_image_crop = frame[top:bottom, left:right]
             
             # --- 核心安全增强：打印攻击检测 ---
             if enable_liveness and self._is_print_attack(face_image_crop):
                 logger.warning(f"检测到潜在的打印照片攻击 at [{top},{left},{bottom},{right}]。拒绝识别。")
-                recognized_faces.append({
+                results.append({
                     "location": {"top": top, "right": right, "bottom": bottom, "left": left},
                     "bbox": [left, top, right, bottom],
                     "identity": {"name": "Spoof Attack", "is_known": False, "should_alert": True, "attack_type": "print"},
@@ -625,7 +624,7 @@ class FaceRecognizer:
                 logger.debug(f"深度学习活体检测结果: is_real={is_real}, confidence={real_confidence:.4f}")
                 if not is_real:
                     logger.warning(f"检测到潜在的AI换脸/视频攻击 at [{top},{left},{bottom},{right}]。拒绝识别。")
-                    recognized_faces.append({
+                    results.append({
                         "location": {"top": top, "right": right, "bottom": bottom, "left": left},
                         "bbox": [left, top, right, bottom],
                         "identity": {"name": "Spoof Attack", "is_known": False, "should_alert": True, "attack_type": "deepfake_or_video"},
@@ -661,13 +660,13 @@ class FaceRecognizer:
                 
                 identity_info["confidence"] = confidence
 
-            recognized_faces.append({
+            results.append({
                 "location": {"top": top, "right": right, "bottom": bottom, "left": left},
                 "bbox": [left, top, right, bottom],
                 "identity": identity_info
             })
 
-        return recognized_faces
+        return results
 
     def _estimate_head_pose(self, shape, frame_shape):
         """根据面部关键点估算头部的旋转角度 (roll, pitch, yaw)。"""

@@ -20,4 +20,7 @@ urlpatterns = [
     
     # 实时数据接口
     path('realtime/', views.RealTimeDataView.as_view(), name='realtime_data'),
+    
+    # AI日报接口
+    path('reports/daily/<str:date>/', views.DailyReportView.as_view(), name='daily_report'),
 ]

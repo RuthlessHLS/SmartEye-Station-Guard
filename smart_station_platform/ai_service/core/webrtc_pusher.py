@@ -17,7 +17,7 @@ from fractions import Fraction # 导入Fraction
 logger = logging.getLogger(__name__)
 
 # 增加日志级别，便于调试
-logger.setLevel(logging.DEBUG)
+logging.getLogger('smart_station_platform.ai_service.core.webrtc_pusher').setLevel(logging.INFO)
 
 # 全局变量，存储所有活跃的WebRTC连接
 active_connections = {}
@@ -221,10 +221,7 @@ class WebRTCPusher:
             logger.warning(f"摄像头 {camera_id} 收到无效帧，跳过")
             return
             
-        # 检查帧类型和尺寸，每100帧记录一次
-        if camera_id in frame_buffers and len(frame_buffers) % 100 == 0:
-            height, width = frame.shape[:2]
-            logger.debug(f"摄像头 {camera_id} 推送帧，尺寸: {width}x{height}, 类型: {frame.dtype}")
+
             
         # 将帧存储到全局帧缓冲区
         frame_buffers[camera_id] = frame.copy()

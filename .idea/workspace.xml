@@ -4,8 +4,8 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="5debb453-5ab6-428e-8ec1-9b25cd367293" name="更改" comment="我成了我成了！！！！">
-      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
+    <list default="true" id="7ba9cf2b-4c7d-4ffb-9ea1-c21e03689d7e" name="更改" comment="">
+      <change beforePath="$PROJECT_DIR$/.idea/SmartEye-Station-Guard.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/SmartEye-Station-Guard.iml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/nginx-rtmp-win32-1.2.1/logs/access.log" beforeDir="false" afterPath="$PROJECT_DIR$/nginx-rtmp-win32-1.2.1/logs/access.log" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/nginx-rtmp-win32-1.2.1/logs/error.log" beforeDir="false" afterPath="$PROJECT_DIR$/nginx-rtmp-win32-1.2.1/logs/error.log" afterDir="false" />
@@ -13,24 +13,22 @@
       <change beforePath="$PROJECT_DIR$/nginx-rtmp-win32-1.2.1/temp/hls/test-303.ts" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/nginx-rtmp-win32-1.2.1/temp/hls/test-304.ts" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/smart_station_platform/ai_service/app.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/ai_service/app.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/smart_station_platform/ai_service/core/behavior_detection.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/ai_service/core/behavior_detection.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/smart_station_platform/ai_service/core/face_recognition.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/ai_service/core/face_recognition.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/smart_station_platform/ai_service/core/webrtc_pusher.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/ai_service/core/webrtc_pusher.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/smart_station_platform/ai_service/models/alert_models.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/ai_service/models/alert_models.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/smart_station_platform/backend/alerts/consumers.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/backend/alerts/consumers.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/smart_station_platform/backend/alerts/views.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/backend/alerts/views.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/smart_station_platform/backend/smart_station/middleware.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/backend/smart_station/middleware.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/smart_station_platform/backend/data_analysis/ai_report_utils.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/backend/data_analysis/ai_report_utils.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/smart_station_platform/backend/data_analysis/serializers.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/backend/data_analysis/serializers.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/smart_station_platform/backend/data_analysis/urls.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/backend/data_analysis/urls.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/smart_station_platform/backend/data_analysis/views.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/backend/data_analysis/views.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/smart_station_platform/backend/smart_station/settings.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/backend/smart_station/settings.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
     <option name="LAST_RESOLUTION" value="IGNORE" />
-  </component>
-  <component name="DjangoConsoleOptions" custom-start-script="import sys; print('Python %s on %s' % (sys.version, sys.platform))&#10;import django; print('Django %s' % django.get_version())&#10;sys.path.extend([WORKING_DIR_AND_PYTHON_PATHS])&#10;if 'setup' in dir(django): django.setup()&#10;import django_manage_shell; django_manage_shell.run(PROJECT_ROOT)">
-    <option name="myCustomStartScript" value="import sys; print('Python %s on %s' % (sys.version, sys.platform))&#10;import django; print('Django %s' % django.get_version())&#10;sys.path.extend([WORKING_DIR_AND_PYTHON_PATHS])&#10;if 'setup' in dir(django): django.setup()&#10;import django_manage_shell; django_manage_shell.run(PROJECT_ROOT)" />
-  </component>
-  <component name="FileTemplateManagerImpl">
-    <option name="RECENT_TEMPLATES">
-      <list>
-        <option value="Python Script" />
-        <option value="HTML File" />
-      </list>
-    </option>
   </component>
   <component name="Git.Settings">
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
@@ -47,119 +45,32 @@
     &quot;accountId&quot;: &quot;c7a0ed1f-0b60-49f7-8e7f-aaeee85d121b&quot;
   }
 }</component>
-  <component name="HighlightingSettingsPerFile">
-    <setting file="file://$PROJECT_DIR$/smart_station_platform/ai_service/core/acoustic_detection.py" root0="FORCE_HIGHLIGHTING" />
-  </component>
-  <component name="ProblemsViewState">
-    <option name="selectedTabId" value="CurrentFile" />
-  </component>
   <component name="ProjectColorInfo">{
   &quot;customColor&quot;: &quot;&quot;,
   &quot;associatedIndex&quot;: 2
 }</component>
-  <component name="ProjectId" id="2zjj5lsE3YDBkU6Rr6r81H3ZlLF" />
+  <component name="ProjectId" id="300OdlL5lbyHZ2pq4N2iJach2x3" />
   <component name="ProjectViewState">
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
   <component name="PropertiesComponent">{
   &quot;keyToString&quot;: {
-    &quot;DefaultHtmlFileTemplate&quot;: &quot;HTML File&quot;,
-    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
     &quot;Python.AI Service (FastAPI).executor&quot;: &quot;Run&quot;,
     &quot;Python.Backend (Daphne).executor&quot;: &quot;Run&quot;,
-    &quot;Python.acoustic_detection.executor&quot;: &quot;Run&quot;,
-    &quot;Python.check_gpu.executor&quot;: &quot;Run&quot;,
-    &quot;Python.download_model.executor&quot;: &quot;Run&quot;,
-    &quot;Python.rtmp_to_flv.executor&quot;: &quot;Run&quot;,
-    &quot;Python.start_all_services.executor&quot;: &quot;Run&quot;,
-    &quot;Python.start_nginx.executor&quot;: &quot;Run&quot;,
-    &quot;Python.test_rtmp_stream.executor&quot;: &quot;Run&quot;,
-    &quot;Python.启动nginx.executor&quot;: &quot;Run&quot;,
-    &quot;Python.推流测试.executor&quot;: &quot;Run&quot;,
-    &quot;RunOnceActivity.OpenDjangoStructureViewOnStart&quot;: &quot;true&quot;,
     &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
     &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
     &quot;git-widget-placeholder&quot;: &quot;dev&quot;,
-    &quot;last_opened_file_path&quot;: &quot;G:/Web/SmartEye-Station-Guard/smart_station_platform/ai_service/assets/models/torch&quot;,
     &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
     &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
     &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
     &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
     &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
     &quot;npm.Frontend (Vue).executor&quot;: &quot;Run&quot;,
-    &quot;settings.editor.selected.configurable&quot;: &quot;com.intellij.python.django.customization.DjangoModulesConfigurable&quot;,
-    &quot;ts.external.directory.path&quot;: &quot;G:\\PyCharm 2025.1.1\\plugins\\javascript-plugin\\jsLanguageServicesImpl\\external&quot;,
     &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
   }
 }</component>
-  <component name="RecentsManager">
-    <key name="CopyFile.RECENT_KEYS">
-      <recent name="G:\Web\SmartEye-Station-Guard\smart_station_platform\ai_service\assets\models\torch" />
-      <recent name="G:\Web\SmartEye-Station-Guard\smart_station_platform\ai_service\assets\models" />
-      <recent name="G:\Web\SmartEye-Station-Guard\smart_station_platform\ai_service\fire" />
-      <recent name="G:\Web\SmartEye-Station-Guard\smart_station_platform\ai_service\core" />
-      <recent name="G:\Web\SmartEye-Station-Guard\smart_station_platform\ai_service\assets\models\anti_spoof" />
-    </key>
-  </component>
-  <component name="RunManager" selected="Python.Backend (Daphne)">
-    <configuration name="启动nginx" type="PythonConfigurationType" factoryName="Python">
-      <module name="SmartEye-Station-Guard" />
-      <option name="ENV_FILES" value="" />
-      <option name="INTERPRETER_OPTIONS" value="" />
-      <option name="PARENT_ENVS" value="true" />
-      <envs>
-        <env name="PYTHONUNBUFFERED" value="1" />
-      </envs>
-      <option name="SDK_HOME" value="" />
-      <option name="SDK_NAME" value="G:\anaconda\envs\smart_station_ai" />
-      <option name="WORKING_DIRECTORY" value="G:\Web\SmartEye-Station-Guard" />
-      <option name="IS_MODULE_SDK" value="false" />
-      <option name="ADD_CONTENT_ROOTS" value="true" />
-      <option name="ADD_SOURCE_ROOTS" value="true" />
-      <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
-      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/start_nginx.py" />
-      <option name="PARAMETERS" value="" />
-      <option name="SHOW_COMMAND_LINE" value="false" />
-      <option name="EMULATE_TERMINAL" value="false" />
-      <option name="MODULE_MODE" value="false" />
-      <option name="REDIRECT_INPUT" value="false" />
-      <option name="INPUT_FILE" value="" />
-      <method v="2" />
-    </configuration>
-    <configuration name="SmartEye-Station-Guard" type="Python.DjangoServer" factoryName="Django server">
-      <module name="SmartEye-Station-Guard" />
-      <option name="ENV_FILES" value="" />
-      <option name="INTERPRETER_OPTIONS" value="" />
-      <option name="PARENT_ENVS" value="true" />
-      <envs>
-        <env name="PYTHONUNBUFFERED" value="1" />
-      </envs>
-      <option name="SDK_HOME" value="" />
-      <option name="WORKING_DIRECTORY" value="" />
-      <option name="IS_MODULE_SDK" value="false" />
-      <option name="ADD_CONTENT_ROOTS" value="true" />
-      <option name="ADD_SOURCE_ROOTS" value="true" />
-      <option name="launchJavascriptDebuger" value="false" />
-      <option name="port" value="8000" />
-      <option name="host" value="" />
-      <option name="additionalOptions" value="" />
-      <option name="browserUrl" value="" />
-      <option name="runTestServer" value="false" />
-      <option name="runNoReload" value="false" />
-      <option name="useCustomRunCommand" value="false" />
-      <option name="customRunCommand" value="" />
-      <method v="2" />
-    </configuration>
-    <list>
-      <item itemvalue="Django 服务器.SmartEye-Station-Guard" />
-      <item itemvalue="npm.Frontend (Vue)" />
-      <item itemvalue="Python.AI Service (FastAPI)" />
-      <item itemvalue="Python.Backend (Daphne)" />
-      <item itemvalue="Python.启动nginx" />
-      <item itemvalue="复合.ALL IN" />
-    </list>
-  </component>
+  <component name="RunManager" selected="Python.Backend (Daphne)" />
   <component name="SharedIndexes">
     <attachedChunks>
       <set>
@@ -170,233 +81,22 @@
   </component>
   <component name="TaskManager">
     <task active="true" id="Default" summary="默认任务">
-      <changelist id="5debb453-5ab6-428e-8ec1-9b25cd367293" name="更改" comment="" />
-      <created>1752251197179</created>
+      <changelist id="7ba9cf2b-4c7d-4ffb-9ea1-c21e03689d7e" name="更改" comment="" />
+      <created>1752761113348</created>
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
-      <updated>1752251197179</updated>
-      <workItem from="1752251199439" duration="17323000" />
-      <workItem from="1752303273144" duration="2827000" />
-      <workItem from="1752307489910" duration="8522000" />
-      <workItem from="1752328184437" duration="23033000" />
-      <workItem from="1752382284647" duration="12909000" />
-      <workItem from="1752399897168" duration="14399000" />
-      <workItem from="1752420308255" duration="3695000" />
-      <workItem from="1752454539151" duration="37582000" />
-      <workItem from="1752506072978" duration="9756000" />
-      <workItem from="1752542125729" duration="10438000" />
-      <workItem from="1752554103851" duration="5102000" />
-      <workItem from="1752562232645" duration="40109000" />
-      <workItem from="1752627871398" duration="387000" />
-      <workItem from="1752628324227" duration="69000" />
-      <workItem from="1752628403415" duration="5447000" />
-      <workItem from="1752634269757" duration="38000" />
-      <workItem from="1752634318189" duration="634000" />
-      <workItem from="1752635140509" duration="406000" />
-      <workItem from="1752637365124" duration="3730000" />
+      <updated>1752761113348</updated>
+      <workItem from="1752761115735" duration="567000" />
+      <workItem from="1752763358681" duration="106000" />
+      <workItem from="1752763717496" duration="2124000" />
     </task>
-    <task id="LOCAL-00001" summary="ai">
-      <option name="closed" value="true" />
-      <created>1752268860743</created>
-      <option name="number" value="00001" />
-      <option name="presentableId" value="LOCAL-00001" />
-      <option name="project" value="LOCAL" />
-      <updated>1752268860743</updated>
-    </task>
-    <task id="LOCAL-00002" summary="ai">
-      <option name="closed" value="true" />
-      <created>1752342104977</created>
-      <option name="number" value="00002" />
-      <option name="presentableId" value="LOCAL-00002" />
-      <option name="project" value="LOCAL" />
-      <updated>1752342104977</updated>
-    </task>
-    <task id="LOCAL-00003" summary="ai">
-      <option name="closed" value="true" />
-      <created>1752342292429</created>
-      <option name="number" value="00003" />
-      <option name="presentableId" value="LOCAL-00003" />
-      <option name="project" value="LOCAL" />
-      <updated>1752342292430</updated>
-    </task>
-    <task id="LOCAL-00004" summary="ai">
-      <option name="closed" value="true" />
-      <created>1752402561309</created>
-      <option name="number" value="00004" />
-      <option name="presentableId" value="LOCAL-00004" />
-      <option name="project" value="LOCAL" />
-      <updated>1752402561309</updated>
-    </task>
-    <task id="LOCAL-00005" summary="ai">
-      <option name="closed" value="true" />
-      <created>1752415058240</created>
-      <option name="number" value="00005" />
-      <option name="presentableId" value="LOCAL-00005" />
-      <option name="project" value="LOCAL" />
-      <updated>1752415058240</updated>
-    </task>
-    <task id="LOCAL-00006" summary="ai">
-      <option name="closed" value="true" />
-      <created>1752426866591</created>
-      <option name="number" value="00006" />
-      <option name="presentableId" value="LOCAL-00006" />
-      <option name="project" value="LOCAL" />
-      <updated>1752426866591</updated>
-    </task>
-    <task id="LOCAL-00007" summary="ai">
-      <option name="closed" value="true" />
-      <created>1752459040448</created>
-      <option name="number" value="00007" />
-      <option name="presentableId" value="LOCAL-00007" />
-      <option name="project" value="LOCAL" />
-      <updated>1752459040448</updated>
-    </task>
-    <task id="LOCAL-00008" summary="ai">
-      <option name="closed" value="true" />
-      <created>1752460238673</created>
-      <option name="number" value="00008" />
-      <option name="presentableId" value="LOCAL-00008" />
-      <option name="project" value="LOCAL" />
-      <updated>1752460238673</updated>
-    </task>
-    <task id="LOCAL-00009" summary="ai">
-      <option name="closed" value="true" />
-      <created>1752467180833</created>
-      <option name="number" value="00009" />
-      <option name="presentableId" value="LOCAL-00009" />
-      <option name="project" value="LOCAL" />
-      <updated>1752467180833</updated>
-    </task>
-    <task id="LOCAL-00010" summary="ai">
-      <option name="closed" value="true" />
-      <created>1752483280303</created>
-      <option name="number" value="00010" />
-      <option name="presentableId" value="LOCAL-00010" />
-      <option name="project" value="LOCAL" />
-      <updated>1752483280303</updated>
-    </task>
-    <task id="LOCAL-00011" summary="ai">
-      <option name="closed" value="true" />
-      <created>1752500523141</created>
-      <option name="number" value="00011" />
-      <option name="presentableId" value="LOCAL-00011" />
-      <option name="project" value="LOCAL" />
-      <updated>1752500523141</updated>
-    </task>
-    <task id="LOCAL-00012" summary="ai">
-      <option name="closed" value="true" />
-      <created>1752501348261</created>
-      <option name="number" value="00012" />
-      <option name="presentableId" value="LOCAL-00012" />
-      <option name="project" value="LOCAL" />
-      <updated>1752501348262</updated>
-    </task>
-    <task id="LOCAL-00013" summary="ai人脸">
-      <option name="closed" value="true" />
-      <created>1752516573682</created>
-      <option name="number" value="00013" />
-      <option name="presentableId" value="LOCAL-00013" />
-      <option name="project" value="LOCAL" />
-      <updated>1752516573682</updated>
-    </task>
-    <task id="LOCAL-00014" summary="ai人脸">
-      <option name="closed" value="true" />
-      <created>1752574317692</created>
-      <option name="number" value="00014" />
-      <option name="presentableId" value="LOCAL-00014" />
-      <option name="project" value="LOCAL" />
-      <updated>1752574317692</updated>
-    </task>
-    <task id="LOCAL-00015" summary="ai人脸">
-      <option name="closed" value="true" />
-      <created>1752578059890</created>
-      <option name="number" value="00015" />
-      <option name="presentableId" value="LOCAL-00015" />
-      <option name="project" value="LOCAL" />
-      <updated>1752578059890</updated>
-    </task>
-    <task id="LOCAL-00016" summary="ai人脸">
-      <option name="closed" value="true" />
-      <created>1752578066888</created>
-      <option name="number" value="00016" />
-      <option name="presentableId" value="LOCAL-00016" />
-      <option name="project" value="LOCAL" />
-      <updated>1752578066888</updated>
-    </task>
-    <task id="LOCAL-00017" summary="我成了我成了！！！！">
-      <option name="closed" value="true" />
-      <created>1752600915859</created>
-      <option name="number" value="00017" />
-      <option name="presentableId" value="LOCAL-00017" />
-      <option name="project" value="LOCAL" />
-      <updated>1752600915859</updated>
-    </task>
-    <task id="LOCAL-00018" summary="我成了我成了！！！！">
-      <option name="closed" value="true" />
-      <created>1752606353191</created>
-      <option name="number" value="00018" />
-      <option name="presentableId" value="LOCAL-00018" />
-      <option name="project" value="LOCAL" />
-      <updated>1752606353191</updated>
-    </task>
-    <task id="LOCAL-00019" summary="我成了我成了！！！！">
-      <option name="closed" value="true" />
-      <created>1752606362339</created>
-      <option name="number" value="00019" />
-      <option name="presentableId" value="LOCAL-00019" />
-      <option name="project" value="LOCAL" />
-      <updated>1752606362339</updated>
-    </task>
-    <task id="LOCAL-00020" summary="我成了我成了！！！！">
-      <option name="closed" value="true" />
-      <created>1752606416045</created>
-      <option name="number" value="00020" />
-      <option name="presentableId" value="LOCAL-00020" />
-      <option name="project" value="LOCAL" />
-      <updated>1752606416045</updated>
-    </task>
-    <task id="LOCAL-00021" summary="我成了我成了！！！！">
-      <option name="closed" value="true" />
-      <created>1752631031200</created>
-      <option name="number" value="00021" />
-      <option name="presentableId" value="LOCAL-00021" />
-      <option name="project" value="LOCAL" />
-      <updated>1752631031200</updated>
-    </task>
-    <task id="LOCAL-00022" summary="我成了我成了！！！！">
-      <option name="closed" value="true" />
-      <created>1752636462878</created>
-      <option name="number" value="00022" />
-      <option name="presentableId" value="LOCAL-00022" />
-      <option name="project" value="LOCAL" />
-      <updated>1752636462878</updated>
-    </task>
-    <option name="localTasksCounter" value="23" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
     <option name="version" value="3" />
   </component>
-  <component name="VcsManagerConfiguration">
-    <MESSAGE value="ai" />
-    <MESSAGE value="ai人脸" />
-    <MESSAGE value="我成了我成了！！！！" />
-    <option name="LAST_COMMIT_MESSAGE" value="我成了我成了！！！！" />
-  </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
-    <SUITE FILE_PATH="coverage/SmartEye_Station_Guard$Backend__Daphne_.coverage" NAME="Backend (Daphne) 覆盖结果" MODIFIED="1752644071057" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="G:\Web\SmartEye-Station-Guard\smart_station_platform\backend" />
-    <SUITE FILE_PATH="coverage/SmartEye_Station_Guard_iml$start_nginx.coverage" NAME="start_nginx 覆盖结果" MODIFIED="1752496311272" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
-    <SUITE FILE_PATH="coverage/SmartEye_Station_Guard$AI_Service__FastAPI_.coverage" NAME="AI Service (FastAPI) 覆盖结果" MODIFIED="1752644067783" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="G:\Web\SmartEye-Station-Guard\smart_station_platform\ai_service" />
-    <SUITE FILE_PATH="coverage/SmartEye_Station_Guard_iml$rtmp_to_flv.coverage" NAME="rtmp_to_flv 覆盖结果" MODIFIED="1752495062669" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
-    <SUITE FILE_PATH="coverage/SmartEye_Station_Guard_iml$acoustic_detection.coverage" NAME="acoustic_detection 覆盖结果" MODIFIED="1752590029538" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/smart_station_platform/ai_service/core" />
-    <SUITE FILE_PATH="coverage/SmartEye_Station_Guard_iml$nginx.coverage" NAME="启动nginx 覆盖结果" MODIFIED="1752592934257" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="G:\Web\SmartEye-Station-Guard" />
-    <SUITE FILE_PATH="coverage/SmartEye_Station_Guard_iml$start_all_services.coverage" NAME="start_all_services 覆盖结果" MODIFIED="1752263952710" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
-    <SUITE FILE_PATH="coverage/SmartEye_Station_Guard_iml$Backend__Daphne_.coverage" NAME="Backend (Daphne) 覆盖结果" MODIFIED="1752606100019" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="G:\Web\SmartEye-Station-Guard\smart_station_platform\backend" />
-    <SUITE FILE_PATH="coverage/SmartEye_Station_Guard_iml$AI_Service__FastAPI_.coverage" NAME="AI Service (FastAPI) 覆盖结果" MODIFIED="1752606100244" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="G:\Web\SmartEye-Station-Guard\smart_station_platform\ai_service" />
-    <SUITE FILE_PATH="coverage/SmartEye_Station_Guard_iml$.coverage" NAME="推流测试 覆盖结果" MODIFIED="1752266269841" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="G:\Web\SmartEye-Station-Guard" />
-    <SUITE FILE_PATH="coverage/SmartEye_Station_Guard_iml$test_rtmp_stream.coverage" NAME="test_rtmp_stream 覆盖结果" MODIFIED="1752311296298" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
-    <SUITE FILE_PATH="coverage/SmartEye_Station_Guard$check_gpu.coverage" NAME="check_gpu 覆盖结果" MODIFIED="1752634426371" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
-    <SUITE FILE_PATH="coverage/SmartEye_Station_Guard_iml$download_model.coverage" NAME="download_model 覆盖结果" MODIFIED="1752545658166" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/smart_station_platform/ai_service" />
-    <SUITE FILE_PATH="coverage/SmartEye_Station_Guard$nginx.coverage" NAME="启动nginx 覆盖结果" MODIFIED="1752637487648" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="G:\Web\SmartEye-Station-Guard" />
+    <SUITE FILE_PATH="coverage/SmartEye_Station_Guard$Backend__Daphne_.coverage" NAME="Backend (Daphne) 覆盖结果" MODIFIED="1752765360692" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="G:\Web\SmartEye-Station-Guard\smart_station_platform\backend" />
+    <SUITE FILE_PATH="coverage/SmartEye_Station_Guard$AI_Service__FastAPI_.coverage" NAME="AI Service (FastAPI) 覆盖结果" MODIFIED="1752763749134" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="G:\Web\SmartEye-Station-Guard\smart_station_platform\ai_service" />
   </component>
 </project>

@@ -34,18 +34,20 @@ class AIAnalysisResult(BaseModel):
         extra='allow'  # 允许额外的字段，以便更灵活地传递details等
     )
 
-    camera_id: str = Field(..., description="摄像头ID或传感器ID，例如 'camera_001', 'rtmp_stream_main'")
-    event_type: str = Field(...,
-                            description="事件类型，如 'person_fall', 'unknown_face_detected', 'fire_detection_fire' 等")
-    timestamp: str = Field(default_factory=lambda: datetime.datetime.now().isoformat(),
-                           description="事件发生时的ISO 8601格式时间戳")
-    location: Dict[str, Any] = Field(default_factory=dict, description="事件位置信息，例如边界框、区域描述等")
-    confidence: float = Field(default=0.0, ge=0.0, le=1.0, description="AI检测的置信度，0-1之间")
-
-    # 可选字段
-    image_snapshot_url: Optional[str] = Field(None, description="事件快照图片URL")
-    video_clip_url: Optional[str] = Field(None, description="事件视频片段URL")
-    details: Optional[Dict[str, Any]] = Field(default_factory=dict, description="包含事件特定详细信息的字典")
+    camera_id: str = Field(..., description="摄像头ID")
+    event_type: str = Field(..., description="事件类型", examples=[
+        "fire_detected", "smoke_detected", "person_detected", 
+        "fall_detected", "fighting_detected", 
+        "unknown_person_detected"
+    ])
+    timestamp: str = Field(..., description="事件发生的时间戳 (ISO格式)")
+    location: Optional[Dict[str, Any]] = Field({}, description="事件发生的位置信息")
+    confidence: float = Field(..., description="事件检测的置信度")
+    image_snapshot_url: Optional[str] = Field(None, description="事件快照图片的URL")
+    video_clip_url: Optional[str] = Field(None, description="事件录像片段的URL")
+    details: Optional[Dict[str, Any]] = Field({}, description="事件的详细信息")
+    image_data: Optional[str] = Field(None, description="事件快照的Base64编码图像")
+    metadata: Optional[Dict[str, Any]] = Field({}, description="其他元数据")
 
 
 class CameraConfig(BaseModel):

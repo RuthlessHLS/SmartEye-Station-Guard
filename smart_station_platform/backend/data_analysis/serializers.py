@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from .models import (
     TrafficData, VehicleTrajectory, WeatherData, 
-    TrafficTrend, DistanceDistribution, DataScreenConfig
+    TrafficTrend, DistanceDistribution, DataScreenConfig, DailyReport
 )
 
 class TrafficDataSerializer(serializers.ModelSerializer):
@@ -52,3 +52,14 @@ class TrajectoryDataSerializer(serializers.Serializer):
     """轨迹数据序列化器"""
     trajectory = serializers.ListField(child=serializers.ListField())
     vehicle_info = serializers.DictField(required=False) 
+
+class RealTimeDataSerializer(serializers.Serializer):
+    """实时数据序列化器"""
+    vehicle_flow = serializers.IntegerField()
+    person_flow = serializers.IntegerField()
+
+class DailyReportSerializer(serializers.ModelSerializer):
+    """AI日报的序列化器"""
+    class Meta:
+        model = DailyReport
+        fields = '__all__' 

@@ -150,26 +150,44 @@ class AIResultReceiveView(APIView):
 
     @swagger_auto_schema(request_body=AIResultReceiveSerializer)
     def post(self, request, *args, **kwargs):
+        logger.info(f"[ALERT] Received AI alert result: {request.data.get('event_type', 'unknown')}")
         serializer = AIResultReceiveSerializer(data=request.data)
+        
         if not serializer.is_valid():
-            logger.error(f"AI结果序列化失败: {serializer.errors}")
+            logger.error(f"[ERROR] AI result serialization failed: {serializer.errors}")
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         
-        alert = serializer.save()
-        _send_websocket_notification(alert, 'new_alert')
-        return Response(AlertDetailSerializer(alert).data, status=status.HTTP_201_CREATED)
+        try:
+            # 保存告警到数据库
+            alert = serializer.save()
+            logger.info(f"[SUCCESS] AI alert saved successfully: ID={alert.id}, Type={alert.event_type}")
+            
+            # 通过WebSocket发送通知
+            _send_websocket_notification(alert, 'new_alert')
+            logger.info(f"[BROADCAST] WebSocket notification sent successfully: ID={alert.id}")
+            
+            return Response(AlertDetailSerializer(alert).data, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            logger.exception(f"[ERROR] An error occurred while saving the AI alert: {str(e)}")
+            return Response(
+                {"error": f"Internal server error: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 class WebSocketBroadcastView(APIView):
     permission_classes = [AllowAny]  # 注意：在生产中应使用更安全的权限
 
     def post(self, request, *args, **kwargs):
         # AI服务发送的数据结构是: {"camera_id": "...", "payload": {"type": "...", "data": {...}}}
-        # 我们关心的是 'payload' 的内容
-        payload = request.data.get('payload')
-        logger.info(f"Broadcast view received payload: {payload}")
+        # 只记录非检测结果的WebSocket广播
+        payload = request.data.get('payload', {})
+        message_type = payload.get('type', '')
+        
+        if message_type != 'detection_result':
+            logger.info(f"[BROADCAST] Received broadcast request: camera_id={request.data.get('camera_id')}, message_type={message_type}")
 
         if not payload or not isinstance(payload, dict):
-            logger.error(f"Broadcast view received invalid or missing 'payload': {request.data}")
+            logger.error(f"[ERROR] Invalid data received in broadcast view: {request.data}")
             return Response(
                 {"error": "A valid 'payload' object is required."},
                 status=status.HTTP_400_BAD_REQUEST
@@ -177,18 +195,26 @@ class WebSocketBroadcastView(APIView):
 
         # payload 内部包含了前端需要的所有信息 (e.g., {"type": "...", "data": {...}})
         message_to_send = payload
-
-        logger.info(f"Broadcasting message to 'alerts' group: {message_to_send}")
-
-        channel_layer = get_channel_layer()
-        async_to_sync(channel_layer.group_send)(
-            "alerts",
-            {
-                "type": "send_alert",
-                "message": message_to_send,
-            },
-        )
-        return Response({"status": "ok", "message": "Broadcast successful"}, status=status.HTTP_200_OK)
+        camera_id = request.data.get('camera_id', 'unknown')
+        group_name = f"camera_{camera_id}"
+        
+        try:
+            channel_layer = get_channel_layer()
+            # 发送到特定摄像头的组
+            async_to_sync(channel_layer.group_send)(
+                group_name,
+                {
+                    "type": "broadcast_message",
+                    "message": message_to_send,
+                },
+            )
+            return Response({"status": "ok", "message": "Broadcast successful"}, status=status.HTTP_200_OK)
+        except Exception as e:
+            logger.error(f"[ERROR] WebSocket broadcast failed: {str(e)}")
+            return Response(
+                {"status": "error", "message": f"Broadcast failed: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 # --- 辅助函数 ---
 def _send_websocket_notification(alert, action_type):

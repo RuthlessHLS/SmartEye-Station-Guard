@@ -140,7 +140,8 @@ class BehaviorDetector:
         self.fight_proximity_threshold = 100 # 打架人员之间的最大距离
         self.fight_motion_threshold = 120 # 打架人员的最低移动速度
 
-    def detect_behavior(self, frame: np.ndarray, detections: List[Dict]) -> List[Dict]:
+    def detect_behavior(self, frame: np.ndarray, detections: List[Dict], 
+                        enable_fall: bool = True, enable_fight: bool = True) -> List[Dict]:
         """
         分析检测列表，判断跌倒和打架行为。
         """
@@ -154,13 +155,15 @@ class BehaviorDetector:
         detected_behaviors = []
 
         # 4. 检测单人行为（跌倒）
-        fall_results = self._detect_falls(tracked_objects)
-        detected_behaviors.extend(fall_results)
+        if enable_fall:
+            fall_results = self._detect_falls(tracked_objects)
+            detected_behaviors.extend(fall_results)
 
         # 5. 检测多人行为（打架）
-        fight_result = self._detect_fights(tracked_objects)
-        if fight_result:
-            detected_behaviors.append(fight_result)
+        if enable_fight:
+            fight_result = self._detect_fights(tracked_objects)
+            if fight_result:
+                detected_behaviors.append(fight_result)
 
         # 6. 为未参与特殊事件的人员添加默认的 'active' 状态
         active_ids_in_events = set()
@@ -232,7 +235,8 @@ class BehaviorDetector:
                 self.tracker.objects[obj_id]['has_fallen'] = True
                 fall_behaviors.append({
                     "person_id": obj_id, "box": box, "behavior": "fall_down",
-                    "is_abnormal": True, "need_alert": True, "confidence": 0.85
+                    "is_abnormal": True, "need_alert": True, "confidence": 0.85,
+                    "event_type": "fall_detected"  # 为告警系统提供事件类型
                 })
                 self.fall_counters[obj_id] = 0 # 确认后重置计数器
 
@@ -315,7 +319,7 @@ class BehaviorDetector:
                 "is_abnormal": True,
                 "need_alert": True,
                 "confidence": 0.80,
-                "details": "检测到多个目标在近距离内高速移动。"
+                "event_type": "fighting_detected"  # 为告警系统提供事件类型
             }
             
         return None
