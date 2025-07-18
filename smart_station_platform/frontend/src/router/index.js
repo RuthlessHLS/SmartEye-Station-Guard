@@ -15,6 +15,7 @@ import UserManagement from '../views/UserManagement.vue'
 import UserProfile from '../views/UserProfile.vue'
 import FaceRegistration from '../views/FaceRegistration.vue'
 import FaceLogin from '../views/FaceLogin.vue'
+import VideoReplay from '../views/VideoReplay.vue'
 
 
 const router = createRouter({
@@ -102,6 +103,12 @@ const router = createRouter({
       path: '/users',
       name: 'UserManagement',
       component: UserManagement,
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/replay',
+      name: 'VideoReplay',
+      component: VideoReplay,
       meta: { requiresAuth: true }
     },
 

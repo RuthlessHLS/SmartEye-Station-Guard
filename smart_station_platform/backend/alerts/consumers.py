@@ -18,8 +18,8 @@ class DateTimeEncoder(json.JSONEncoder):
 
 class AlertConsumer(AsyncWebsocketConsumer):
     async def connect(self):
-        # 从URL中获取camera_id
-        self.camera_id = self.scope['url_route']['kwargs']['camera_id']
+        # camera_id may be optional; default to 'all' when not provided
+        self.camera_id = self.scope['url_route']['kwargs'].get('camera_id', 'all')
         self.group_name = f"camera_{self.camera_id}"
 
         # 将客户端加入摄像头对应的组
@@ -151,3 +151,16 @@ class AlertConsumer(AsyncWebsocketConsumer):
             }, cls=DateTimeEncoder))
         except Exception as e:
             logger.error(f"[ERROR] Failed to send throttled alert: {str(e)}")
+
+    async def alert_update(self, event):
+        """Handle alert update events (status changes, edits)"""
+        try:
+            alert_data = event.get('data', {}) or event.get('message', {})
+            # Log only important info
+            logger.info(f"[UPDATE] Sending alert update to WebSocket client: {alert_data.get('id', 'unknown')}")
+            await self.send(json.dumps({
+                'type': 'alert_update',
+                'data': alert_data
+            }, cls=DateTimeEncoder))
+        except Exception as e:
+            logger.error(f"[ERROR] Failed to send alert update: {str(e)}")

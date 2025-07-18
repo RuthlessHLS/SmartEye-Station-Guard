@@ -5,5 +5,5 @@ from . import consumers # 导入当前应用下的 consumers 模块，假设您�
 
 websocket_urlpatterns = [
     # 【最终修复】使用包含完整路径的、不带开头锚点'^'的正则表达式，以确保匹配成功
-    re_path(r'ws/alerts/(?P<camera_id>[^/]+)/?$', consumers.AlertConsumer.as_asgi()),
+    re_path(r'ws/alerts/(?:(?P<camera_id>[^/]+)/)?$', consumers.AlertConsumer.as_asgi()),
 ]

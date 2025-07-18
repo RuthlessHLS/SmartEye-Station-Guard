@@ -40,6 +40,9 @@ backendService.interceptors.request.use(
     const token = localStorage.getItem('access_token');
     if (token) {
       config.headers['Authorization'] = 'Bearer ' + token;
+      console.log('添加认证头到请求:', config.url);
+    } else {
+      console.warn('没有找到认证token，请求可能失败:', config.url);
     }
     return config;
   },
@@ -234,6 +237,11 @@ const api = {
     update: (id, data) => backendService.patch(`/api/alerts/${id}/`, data),
     handle: (id, data) => backendService.patch(`/api/alerts/${id}/handle/`, data),
   },
+
+  // 视频回放接口
+  playback: {
+    get: (params) => backendService.get('/api/cameras/playback/', { params })
+  },
   // AI服务相关接口
   ai: {
     startStream: (config) => {
@@ -365,6 +373,73 @@ const api = {
         url: `/detection/stabilization/preset/${preset}`,
         method: 'post',
         data: { camera_id }
+      });
+    },
+    // 危险区域相关接口
+    dangerZone: {
+      updateZones: (camera_id, zones) => {
+        return requestWithRetry(aiService, {
+          url: '/danger_zone/update',
+          method: 'post',
+          data: { camera_id, zones }
+        });
+      },
+      getStatus: (camera_id) => {
+        return requestWithRetry(aiService, {
+          url: `/danger_zone/status/${camera_id}`,
+          method: 'get'
+        });
+      }
+    }
+  },
+
+  // 危险区域相关接口
+  dangerZone: {
+    // 获取摄像头的危险区域列表 (从AI服务文件)
+    getZones: (cameraId) => {
+      return requestWithRetry(aiService, {
+        url: '/danger_zone/list_files',
+        method: 'get',
+        params: { camera_id: cameraId }
+      }).then(res => {
+        // 返回提取后的 zone_data 数组，保持与原接口一致
+        return res.files ? res.files.map(f => f.zone_data) : [];
+      });
+    },
+
+    // 创建新的危险区域 (保存到文件)
+    createZone: (zoneData) => {
+      return requestWithRetry(aiService, {
+        url: '/danger_zone/save_to_file',
+        method: 'post',
+        data: zoneData
+      });
+    },
+
+    // 更新危险区域
+    updateZone: (zoneId, zoneData) => backendService.put(`/api/cameras/dangerous-areas/${zoneId}/`, zoneData),
+
+    // 删除危险区域
+    deleteZone: (zoneId) => backendService.delete(`/api/cameras/dangerous-areas/${zoneId}/`),
+
+    // 切换危险区域状态
+    toggleZoneStatus: (zoneId) => backendService.post(`/api/cameras/dangerous-areas/${zoneId}/toggle_status/`),
+
+    // 新增：保存危险区域到文件
+    saveToFile: (zoneData) => {
+      return requestWithRetry(aiService, {
+        url: '/danger_zone/save_to_file',
+        method: 'post',
+        data: zoneData
+      });
+    },
+
+    // 新增：获取危险区域文件列表
+    getFileList: (cameraId) => {
+      return requestWithRetry(aiService, {
+        url: '/danger_zone/list_files',
+        method: 'get',
+        params: { camera_id: cameraId }
       });
     }
   }

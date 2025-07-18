@@ -14,7 +14,7 @@ export function useWebSocket(url, options = {}) {
     reconnectInterval: 5000,       // 重连间隔(毫秒)
     reconnectAttempts: 10,         // 最大重连次数
     autoReconnect: true,           // 是否自动重连
-    heartbeatInterval: 30000,      // 心跳间隔(毫秒)
+    heartbeatInterval: 10000,      // 心跳间隔(毫秒)  - 调低至10s保持连接
     heartbeatMessage: 'ping',      // 心跳消息内容
     debug: false                   // 是否启用调试日志
   }

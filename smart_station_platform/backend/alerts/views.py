@@ -240,13 +240,26 @@ def _send_websocket_notification(alert, action_type):
             'update': 'alert_update'
         }
         
+        event_type_name = event_map.get(action_type, "alert_update")
+        payload = {
+            "type": event_type_name,
+            "data": alert_data
+        }
+        if action_type != 'new_alert':
+            payload["action"] = action_type
+
         async_to_sync(channel_layer.group_send)(
             group_name,
-            {
-                "type": event_map.get(action_type, "alert_update"),
-                "message": {"action": action_type, "alert": alert_data}
-            }
+            payload
         )
+
+        # 额外广播到全局组，供无需指定摄像头的客户端使用
+        global_group = "camera_all"
+        if group_name != global_group:
+            async_to_sync(channel_layer.group_send)(
+                global_group,
+                payload
+            )
     except Exception as e:
         logger.error(f"发送WebSocket通知时发生错误: {e}", exc_info=True)
 

@@ -33,7 +33,11 @@ class LivenessSession:
             "shake_head": self._detect_shake_head,
             "nod_head": self._detect_nod_head,
         }
-        self.challenges = random.sample(list(self.action_detectors.keys()), k=num_challenges)
+        # 若只需要一个挑战，固定为 open_mouth 以降低用户门槛
+        if num_challenges == 1:
+            self.challenges = [CHALLENGE_OPEN_MOUTH]
+        else:
+            self.challenges = random.sample(list(self.action_detectors.keys()), k=num_challenges)
         
         # --- 增强: 为每个动作设置更合理的阈值和参数 ---
         # 眼睛宽高比 (EAR) 低于此值表示眨眼

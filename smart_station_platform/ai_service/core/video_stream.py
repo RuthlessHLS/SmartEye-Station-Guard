@@ -16,8 +16,9 @@ from typing import Optional, Dict, Tuple, Any
 
 # 设置日志
 logger = logging.getLogger(__name__)
-# 配置日志级别和格式，确保能在控制台看到详细信息
+# 配置日志级别和格式，确保能在控制台看到详细信息，并将此模块提升到 DEBUG
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger.setLevel(logging.DEBUG)  # 打开DEBUG级别输出
 
 
 class VideoStream:
@@ -68,6 +69,16 @@ class VideoStream:
         self.cap = cv2.VideoCapture(self.stream_url)
         if not self.cap.isOpened():
             logger.error(f"在初始化阶段无法打开视频流: {self.stream_url}。将在start()时重试。")
+        
+        # --- DEBUG: 尝试读取首帧，打印像素均值，帮助判断是否黑帧 ---
+        try:
+            _dbg_ret, _dbg_frame = self.cap.read()
+            if _dbg_ret and _dbg_frame is not None:
+                logger.warning(f"[DEBUG] 初始帧均值({self.camera_id}): {_dbg_frame.mean():.1f}")
+            else:
+                logger.error(f"[DEBUG] cap.read() 失败，无法读取初始帧 ({self.camera_id})")
+        except Exception as _e:
+            logger.error(f"[DEBUG] 读取初始帧时异常 ({self.camera_id}): {_e}")
 
     async def test_connection(self) -> bool:
         """
@@ -102,7 +113,12 @@ class VideoStream:
         logger.info(f"帧读取线程启动 for {self.camera_id}.")
         # 【修复 2.1】在线程内部创建并尝试打开 cv2.VideoCapture
         # 使用一个局部变量 cap_thread 来打开视频流
-        cap_thread = cv2.VideoCapture(self.stream_url)
+        cap_thread = cv2.VideoCapture(self.stream_url, cv2.CAP_FFMPEG)
+        # 尽量让 FFmpeg 解码器使用最小缓冲，降低延迟
+        try:
+            cap_thread.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        except Exception:
+            pass  # 某些 OpenCV 版本不支持此属性，忽略
 
         if not cap_thread.isOpened():
             logger.error(f"帧读取线程无法打开视频流: {self.stream_url}")
@@ -113,17 +129,31 @@ class VideoStream:
         # 这确保了主线程在检查 self.cap.isOpened() 时，它已经被正确初始化
         self.cap = cap_thread
         # 【修复 2.1 结束】
-
+        # --- DEBUG: 初始化帧计数器 ---
+        frame_count = 0
+         
         while self.is_running:
             # 【核心修复】直接从 self.cap 读取，不再需要在线程内重复打开
             ret, frame = self.cap.read()
+            # --- DEBUG: 如果成功读取帧则计数并周期性打印调试信息 ---
+            if ret:
+                frame_count += 1
+                if frame_count % 60 == 0:
+                    try:
+                        logger.debug(f"[DEBUG] {self.camera_id} 已读取 {frame_count} 帧, 当前帧均值: {frame.mean():.1f}, 缓冲区大小: {self._frame_buffer.qsize()}")
+                    except Exception:
+                        pass  # 避免调试语句影响主流程
             if not ret:
                 logger.warning(f"从视频流读取帧失败，可能流已结束或中断 for {self.camera_id}。尝试重新连接...")
                 # 检查 self.cap 是否仍处于打开状态，避免重复释放已关闭的捕获器
                 if self.cap and self.cap.isOpened():
                     self.cap.release()
                 time.sleep(1)  # 等待一秒后尝试重新连接
-                self.cap = cv2.VideoCapture(self.stream_url)
+                self.cap = cv2.VideoCapture(self.stream_url, cv2.CAP_FFMPEG)
+                try:
+                    self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                except Exception:
+                    pass
                 if not self.cap.isOpened():
                     logger.error(f"重新连接视频流失败 for {self.camera_id}，停止帧读取线程。")
                     self.is_running = False

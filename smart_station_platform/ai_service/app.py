@@ -52,7 +52,7 @@ LOG_CONFIG = {
     },
     'handlers': {
         'console': {
-            'level': 'INFO',
+            'level': 'WARNING',  # 仅输出WARNING及以上级别到控制台，减少冗余
             'formatter': 'standard',
             'class': 'logging.StreamHandler',
             'filters': ['quiet_webrtc', 'quiet_ice'],
@@ -69,7 +69,7 @@ LOG_CONFIG = {
     'loggers': {
         '': {  # root logger
             'handlers': ['console', 'file'],
-            'level': 'INFO',
+            'level': 'WARNING',  # 默认WARN，业务模块单独提级
         },
         'aioice.ice': {
             'handlers': ['console', 'file'],
@@ -78,7 +78,7 @@ LOG_CONFIG = {
         },
         'smart_station_platform.ai_service.core.webrtc_pusher': {
             'handlers': ['console', 'file'],
-            'level': 'INFO',  # 改为INFO，忽略DEBUG级别的帧发送日志
+            'level': 'INFO',  # 保留关键信息
             'propagate': False,
         },
         'httpx': {
@@ -123,7 +123,17 @@ from smart_station_platform.ai_service.core.multi_object_tracker import DeepSORT
 from smart_station_platform.ai_service.core.danger_zone_detection import DangerZoneDetector
 from smart_station_platform.ai_service.core.liveness_detector import LivenessSession
 from smart_station_platform.ai_service.models.alert_models import AIAnalysisResult, CameraConfig, SystemStatus
-from smart_station_platform.ai_service.core.draw_utils import draw_detections
+# --- 新增: 导入声学检测器 ---
+from smart_station_platform.ai_service.core.draw_utils import draw_detections, draw_zones
+from smart_station_platform.ai_service.core.acoustic_detection import SmartAcousticDetector
+
+# 声学事件到后端事件类型的默认映射
+DEFAULT_ACOUSTIC_EVENTS_MAP = {
+    "Screaming": "abnormal_sound_scream",
+    "Shouting": "abnormal_sound_yell",
+    "Yell": "abnormal_sound_yell",
+    "Glass_break": "abnormal_sound_glass_break",
+}
 from smart_station_platform.ai_service.core.webrtc_pusher import webrtc_pusher, start_cleanup_task
 
 # --- 全局变量和模型初始化 ---
@@ -135,7 +145,7 @@ danger_zone_detector: Optional[DangerZoneDetector] = None
 app_config = None
 service_manager = None
 known_faces_path = "smart_station_platform/ai_service/assets/known_faces"
-DETECTION_FRAME_SKIP = 2  # 每 X 帧进行一次AI分析，以平衡性能和实时性
+DETECTION_FRAME_SKIP = 2  # 每4帧进行一次AI推理（降低频率，提高稳定性）
 
 
 # --- 配置管理 ---
@@ -146,17 +156,7 @@ class AppConfig:
         # 从 .env 文件加载环境变量
         current_dir = os.path.dirname(os.path.abspath(__file__))
         
-        # 【最终修复】不再加载.env文件，以避免环境差异导致密钥不匹配
-        # dotenv_path = os.path.join(current_dir, '.env')
-        # if os.path.exists(dotenv_path):
-        #     print(f"--- 正在从 '{dotenv_path}' 加载环境变量 ---")
-        #     load_dotenv(dotenv_path=dotenv_path)
-        # else:
-        #     print(f"--- 警告: 未找到 .env 文件 at '{dotenv_path}'，将使用系统环境变量 ---")
-        #     load_dotenv()
 
-        # 【核心修复】不再使用环境变量，而是计算相对路径
-        # self.ASSET_BASE_PATH = os.getenv("G_DRIVE_ASSET_PATH", "/app/assets")
         self.ASSET_BASE_PATH = os.path.normpath(os.path.join(current_dir, 'assets'))
         # 【最终修复】硬编码密钥以确保与后端完全一致
         self.   INTERNAL_SERVICE_API_KEY = 'a-secure-default-key-for-dev'
@@ -167,6 +167,8 @@ class AppConfig:
         self.BACKEND_INTERNAL_LOGIN_URL = os.getenv('BACKEND_INTERNAL_LOGIN_URL', 'http://localhost:8000/api/users/login/internal/')
         self.ENABLE_SOUND_DETECTION = os.getenv("ENABLE_SOUND_DETECTION", "false").lower() == "true"
         self.FASTAPI_TIMEOUT_SECONDS = float(os.getenv("FASTAPI_TIMEOUT_SECONDS", "120.0"))
+        self.RTMP_BASE_URLS = os.getenv('RTMP_BASE_URLS', 'rtmp://120.46.158.54:1935/live;rtmp://localhost:1935/live')
+        self.RTMP_OPTIONS = [url.strip() for url in self.RTMP_BASE_URLS.split(';') if url.strip()]
 
         print(f"--- 使用资源根目录: {self.ASSET_BASE_PATH} ---")
 
@@ -181,6 +183,7 @@ class AISettings(BaseModel):
     # --- 新增行为检测细分选项 ---
     fall_detection: Optional[bool] = Field(None, description="是否启用跌倒检测")
     fighting_detection: Optional[bool] = Field(None, description="是否启用打架检测")
+    smoking_detection: Optional[bool] = Field(None, description="是否启用抽烟检测")
     # ---
     realtime_mode: Optional[bool] = None
     face_confidence_threshold: Optional[float] = Field(None, ge=0.0, le=1.0)
@@ -209,12 +212,18 @@ class AIServiceManager:
         self._stabilization_config: Dict[str, Dict] = {}
         self._video_webrtc: Dict[str, str] = {}
 
+        # --- 新增: 声学检测器实例缓存 ---
+        self._acoustic_detectors: Dict[str, SmartAcousticDetector] = {}
+
+        # --- 新增: 危险区域检测器 (由生命周期代码注入) ---
+        self.danger_zone_detector: Optional[DangerZoneDetector] = None
+
     def get_ai_settings(self, camera_id: str) -> Dict[str, Any]:
         """获取指定摄像头的AI分析配置，如果不存在则返回默认配置。"""
         default_settings = {
             "face_recognition": True, "object_detection": True, "behavior_analysis": False,
             "fire_detection": True, "sound_detection": False, "liveness_detection": True,
-            "fall_detection": False, "fighting_detection": False, # 默认关闭
+            "fall_detection": False, "fighting_detection": False, "smoking_detection": False, # 默认关闭
             "realtime_mode": True, "face_confidence_threshold": 0.6, "object_confidence_threshold": 0.4,
         }
         return self._ai_settings.get(camera_id, default_settings.copy())
@@ -294,6 +303,25 @@ class AIServiceManager:
             logger.error(f"请求用户 '{username}' 的token失败: {e}", exc_info=True)
             return None
 
+    async def get_user_token_with_face_verification(self, username: str, face_verification_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """从主后端获取用户的登录令牌，包含人脸识别验证数据。"""
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    self.config.BACKEND_INTERNAL_LOGIN_URL, 
+                    json={
+                        'username': username,
+                        'face_verification_data': face_verification_data
+                    },
+                    headers={'X-Internal-API-Key': self.config.INTERNAL_SERVICE_API_KEY}, 
+                    timeout=5
+                )
+                response.raise_for_status()
+                return response.json()
+        except httpx.RequestError as e:
+            logger.error(f"请求用户 '{username}' 的token失败: {e}", exc_info=True)
+            return None
+
     def get_stream_key_from_url(self, url: str, source_type: str) -> Optional[str]:
         """从播放URL中提取流密钥。"""
         try:
@@ -308,7 +336,9 @@ class AIServiceManager:
         self, frame: np.ndarray, camera_id: str, enable_face_recognition: bool,
         enable_object_detection: bool, enable_behavior_detection: bool,
         enable_fire_detection: bool, enable_liveness_detection: bool, 
-        enable_fall_detection: bool, enable_fighting_detection: bool, **kwargs
+        enable_fall_detection: bool, enable_fighting_detection: bool,
+        enable_smoking_detection: bool,
+        audio_events: Optional[List[str]] = None, **kwargs
     ) -> Dict[str, Any]:
         """处理单帧图像，执行所有已启用的AI分析。"""
         all_detections = []
@@ -317,6 +347,16 @@ class AIServiceManager:
         if enable_object_detection and self._detectors.get("object"):
             # 【修复】调用正确的方法名 predict
             object_results = self._detectors["object"].predict(frame)
+
+            # --- 新增：将检测结果送入追踪器，为人员检测分配 tracking_id ---
+            if camera_id not in self._object_trackers:
+                self._object_trackers[camera_id] = DeepSORTTracker(max_age=30, n_init=3)
+
+            tracker = self._object_trackers[camera_id]
+            tracked_objects = tracker.update(object_results)
+
+            # 用带 tracking_id 的结果替换原始 object_results
+            object_results = tracked_objects
             all_detections.extend(object_results)
 
         if enable_fire_detection and self._detectors.get("fire"):
@@ -328,17 +368,44 @@ class AIServiceManager:
             face_results = self._detectors["face"].detect_and_recognize(frame, enable_liveness=enable_liveness_detection)
             for face in face_results:
                 identity = face.get("identity", {})
-                all_detections.append({
-                    "type": "face_recognition", "class_name": identity.get("name", "unknown"),
-                    "confidence": identity.get("confidence", 0.0), "coordinates": face.get("bbox"),
+                confidence_val = identity.get("confidence", 0.0)
+
+                # --- 新增：统一最低置信度阈值 ---
+                MIN_FACE_CONF = 0.5
+
+                # 判定是否为陌生人：1) name unknown / 未注册；2) 置信度低于阈值
+                is_unknown_name = str(identity.get("name", "")).lower() == "unknown" or not identity.get("is_known", True)
+                is_low_conf    = confidence_val < MIN_FACE_CONF
+                is_stranger    = is_unknown_name or is_low_conf
+
+                # 对熟人统一标记为 person (蓝框)，并在 label 显示姓名
+                display_class = "unknown_person" if is_stranger else "person"
+                display_label = "unknown_person" if is_stranger else identity.get("name", "person")
+
+                det_dict = {
+                    "type": "face_recognition",
+                    "class_name": display_class,
+                    "label": display_label,
+                    "confidence": confidence_val,
+                    "coordinates": face.get("bbox"),
                     "details": identity,
-                })
+                }
+
+                if is_stranger:
+                    # 对陌生人统一视为告警对象
+                    det_dict["is_abnormal"] = True
+                    det_dict["need_alert"] = True
+                    det_dict["type"] = det_dict["event_type"] = "stranger_intrusion"
+
+                    # 如果置信度本身较低，保持原置信度；若名称未知但置信度高，保持原值
+                all_detections.append(det_dict)
 
         # --- 核心修改：启用并集成行为检测 ---
         if enable_behavior_detection and self._detectors.get("behavior"):
             # `detect_behavior` 需要原始帧和已经检测到的目标
             behavior_results = self._detectors["behavior"].detect_behavior(
                 frame, all_detections,
+                audio_events=audio_events or [],
                 enable_fall=enable_fall_detection, 
                 enable_fight=enable_fighting_detection
             )
@@ -354,7 +421,18 @@ class AIServiceManager:
                         timestamp=datetime.now().isoformat(),
                         metadata={"details": behavior}
                     )
+                    # 1) 发送到 Django 后端持久化
                     await self.send_alert_to_backend(alert_data)
+                    # 2) 实时推送前端 WebSocket
+                    try:
+                        await self.send_to_websocket(camera_id, {"type": "new_alert", "data": {
+                            "alert_type": behavior.get("event_type"),
+                            "message": behavior.get("behavior", "行为告警"),
+                            "details": behavior,
+                            "timestamp": alert_data.timestamp
+                        }})
+                    except Exception as e:
+                        logger.debug(f"向前端 websocket 推送行为告警失败: {e}")
             
         # 确保检测到火焰或其他危险情况时发送告警
         for detection in all_detections:
@@ -380,6 +458,137 @@ class AIServiceManager:
                     logger.error(f"[ALERT] 发送火焰检测告警失败: camera_id={camera_id}")
                 else:
                     logger.info(f"[ALERT] 发送火焰检测告警成功: camera_id={camera_id}, 置信度={detection.get('confidence'):.2f}")
+
+                # 同步推送到 WebSocket
+                try:
+                    await self.send_to_websocket(camera_id, {"type": "new_alert", "data": {
+                        "alert_type": "fire_smoke", "message": "检测到火焰", 
+                        "confidence": detection.get("confidence"),
+                        "timestamp": datetime.now().isoformat()
+                    }})
+                except Exception as e:
+                    logger.debug(f"向前端 websocket 推送火焰告警失败: {e}")
+
+            # 抽烟检测告警
+            if enable_smoking_detection and detection.get('class_name') in {'smoking', 'cigarette'} and detection.get('confidence') > 0.4:
+                alert_data = AIAnalysisResult(
+                    camera_id=camera_id,
+                    event_type="smoking_detected",
+                    confidence=detection.get('confidence', 0.0),
+                    timestamp=datetime.now().isoformat(),
+                    metadata={
+                        "detection": detection,
+                        "coordinates": detection.get('coordinates'),
+                    },
+                    location={
+                        "box": detection.get('coordinates'),
+                        "description": "抽烟检测"
+                    }
+                )
+                await self.send_alert_to_backend(alert_data)
+                try:
+                    await self.send_to_websocket(camera_id, {"type": "new_alert", "data": {
+                        "alert_type": "smoking_detected",
+                        "message": "检测到抽烟行为",
+                        "confidence": detection.get('confidence'),
+                        "timestamp": alert_data.timestamp
+                    }})
+                except Exception as e:
+                    logger.debug(f"向前端 websocket 推送抽烟告警失败: {e}")
+
+        # 在收集了 all_detections 之后，调用危险区域检测器
+        if self.danger_zone_detector:
+            try:
+                # 为兼容性, 将缺失 'bbox' 字段的检测结果进行补充
+                dz_inputs = []
+                for det in all_detections:
+                    if 'bbox' not in det:
+                        # Prefer已有字段顺序: coordinates / box
+                        if 'coordinates' in det and len(det['coordinates']) == 4:
+                            det['bbox'] = det['coordinates']
+                        elif 'box' in det and len(det['box']) == 4:
+                            det['bbox'] = det['box']
+                    dz_inputs.append(det)
+
+                dz_alerts = self.danger_zone_detector.detect_intrusions(camera_id, dz_inputs)
+                # 将危险区域告警追加到返回结果中，以便前端显示
+                if dz_alerts:
+                    all_detections.extend([
+                        {
+                            "type": alert.get("type", "danger_zone"),
+                            "class_name": alert.get("type", "danger_zone"),
+                            "tracking_id": alert.get("tracking_id"),
+                            "confidence": 1.0,  # 危险区域告警默认置信度为 1
+                            "details": alert,
+                            "timestamp": alert.get("timestamp"),
+                        } for alert in dz_alerts
+                    ])
+
+                    # 逐条发送告警到后端 (Django) 以及 websocket
+                    for alert in dz_alerts:
+                        alert_data = AIAnalysisResult(
+                            camera_id=camera_id,
+                            event_type=alert["type"],
+                            confidence=1.0,
+                            timestamp=datetime.now().isoformat(),
+                            metadata=alert
+                        )
+                        await self.send_alert_to_backend(alert_data)
+                        try:
+                            await self.send_to_websocket(camera_id, {"type": "new_alert", "data": alert})
+                        except Exception as e:
+                            logger.debug(f"向前端 websocket 发送危险区域告警失败: {e}")
+            except Exception as e:
+                logger.error(f"危险区域检测执行失败: {e}")
+
+        # --- 统一：对所有 need_alert=True 的检测再进行一次告警推送（防止遗漏） ---
+        try:
+            for det in all_detections:
+                if not det.get("need_alert"):
+                    continue
+
+                # 构造唯一键避免重复 (tracking_id + event_type)
+                unique_key = f"{det.get('tracking_id','')}_{det.get('event_type',det.get('behavior',''))}"
+                # 简易去重，使用局部集合
+                if 'alert_keys_sent' not in locals():
+                    alert_keys_sent = set()
+                if unique_key in alert_keys_sent:
+                    continue
+                alert_keys_sent.add(unique_key)
+
+                alert_obj = AIAnalysisResult(
+                    camera_id=camera_id,
+                    # 确保 event_type 不为 None
+                    event_type=det.get('event_type') or det.get('behavior') or det.get('class_name') or 'unknown_event',
+                    confidence=det.get('confidence', 0.0),
+                    timestamp=datetime.now().isoformat(),
+                    # 新增: 添加位置信息，满足后端必填字段
+                    location={
+                        "box": det.get('coordinates') or det.get('bbox') or det.get('box') or [],
+                        "description": "自动生成"
+                    },
+                    metadata={"details": det}
+                )
+
+                await self.send_alert_to_backend(alert_obj)
+
+                # 推送至 WebSocket
+                try:
+                    await self.send_to_websocket(camera_id, {"type": "new_alert", "data": {
+                        "alert_type": alert_obj.event_type,
+                        "message": det.get('behavior') or det.get('class_name'),
+                        "confidence": det.get('confidence'),
+                        "timestamp": alert_obj.timestamp
+                    }})
+                except Exception as e:
+                    logger.debug(f"向前端 websocket 推送统一告警失败: {e}")
+        except Exception as e:
+            logger.error(f"统一告警推送逻辑出错: {e}")
+
+        # 为所有检测结果记录最新出现时间
+        now_ts = time.time()
+        for det in all_detections:
+            det["last_seen"] = now_ts
 
         return {"detections": all_detections}
 
@@ -454,7 +663,9 @@ async def lifespan(app: FastAPI):
         STATION_SCENE_CLASSES = [
             "person", "bicycle", "car", "motorcycle", "bus", "truck",
             "traffic light", "fire hydrant", "stop sign", "parking meter",
-            "bench", "backpack", "umbrella", "handbag", "suitcase"
+            "bench", "backpack", "umbrella", "handbag", "suitcase",
+            # 抽烟相关类别 (需模型支持)
+            "cigarette"
         ]
         object_detector = ObjectDetector(
             model_weights_path=model_weights_path,
@@ -525,21 +736,57 @@ app.add_middleware(
 
 # 全局帧ID计数器
 frame_id_counters = {}
+
 async def process_video_stream_async_loop(stream: VideoStream, camera_id: str):
     """异步处理视频流循环，从VideoStream获取帧并送入分析器"""
+    global DETECTION_FRAME_SKIP  # 确保在首次使用前声明全局变量，防止 SyntaxError
     print(f"[{camera_id}] 异步处理循环已启动。")
     frame_process_counter = 0
     loop_counter = 0
     video_start_time = time.time()  # 记录视频开始时间
     last_known_detections = [] # 【新增】用于在跳过的帧上保留检测框
     
+    # --- 新增: 帧率控制参数 ---
+    TARGET_FPS = 18  # 目标帧率（稳定在15-20范围内）
+    FRAME_INTERVAL = 1.0 / TARGET_FPS  # 帧间隔时间
+    last_frame_time = time.time()
+    
+    # --- 新增: 稳定性控制参数 ---
+    MIN_FRAME_INTERVAL = 0.05  # 最小帧间隔50ms（最大20FPS）
+    MAX_FRAME_INTERVAL = 0.067  # 最大帧间隔67ms（最小15FPS）
+    
+    # --- 新增: 帧率监控 ---
+    fps_start_time = time.time()
+    fps_frame_count = 0
+    frame_times = []  # 记录最近帧处理时间
+    
+    # --- 新增: AI推理分离参数 ---
+    detection_task = None  # 异步AI推理任务
+    detection_results = None  # 存储最新的AI推理结果
+    
     # 初始化此摄像头的帧ID计数器
     if camera_id not in frame_id_counters:
         frame_id_counters[camera_id] = 0
         
     stream_initialized_sent = False  # 只发送一次初始化消息
+    
     while stream.is_running:
         loop_counter += 1
+        current_time = time.time()
+        
+        # --- 智能帧率控制 ---
+        time_since_last = current_time - last_frame_time
+        if time_since_last < FRAME_INTERVAL:
+            # 精确等待，但不超过5ms
+            sleep_time = min(FRAME_INTERVAL - time_since_last, 0.005)
+            if sleep_time > 0.001:
+                await asyncio.sleep(sleep_time)
+                current_time = time.time()
+            continue
+        
+        last_frame_time = current_time
+        fps_frame_count += 1
+        
         try:
             # 这里直接从 VideoStream 获取帧，VideoStream 内部负责读取
             frame_get_start_time = time.time()
@@ -548,8 +795,8 @@ async def process_video_stream_async_loop(stream: VideoStream, camera_id: str):
             
             if not success or frame is None:
                 # 【新增】添加日志，以便调试
-                if loop_counter % 100 == 0: # 每100次循环打印一次，避免刷屏
-                    print(f"[{camera_id}] 未能获取帧. Success: {success}, Frame is None: {frame is None}. 耗时 {frame_get_time:.2f}ms. Retrying...")
+                if loop_counter % 500 == 0 and logger.isEnabledFor(logging.INFO):
+                    logger.info(f"[{camera_id}] 连续未取到帧，耗时 {frame_get_time:.2f}ms. Retrying...")
                 await asyncio.sleep(0.02)  # 短暂等待，避免空转
                 continue
             
@@ -571,17 +818,79 @@ async def process_video_stream_async_loop(stream: VideoStream, camera_id: str):
             frame_process_counter += 1
             processed_frame = frame.copy() # 先复制一份帧用于绘制
 
-            # 每 X 帧处理一次，以平衡性能
-            if frame_process_counter % DETECTION_FRAME_SKIP == 0:
-                print(f"正在处理帧: {frame_process_counter} (摄像头: {camera_id})")
+            # --- 降低分辨率以提升性能 (宽度≤480 保持原比例) ---
+            AI_MAX_WIDTH = 480  # 调低至480，加速推流与推理
+            h, w = processed_frame.shape[:2]
+            if w > AI_MAX_WIDTH:
+                ratio = AI_MAX_WIDTH / float(w)
+                new_size = (AI_MAX_WIDTH, int(h * ratio))
+                processed_frame = cv2.resize(processed_frame, new_size, interpolation=cv2.INTER_LINEAR)
 
-                frame_id = f"frame_{camera_id}_{frame_process_counter}"
-                frame_timestamp = time.time()
-                video_time = frame_timestamp - video_start_time
-                
+            # --- DEBUG: 每60帧输出一次均值，判断是否黑帧 ---
+            if frame_process_counter % 60 == 0:
+                try:
+                    logger.warning(f"[DEBUG] {camera_id} processed_frame mean: {processed_frame.mean():.1f}")
+                except Exception:
+                    pass
+
+            # --- 新增: AI推理分离处理 ---
+            if frame_process_counter % DETECTION_FRAME_SKIP == 0:
+                # 启动新的AI推理任务（非阻塞）
                 settings = service_manager.get_ai_settings(camera_id)
                 performance_mode = "fast" if settings.get('realtime_mode', True) else "balanced"
                 
+                # --- 获取最近音频事件，用于行为联动 ---
+                acoustic_detector = service_manager._acoustic_detectors.get(camera_id)
+                if acoustic_detector and acoustic_detector.is_running:
+                    audio_events_full = acoustic_detector.get_recent_events(since_seconds=3)  # [{name,confidence}]
+                else:
+                    audio_events_full = []
+
+                # 提供给行为检测的仅事件名称列表
+                audio_events_names = [e["name"] for e in audio_events_full]
+
+                # --- 新增: 实时广播音频事件到前端 ---
+                try:
+                    # 获取音频属性（如 rms/db/freq），如果检测器实现了 last_props
+                    props_data = getattr(acoustic_detector, 'last_props', {}) if acoustic_detector else {}
+                    await service_manager.send_to_websocket(
+                        camera_id,
+                        {
+                            "type": "acoustic_events",
+                            "data": {
+                                "events": audio_events_full,
+                                "props": props_data,
+                                "timestamp": time.time()
+                            }
+                        }
+                    )
+
+                    # --- 如果有声学异常事件，同时生成告警 ---
+                    for ev in audio_events_full:
+                        backend_event = DEFAULT_ACOUSTIC_EVENTS_MAP.get(ev["name"])
+                        if not backend_event:
+                            continue
+
+                        alert_data = AIAnalysisResult(
+                            camera_id=camera_id,
+                            event_type=backend_event,
+                            confidence=ev["confidence"],
+                            timestamp=datetime.now().isoformat(),
+                            metadata={"source": "acoustic", "panns_label": ev["name"]},
+                        )
+
+                        # 发送到 Django 后端
+                        await service_manager.send_alert_to_backend(alert_data)
+
+                        # WebSocket 告警
+                        await service_manager.send_to_websocket(
+                            camera_id,
+                            {"type": "new_alert", "data": alert_data.model_dump()},
+                    )
+                except Exception as e:
+                    logger.debug(f"广播音频事件失败: {e}")
+
+                # 启动异步AI推理任务（不等待结果）
                 detection_task = asyncio.create_task(
                     service_manager.process_single_frame(
                         frame=processed_frame,
@@ -595,35 +904,145 @@ async def process_video_stream_async_loop(stream: VideoStream, camera_id: str):
                         # 传递新开关的状态
                         enable_fall_detection=settings.get('fall_detection', False),
                         enable_fighting_detection=settings.get('fighting_detection', False),
+                        enable_smoking_detection=settings.get('smoking_detection', False),
+                        audio_events=audio_events_names,
                         performance_mode=performance_mode
                     )
                 )
 
-                results = await detection_task
-                results["frame_id"] = frame_id
-                results["frame_timestamp"] = frame_timestamp
-                results["video_time"] = video_time
-                
-                for detection in results.get("detections", []):
-                    detection["frame_id"] = frame_id
-                    detection["frame_timestamp"] = frame_timestamp
-                    detection["video_time"] = video_time
-                
-                last_known_detections = results.get("detections", [])
-                
-                # 在发送前记录详细的分析结果
-                logger.info(f"[AI-ANALYSIS-RESULT] Camera {camera_id}: {json.dumps(results, indent=2, ensure_ascii=False)}")
+            # --- 检查AI推理任务是否完成 ---
+            if detection_task and detection_task.done():
+                try:
+                    results = await detection_task
+                    results["frame_id"] = f"frame_{camera_id}_{frame_process_counter}"
+                    results["frame_timestamp"] = time.time()
+                    results["video_time"] = time.time() - video_start_time
+                    
+                    for detection in results.get("detections", []):
+                        detection["frame_id"] = results["frame_id"]
+                        detection["frame_timestamp"] = results["frame_timestamp"]
+                        detection["video_time"] = results["video_time"]
+                    
+                    last_known_detections = results.get("detections", [])
+                    detection_results = results
+                    
+                    # 在发送前记录详细的分析结果
+                    logger.info(f"[AI-ANALYSIS-RESULT] Camera {camera_id}: {json.dumps(results, indent=2, ensure_ascii=False)}")
 
-                # 只有在进行新检测时才发送详细结果到WebSocket
-                await service_manager.send_detection_to_websocket(camera_id, results)
+                    # 只有在进行新检测时才发送详细结果到WebSocket
+                    await service_manager.send_detection_to_websocket(camera_id, results)
+                    
+                except Exception as e:
+                    logger.error(f"AI推理任务异常: {e}")
+                    detection_results = None
+                finally:
+                    detection_task = None
 
-            # 【逻辑重构】总是在帧上绘制最新的检测框（或上一帧的框）
-            processed_frame = draw_detections(processed_frame, last_known_detections)
+            # --- 绘制检测结果 ---
+            if detection_results and detection_results.get("detections"):
+                # 使用最新的AI检测结果
+                processed_frame = draw_detections(processed_frame, detection_results.get("detections", []))
+            else:
+                # --- 使用追踪器预测框位置，减少漂移 ---
+                predicted_boxes = []
+                if camera_id in service_manager._object_trackers:
+                    tracker = service_manager._object_trackers[camera_id]
+                    # 空列表更新 => 仅预测现有轨道下一位置
+                    predicted_tracks = tracker.update([])
+                    for t in predicted_tracks:
+                        # 仅对 person/vehicle 等目标绘制，保持与 last detections 类型一致
+                        predicted_boxes.append({
+                            "class_name": t.get("class_name", "object"),
+                            "coordinates": t.get("coordinates"),
+                            "box": t.get("coordinates"),
+                            "confidence": t.get("confidence", 0.5),
+                            "tracking_id": t.get("tracking_id"),
+                        })
+
+                # 只保留最近2秒内出现的异常框，避免目标离开后仍显示
+                abnormal_last = [
+                    d for d in last_known_detections
+                    if d.get("is_abnormal") and time.time() - d.get("last_seen", 0) < 2.0
+                ]
+
+                # 合并：预测框 + 上一帧异常框（避免重复）
+                boxes_to_draw = predicted_boxes.copy()
+                # 去重依据 tracking_id 或坐标
+                for det in abnormal_last:
+                    if any(det.get("tracking_id") == p.get("tracking_id") for p in predicted_boxes if det.get("tracking_id")):
+                        continue
+                    boxes_to_draw.append(det)
+
+                processed_frame = draw_detections(processed_frame, boxes_to_draw)
+
+            # 新增: 绘制危险区域多边形
+            if service_manager.danger_zone_detector:
+                zone_ids = service_manager.danger_zone_detector.camera_zones.get(camera_id, [])
+                zone_objects = [service_manager.danger_zone_detector.zones.get(zid) for zid in zone_ids]
+
+                # 根据当前帧尺寸与原始尺寸的比例，调整危险区域坐标
+                zone_list = []
+                if w > AI_MAX_WIDTH:
+                    scale_ratio = processed_frame.shape[1] / float(w)
+                else:
+                    scale_ratio = 1.0
+
+                for z in zone_objects:
+                    if not z or not z.is_active:
+                        continue
+                    scaled_coords = [[int(pt[0] * scale_ratio), int(pt[1] * scale_ratio)] for pt in z.coordinates]
+                    zone_list.append({"coordinates": scaled_coords})
+
+                processed_frame = draw_zones(processed_frame, zone_list)
             
-            # 【逻辑重构】将最终的（可能是处理过的）帧推送到 WebRTC
-            webrtc_pusher.push_frame(camera_id, processed_frame)
+            # --- 性能监控和动态调整 ---
+            frame_end_time = time.time()
+            frame_process_time = frame_end_time - current_time
             
-            await asyncio.sleep(0.01)
+            # 记录本帧处理时间
+            frame_times.append(frame_process_time)
+            # 仅保留最近100帧
+            if len(frame_times) > 100:
+                frame_times.pop(0)
+            
+            # 每100帧输出一次性能统计
+            if fps_frame_count % 100 == 0:
+                avg_process_time = sum(frame_times) / len(frame_times)
+                current_fps = 1.0 / avg_process_time if avg_process_time > 0 else 0
+                logger.info(f"[{camera_id}] 性能统计: 平均处理时间 {avg_process_time*1000:.1f}ms, 实际FPS: {current_fps:.1f}")
+                
+                # --- 新增: 将性能统计通过后端广播给前端 ---
+                try:
+                    await service_manager.send_to_websocket(
+                        camera_id,
+                        {
+                            "type": "performance_stats",
+                            "data": {
+                                "avg_process_time_ms": round(avg_process_time * 1000, 2),
+                                "fps": round(current_fps, 2),
+                                "detection_frame_skip": DETECTION_FRAME_SKIP,
+                            },
+                        },
+                    )
+                except Exception as _e:
+                    logger.debug(f"广播性能统计失败: {_e}")
+                
+                # 如果处理时间过长，动态调整AI检测频率
+                if avg_process_time > 0.05:  # 超过50ms
+                    DETECTION_FRAME_SKIP = min(8, DETECTION_FRAME_SKIP + 1)
+                    logger.info(f"[{camera_id}] 性能优化: 调整AI检测频率为每{DETECTION_FRAME_SKIP}帧")
+                elif avg_process_time < 0.02 and DETECTION_FRAME_SKIP > 2:  # 处理很快，可以增加频率
+                    DETECTION_FRAME_SKIP = max(2, DETECTION_FRAME_SKIP - 1)
+                    logger.info(f"[{camera_id}] 性能优化: 调整AI检测频率为每{DETECTION_FRAME_SKIP}帧")
+            
+            # --- 异步推送，避免网络抖动阻塞AI循环 ---
+            push_task = asyncio.create_task(
+                webrtc_pusher.push_frame_async(camera_id, processed_frame) 
+                if hasattr(webrtc_pusher, 'push_frame_async') 
+                else asyncio.to_thread(webrtc_pusher.push_frame, camera_id, processed_frame)
+            )
+            
+            # 不等待推送完成，继续处理下一帧
             
         except Exception as e:
             print(f"视频处理错误: {e}")
@@ -645,12 +1064,37 @@ async def stop_stream(camera_id: str):
     await stream_processor.stop()  # VideoStream 内部会停止音频提取和帧循环
 
     del service_manager._video_streams[camera_id]
+
+    # 停止声学检测器
+    if camera_id in service_manager._acoustic_detectors:
+        try:
+            acoustic = service_manager._acoustic_detectors[camera_id]
+            await acoustic.stop()
+        except Exception:
+            pass
+        del service_manager._acoustic_detectors[camera_id]
+
     if camera_id in service_manager._object_trackers:
         del service_manager._object_trackers[camera_id]
     if camera_id in service_manager._detection_cache:
         del service_manager._detection_cache[camera_id]
     print(f"已停止视频流: {stream_processor.stream_url}")
     return {"status": "success", "message": f"视频流处理已停止"}
+
+# ------------------- 调试：模拟声音事件 -------------------
+class SimulateAudioEventRequest(BaseModel):
+    camera_id: str = Field(..., description="目标摄像头ID")
+    event_name: str = Field(..., description="PANNs 标签名，如 'Screaming'")
+
+
+@app.post("/simulate/audio_event")
+async def simulate_audio_event(data: SimulateAudioEventRequest):
+    """无需实际发声即可触发声学事件，便于测试。"""
+    acoustic = service_manager._acoustic_detectors.get(data.camera_id)
+    if not acoustic:
+        raise HTTPException(status_code=404, detail="该摄像头未启用声学检测，或声学检测器不存在")
+    acoustic.simulate_event(data.event_name, force_alert=True)
+    return {"status": "success", "message": f"已模拟事件 {data.event_name}"}
 
 
 # --- Pydantic Models for API ---
@@ -868,10 +1312,22 @@ async def verify_face(data: FaceVerificationData):
         try:
             logger.info(f"准备为识别出的用户 '{username}' 请求内部登录以获取Token。")
             try:
-                # 使用识别出的`username`
+                # 构建人脸识别验证数据
+                face_verification_data = {
+                    'verification_result': True,
+                    'recognized_username': username,
+                    'confidence': confidence,
+                    'liveness_passed': True,
+                    'timestamp': time.time()
+                }
+                
+                # 使用识别出的`username`和人脸验证数据
                 response = requests.post(
                     service_manager.config.BACKEND_INTERNAL_LOGIN_URL,
-                    json={'username': username},
+                    json={
+                        'username': username,
+                        'face_verification_data': face_verification_data
+                    },
                     headers={'X-Internal-API-Key': service_manager.config.INTERNAL_SERVICE_API_KEY},
                     timeout=5
                 )
@@ -917,7 +1373,7 @@ async def face_verification_ws(websocket: WebSocket):
     接收视频帧，进行活体检测和识别，并返回实时状态。
     """
     await websocket.accept()
-    liveness_session = LivenessSession(timeout=15.0, num_challenges=2)
+    liveness_session = LivenessSession(timeout=15.0, num_challenges=1)
     # <--- FIX: No longer getting from service_manager._detectors as it is globally available
     
     if not face_recognizer:
@@ -1003,8 +1459,19 @@ async def face_verification_ws(websocket: WebSocket):
             # 关键修复：直接使用识别出的用户名（identity），不再进行任何拼接
             if user_info and user_info.get("identity") and user_info.get("identity") != "Unknown":
                 recognized_username = user_info["identity"]
+                confidence = user_info.get("confidence", 0)
                 logger.info(f"准备为用户 '{recognized_username}' 请求内部登录以获取Token。")
-                token_data = await service_manager.get_user_token(recognized_username)
+                
+                # 构建人脸识别验证数据
+                face_verification_data = {
+                    'verification_result': True,
+                    'recognized_username': recognized_username,
+                    'confidence': confidence,
+                    'liveness_passed': True,
+                    'timestamp': time.time()
+                }
+                
+                token_data = await service_manager.get_user_token_with_face_verification(recognized_username, face_verification_data)
                 if token_data:
                     await websocket.send_json({"status": "success", "message": "验证成功", **token_data})
                 else:
@@ -1050,7 +1517,9 @@ async def test_stream_connection_endpoint(url: str = Body(...), type: str = Body
     source_url_for_ai = url
     stream_key = service_manager.get_stream_key_from_url(url, type)
     if stream_key and type in ['hls', 'flv']:
-        source_url_for_ai = f"rtmp://localhost:1935/live/{stream_key}"
+        # 使用配置中的首个 RTMP 基址
+        rtmp_base = app_config.RTMP_OPTIONS[0] if app_config and app_config.RTMP_OPTIONS else "rtmp://localhost:1935/live"
+        source_url_for_ai = f"{rtmp_base}/{stream_key}"
         print(f"测试连接: 检测到播放URL，已自动转换为AI服务的源URL: {source_url_for_ai}")
 
     stream = VideoStream(stream_url=source_url_for_ai, camera_id="test_connection_id")
@@ -1077,7 +1546,8 @@ async def start_stream_endpoint(
     enable_liveness_detection: bool = Body(True),
     # 新增的开关
     enable_fall_detection: bool = Body(False),
-    enable_fighting_detection: bool = Body(False)
+    enable_fighting_detection: bool = Body(False),
+    enable_smoking_detection: bool = Body(False)
 ):
     """启动视频流处理"""
     if camera_id in service_manager._video_streams:
@@ -1087,9 +1557,14 @@ async def start_stream_endpoint(
     # 自动将播放URL转换为AI服务需要的RTMP源URL
     source_url_for_ai = stream_url
     stream_key = service_manager.get_stream_key_from_url(stream_url, source_type)
+    # 仅当类型为hls或flv时才自动转换，RTMP地址直接用前端传递的
     if stream_key and source_type in ['hls', 'flv']:
-        source_url_for_ai = f"rtmp://localhost:1935/live/{stream_key}"
+        # 使用配置中的首个 RTMP 基址
+        rtmp_base = app_config.RTMP_OPTIONS[0] if app_config and app_config.RTMP_OPTIONS else "rtmp://localhost:1935/live"
+        source_url_for_ai = f"{rtmp_base}/{stream_key}"
         print(f"启动流: 检测到播放URL，已自动转换为AI服务的源URL: {source_url_for_ai}")
+    else:
+        print(f"启动流: 直接使用前端传递的流地址: {source_url_for_ai}")
 
     print(f"正在启动视频流: {source_url_for_ai} (摄像头ID: {camera_id})")
     
@@ -1110,9 +1585,40 @@ async def start_stream_endpoint(
         del service_manager._video_streams[camera_id]
         raise HTTPException(status_code=500, detail=f"无法启动视频流: {stream_url}")
         
-    asyncio.create_task(process_video_stream_async_loop(stream_processor, camera_id))
-    
-    return {"status": "success", "message": f"视频流处理已在后台启动"}
+    # 如需声学检测，则初始化并启动
+    if enable_sound_detection:
+        backend_root = service_manager.config.BACKEND_ALERT_URL.split('/api')[0]
+        # --- 使用SimpleAudioProcessor ---
+        from smart_station_platform.ai_service.core.acoustic_detection import SimpleAudioProcessor
+        acoustic = SimpleAudioProcessor(
+            stream_url=source_url_for_ai,
+            camera_id=camera_id,
+            backend_url=backend_root,
+            api_key=service_manager.config.AI_SERVICE_API_KEY
+        )
+        acoustic.start()
+        service_manager._acoustic_detectors[camera_id] = acoustic
+        # --- 如需切换回SmartAcousticDetector，注释上面并取消下方注释 ---
+        # acoustic = SmartAcousticDetector(
+        #     target_events_map=DEFAULT_ACOUSTIC_EVENTS_MAP,
+        #     camera_id=camera_id,
+        #     backend_url=backend_root,
+        #     api_key=service_manager.config.AI_SERVICE_API_KEY,
+        #     confidence_threshold=0.35,  # 更宽松，便于测试
+        #     event_cooldown=3.0
+        # )
+        # await acoustic.start(source_url_for_ai)
+        # service_manager._acoustic_detectors[camera_id] = acoustic
+
+    # --- 新增: 启动视频帧异步处理循环 (后台任务) ---
+    try:
+        asyncio.create_task(process_video_stream_async_loop(stream_processor, camera_id))
+        logger.info(f"已为摄像头 {camera_id} 启动异步视频处理循环任务")
+    except Exception as e:
+        logger.error(f"无法启动视频处理循环任务: {e}", exc_info=True)
+        # 我们不阻塞主流程，但记录错误，前端可通过 system/status 接口检查
+
+    return {"status": "success", "message": f"视频流 {camera_id} 已启动"}
 
 
 # 添加一个健康检查接口
@@ -1325,6 +1831,149 @@ async def get_webrtc_status():
             }
         )
 
+# --- Danger Zone API Models and Endpoints ---
+class DangerZoneConfig(BaseModel):
+    zone_id: Optional[str] = Field(None, description="区域唯一ID (可选, 后端自动生成)")
+    name: Optional[str] = Field(None, description="区域名称")
+    coordinates: List[List[float]] = Field(..., description="多边形顶点列表，如 [[x1,y1],[x2,y2],...]，至少3个点")
+    min_distance_threshold: Optional[float] = Field(0.0, description="距离边缘触发告警的最小距离(px)")
+    time_in_area_threshold: Optional[int] = Field(0, description="在区域内停留触发告警的时间(s)")
+    is_active: Optional[bool] = Field(True, description="是否启用该区域")
+
+class DangerZoneUpdateRequest(BaseModel):
+    camera_id: str = Field(..., description="摄像头ID")
+    zones: List[DangerZoneConfig] = Field(..., description="危险区域配置列表")
+
+@app.post("/danger_zone/update", tags=["Danger Zone"])
+async def update_danger_zones(request: DangerZoneUpdateRequest):
+    """更新指定摄像头的危险区域配置 (覆盖式)。"""
+    if not service_manager or not service_manager.danger_zone_detector:
+        raise HTTPException(status_code=500, detail="DangerZoneDetector 未初始化")
+
+    service_manager.danger_zone_detector.update_camera_zones(request.camera_id, [z.model_dump() for z in request.zones])
+    return {"success": True, "camera_id": request.camera_id, "zones_count": len(request.zones)}
+
+@app.get("/danger_zone/status/{camera_id}", tags=["Danger Zone"])
+async def get_danger_zone_status(camera_id: str):
+    """获取摄像头的危险区域及人员状态。"""
+    if not service_manager or not service_manager.danger_zone_detector:
+        raise HTTPException(status_code=500, detail="DangerZoneDetector 未初始化")
+    status = service_manager.danger_zone_detector.get_zone_status(camera_id)
+    return status
+
+@app.get("/config/stream-options")
+async def get_stream_options():
+    """获取可用的流媒体选项"""
+    return {
+        "rtmp_options": app_config.RTMP_OPTIONS,
+        "webrtc_enabled": True,
+        "local_file_enabled": True
+    }
+
+# 新增：保存危险区域到文件的API接口
+class DangerZoneFileRequest(BaseModel):
+    camera_id: str = Field(..., description="摄像头ID")
+    name: str = Field(..., description="区域名称")
+    coordinates: List[List[float]] = Field(..., description="多边形顶点列表，如 [[x1,y1],[x2,y2],...]，至少3个点")
+    min_distance_threshold: Optional[float] = Field(0.0, description="距离边缘触发告警的最小距离(px)")
+    time_in_area_threshold: Optional[int] = Field(0, description="在区域内停留触发告警的时间(s)")
+    is_active: Optional[bool] = Field(True, description="是否启用该区域")
+
+@app.post("/danger_zone/save_to_file", tags=["Danger Zone"])
+async def save_danger_zone_to_file(request: DangerZoneFileRequest):
+    """保存危险区域数据到文件"""
+    try:
+        # 创建保存目录
+        save_dir = os.path.join(os.path.dirname(__file__), "assets", "danger_zones")
+        os.makedirs(save_dir, exist_ok=True)
+        
+        # 生成文件名（使用时间戳避免重复）
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"danger_zone_{request.camera_id}_{timestamp}.json"
+        filepath = os.path.join(save_dir, filename)
+        
+        # 准备保存的数据
+        zone_data = {
+            "zone_id": f"{request.camera_id}_zone_{timestamp}",
+            "camera_id": request.camera_id,
+            "name": request.name,
+            "coordinates": request.coordinates,
+            "min_distance_threshold": request.min_distance_threshold,
+            "time_in_area_threshold": request.time_in_area_threshold,
+            "is_active": request.is_active,
+            "created_at": datetime.now().isoformat(),
+            "file_path": filepath
+        }
+        
+        # 保存到JSON文件
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(zone_data, f, ensure_ascii=False, indent=2)
+        
+        logger.info(f"危险区域已保存到文件: {filepath}")
+        
+        # --- 新增：立即注册到 DangerZoneDetector 使其生效 ---
+        try:
+            from smart_station_platform.ai_service.core.danger_zone_detection import DangerZone
+            if service_manager and service_manager.danger_zone_detector:
+                dz_obj = DangerZone(
+                    zone_id=zone_data["zone_id"],
+                    name=zone_data["name"],
+                    coordinates=zone_data["coordinates"],
+                    min_distance_threshold=zone_data["min_distance_threshold"],
+                    time_in_area_threshold=zone_data["time_in_area_threshold"],
+                    is_active=zone_data["is_active"],
+                )
+                service_manager.danger_zone_detector.add_danger_zone(request.camera_id, dz_obj)
+                logger.info(f"已将危险区域 {dz_obj.zone_id} 注册到检测器")
+        except Exception as e:
+            logger.error(f"注册危险区域到检测器失败: {e}")
+        
+        return {
+            "success": True,
+            "message": "危险区域保存成功",
+            "file_path": filepath,
+            "zone_data": zone_data
+        }
+        
+    except Exception as e:
+        logger.error(f"保存危险区域到文件失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"保存失败: {str(e)}")
+
+@app.get("/danger_zone/list_files", tags=["Danger Zone"])
+async def list_danger_zone_files(camera_id: Optional[str] = None):
+    """列出所有保存的危险区域文件"""
+    try:
+        save_dir = os.path.join(os.path.dirname(__file__), "assets", "danger_zones")
+        
+        if not os.path.exists(save_dir):
+            return {"files": []}
+        
+        files = []
+        for filename in os.listdir(save_dir):
+            if filename.endswith('.json'):
+                filepath = os.path.join(save_dir, filename)
+                try:
+                    with open(filepath, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    
+                    # 如果指定了camera_id，只返回该摄像头的文件
+                    if camera_id and data.get("camera_id") != camera_id:
+                        continue
+                    
+                    files.append({
+                        "filename": filename,
+                        "file_path": filepath,
+                        "zone_data": data
+                    })
+                except Exception as e:
+                    logger.warning(f"读取文件 {filename} 失败: {str(e)}")
+                    continue
+        
+        return {"files": files}
+        
+    except Exception as e:
+        logger.error(f"列出危险区域文件失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"获取文件列表失败: {str(e)}")
 
 if __name__ == "__main__":
     # 启动Uvicorn服务器

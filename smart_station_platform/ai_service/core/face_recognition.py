@@ -39,6 +39,15 @@ class FaceRecognizer:
         
         self.known_face_encodings = {}
         self.known_face_metadata = {}
+
+        # 人脸检测模型 (hog 或 cnn)，默认使用更精确的 cnn，可通过环境变量 FACE_DETECT_MODEL 覆盖
+        self.detection_model = os.getenv('FACE_DETECT_MODEL', 'cnn')
+
+        # 人脸识别阈值 (0.0-1.0)，值越小越严格
+        try:
+            self.tolerance = float(os.getenv('FACE_RECOG_TOLERANCE', '0.6'))
+        except ValueError:
+            self.tolerance = 0.6
         
         # 活体检测模型初始化
         self.anti_spoof_model_path = os.path.join(self.asset_base_path, 'models', 'anti_spoof', '4_0_0_80x80_MiniFASNetV1.pth')
@@ -592,7 +601,8 @@ class FaceRecognizer:
         # 如果标准差低于阈值，则有可能是打印攻击
         return std_dev < min_std_dev
 
-    def detect_and_recognize(self, frame, detection_model='hog', tolerance=0.55, enable_liveness: bool = True):
+    # 默认容差由 0.55 放宽到 0.65，使真人更易通过，比对距离阈值更宽松。
+    def detect_and_recognize(self, frame, detection_model='hog', tolerance=0.65, enable_liveness: bool = True):
         """
         在单帧图像中检测、识别所有人脸，并进行活体检测判断。
         这是一个增强版本，整合了照片攻击检测。
@@ -640,7 +650,7 @@ class FaceRecognizer:
             if True in matches:
                 best_match_index = np.argmin(face_distances)
 
-            identity_info = {"name": "unknown", "is_known": False, "should_alert": False, "confidence": 0.0}
+            identity_info = {"name": "unknown", "is_known": False, "should_alert": True, "confidence": 0.0}
 
             if best_match_index != -1:
                 name = self.known_face_names[best_match_index]
@@ -650,15 +660,11 @@ class FaceRecognizer:
                 # 即使是未知人脸，也估算一个“置信度”
                 if len(face_distances) > 0:
                     min_dist = np.min(face_distances)
-                    # 将距离转换为一个0-1之间的“不像”程度，再反转
                     confidence = max(0, 1 - (min_dist - tolerance) / (1.0 - tolerance))
-                    # 低于一定置信度的陌生人需要告警
-                    if 0.1 < confidence < 0.4:
-                         identity_info["should_alert"] = True
                 else: # 如果数据库为空
                     confidence = 0.0
-                
                 identity_info["confidence"] = confidence
+                identity_info["should_alert"] = True  # 强制所有未知人员都告警
 
             results.append({
                 "location": {"top": top, "right": right, "bottom": bottom, "left": left},

@@ -18,6 +18,10 @@ opencv-python==4.8.0.76
 opencv-contrib-python==4.8.0.76
 Pillow==10.0.0
 
+# H.264 软件编码库（aiortc 使用 OpenH264）
+# 已通过 conda install -c conda-forge openh264 安装
+# openh264==2.3.1
+
 # AI模型
 torch==2.0.1
 torchvision==0.15.2

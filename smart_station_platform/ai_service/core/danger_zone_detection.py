@@ -339,6 +339,7 @@ class DangerZoneDetector:
                         'zone_id': zone_id,
                         'zone_name': zone.name,
                         'position': [person_position.x, person_position.y],
+                        'distance': 0.0,  # 在区域内距离为0
                         'timestamp': current_time
                     })
                     logger.info(f"🚨 [危险区域] 人员 {tracking_id} 进入区域 '{zone.name}' (ID: {zone_id})")
@@ -371,6 +372,7 @@ class DangerZoneDetector:
                                 'zone_name': zone.name,
                                 'dwell_time': time_in_zone,
                                 'position': [person_position.x, person_position.y],
+                                'distance': 0.0,  # 在区域内距离为0
                                 'timestamp': current_time
                             })
                             tracker.alert_triggered[zone_id]['dwell_alert'] = current_time # 标记已触发
@@ -384,7 +386,7 @@ class DangerZoneDetector:
                     
                     alerts.append({
                         'type': 'danger_zone_proximity',
-                        'message': f'人员 {tracking_id} 接近危险区域 "{zone.name}" (距离: {distance_to_zone:.1f}像素)',
+                        'message': f'人员 {tracking_id} 接近危险区域 "{zone.name}" (距离边缘: {distance_to_zone:.1f}像素)',
                         'tracking_id': tracking_id,
                         'zone_id': zone_id,
                         'zone_name': zone.name,

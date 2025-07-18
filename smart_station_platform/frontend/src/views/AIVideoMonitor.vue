@@ -30,13 +30,13 @@
                 {{ localTrackingEnabled ? '本地跟踪已开启' : '启用本地跟踪' }}
               </el-button>
               <!-- 添加调试按钮 -->
-              <el-button
+              <!-- <el-button
                 type="warning"
                 size="small"
                 @click="checkWebRTCStatus"
               >
                 检查WebRTC状态
-              </el-button>
+              </el-button> -->
             </el-button-group>
 
             <div class="connection-status">
@@ -79,12 +79,22 @@
                     <el-tag type="info" size="large">
                       视频源: RTMP
                     </el-tag>
+                    <el-form :inline="true" label-width="80px" style="margin-bottom: 10px;">
+                      <el-form-item label="服务器地址">
+                        <el-select v-model="selectedRtmpBase" style="width: 320px;">
+                          <el-option v-for="option in rtmpOptions" :key="option.value" :label="option.label" :value="option.value" />
+                        </el-select>
+                      </el-form-item>
+                      <el-form-item label="流名称">
+                        <el-input v-model="streamName" style="width: 180px;" placeholder="如 test" />
+                      </el-form-item>
+                    </el-form>
                     <el-input
-                      :value="rawInputStreamUrl"
+                      :value="fullStreamUrl"
                       readonly
                       class="fixed-source-url"
                     >
-                      <template #prepend>固定流地址</template>
+                      <template #prepend>完整流地址</template>
                     </el-input>
                   </div>
 
@@ -126,6 +136,26 @@
                   ></div>
 
                   <!-- AIAnalyzer component removed -->
+                  <!-- Fabric.js 绘图画布 -->
+<canvas
+  v-show="isDrawingZone"
+  id="drawing-canvas"
+  style="position:absolute;top:0;left:0;width:100%;height:100%;z-index:9;pointer-events:none;"
+></canvas>
+                  <!-- 预览危险区域的 Canvas -->
+                  <canvas
+                    v-show="isDrawingZone"
+                    ref="zoneCanvas"
+                    class="zone-preview-canvas"
+                    style="position:absolute;top:0;left:0;width:100%;height:100%;z-index:9;pointer-events:none;"
+                  ></canvas>
+                  <div
+                    v-show="isDrawingZone"
+                    class="zone-draw-overlay"
+                    @click="handleCanvasClick"
+                    @mousemove="handleCanvasMove"
+                    style="position:absolute;top:0;left:0;width:100%;height:100%;z-index:10;cursor:crosshair;"
+                  ></div>
                 </div>
               </div>
             </el-card>
@@ -188,12 +218,64 @@
                       检测视频中的火焰和烟雾，用于及早发现火灾隐患，保障安全。
                     </div>
                   </el-form-item>
+                  <el-form-item label="跌倒检测">
+                    <el-switch
+                      v-model="aiSettings.fall_detection"
+                      :disabled="!isStreaming || !aiAnalysisEnabled"
+                      @change="() => updateAISettings('fall_detection')"
+                    />
+                    <div class="setting-description">
+                      检测人员跌倒动作，及时告警。
+                    </div>
+                  </el-form-item>
+                  <el-form-item label="打架检测">
+                    <el-switch
+                      v-model="aiSettings.fighting_detection"
+                      :disabled="!isStreaming || !aiAnalysisEnabled"
+                      @change="() => updateAISettings('fighting_detection')"
+                    />
+                    <div class="setting-description">
+                      检测多人打架、冲突等暴力行为并告警。
+                    </div>
+                  </el-form-item>
+                  <el-form-item label="抽烟检测">
+                    <el-switch
+                      v-model="aiSettings.smoking_detection"
+                      :disabled="!isStreaming || !aiAnalysisEnabled"
+                      @change="() => updateAISettings('smoking_detection')"
+                    />
+                    <div class="setting-description">
+                      检测人员抽烟行为并告警。
+                    </div>
+                  </el-form-item>
                 </el-form>
               </div>
             </el-card>
 
-            <!-- 实时检测结果 -->
-            <el-card class="results-panel" shadow="never">
+            <!-- 危险区域设置 -->
+            <el-card class="danger-zone-panel" shadow="never" style="margin-top:12px;">
+              <template #header>
+                <span>🛑 危险区域</span>
+              </template>
+              <div class="danger-zone-actions">
+                <el-button type="primary" size="small" @click="startZoneDrawing" :disabled="!isStreaming">绘制区域</el-button>
+                <el-button type="success" size="small" @click="finishZoneDrawing" :disabled="!isDrawingZone">完成绘制</el-button>
+                <el-button type="warning" size="small" @click="cancelZoneDrawing" :disabled="!isDrawingZone">取消绘制</el-button>
+                <el-button type="info" size="small" @click="refreshDangerZones">刷新状态</el-button>
+              </div>
+              <el-scrollbar height="120px" style="margin-top:8px;">
+                <el-tag
+                  v-for="z in dangerZones"
+                  :key="z.zone_id"
+                  style="margin:4px;"
+                  type="danger"
+                >{{ z.name }}</el-tag>
+                <div v-if="dangerZones.length===0" style="color:#888;">暂无已保存区域</div>
+              </el-scrollbar>
+            </el-card>
+
+            <!-- 实时检测结果（已隐藏） -->
+            <el-card class="results-panel" shadow="never" v-show="false">
               <template #header>
                 <div class="card-header">
                   <span>🔍 检测结果</span>
@@ -232,7 +314,7 @@
               </el-scrollbar>
             </el-card>
             <!-- 性能监控 -->
-            <el-card class="performance-panel" shadow="never" v-show="aiAnalysisEnabled">
+            <el-card class="performance-panel" shadow="never" v-show="false">
               <template #header>
                 <span>📊 性能监控</span>
               </template>
@@ -324,6 +406,40 @@
                 </div>
               </el-scrollbar>
             </el-card>
+
+            <!-- 声学事件监控 -->
+            <el-card class="acoustic-panel" shadow="never" v-show="aiSettings.sound_detection">
+              <template #header>
+                <div class="card-header">
+                  <span>🔊 声学事件</span>
+                  <el-badge :value="acousticEvents.length" class="badge" />
+                </div>
+              </template>
+              <!-- 新增: 实时声学属性数值 -->
+              <div class="acoustic-props" style="font-size:12px;padding:4px 8px;color:#666;line-height:16px;">
+                <span v-if="soundProps.rms !== undefined">RMS: {{ Number(soundProps.rms).toFixed(4) }} </span>
+                <span v-if="soundProps.db !== undefined">dB: {{ Number(soundProps.db).toFixed(2) }} </span>
+                <span v-if="soundProps.freq !== undefined">主频: {{ Number(soundProps.freq).toFixed(1) }}Hz</span>
+              </div>
+              <el-scrollbar height="180px">
+                <div class="acoustic-list">
+                  <div v-for="(ev,index) in acousticEvents" :key="index" class="acoustic-item">
+                    <el-tag type="warning" size="small">{{ ev.name }} {{ (ev.confidence*100).toFixed(1) }}%</el-tag>
+                    <span class="acoustic-time">{{ new Date().toLocaleTimeString() }}</span>
+                    <!-- 每条事件下继续显示对应声学属性 -->
+                    <div v-if="ev.rms !== undefined || ev.db !== undefined || ev.freq !== undefined" style="font-size:12px;color:#888;margin-top:2px;">
+                      <span v-if="ev.rms !== undefined">RMS: {{ Number(ev.rms).toFixed(4) }} </span>
+                      <span v-if="ev.db !== undefined">dB: {{ Number(ev.db).toFixed(2) }} </span>
+                      <span v-if="ev.freq !== undefined">主频: {{ Number(ev.freq).toFixed(1) }}Hz</span>
+                    </div>
+                  </div>
+                  <div v-if="acousticEvents.length === 0" class="no-results">
+                    <el-icon><Search /></el-icon>
+                    <p>暂无声学事件</p>
+                  </div>
+                </div>
+              </el-scrollbar>
+            </el-card>
           </el-col>
         </el-row>
       </el-main>
@@ -366,6 +482,19 @@
         </span>
       </template>
     </el-dialog>
+
+    <!-- 危险区域阈值配置对话框 -->
+    <el-dialog v-model="dangerZoneDialog" title="危险区域参数" width="400px">
+      <el-form :model="dangerZoneForm" label-width="120px">
+        <el-form-item label="区域名称"><el-input v-model="dangerZoneForm.name" placeholder="例如 月台边缘" /></el-form-item>
+        <el-form-item label="安全距离(px)"><el-input-number v-model="dangerZoneForm.min_distance_threshold" :min="0" :max="500" /></el-form-item>
+        <el-form-item label="停留时间(s)"><el-input-number v-model="dangerZoneForm.time_in_area_threshold" :min="0" :max="60" /></el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="dangerZoneDialog=false">取消</el-button>
+        <el-button type="primary" @click="saveDangerZone">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -377,6 +506,9 @@ import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Close, Cpu, VideoCamera, Warning, Search, SuccessFilled, CircleCloseFilled } from '@element-plus/icons-vue';
 import useWebRTC from '@/composables/useWebRTC';
+import { ElInputNumber } from 'element-plus';
+import axios from 'axios';
+import { fabric } from 'fabric';
 
 // UUID生成函数
 const generateUUID = () => {
@@ -394,15 +526,106 @@ const api = useApi();
 
 const router = useRouter();
 const authStore = useAuthStore();
-const videoElement = ref(null);
+const videoElement = ref(null)
+
+// 绘图状态管理
+const drawingState = reactive({
+  isDrawing: false,
+  points: [],
+  tempLines: [],
+  fabricCanvas: null,
+  videoRect: { width: 0, height: 0 },
+  canvasRatio: 1
+})
+
+// 初始化绘图画布
+const initDrawingCanvas = () => {
+  nextTick(() => {
+    const canvasEl = document.getElementById('drawing-canvas')
+    if (!canvasEl) return
+
+    drawingState.fabricCanvas = new fabric.Canvas('drawing-canvas', {
+      selection: false,
+      hoverCursor: 'crosshair',
+      backgroundColor: 'rgba(0,0,0,0.3)'
+    })
+
+    // 鼠标交互事件
+    drawingState.fabricCanvas.on('mouse:down', (options) => {
+      if (!drawingState.isDrawing) return
+      
+      const pointer = drawingState.fabricCanvas.getPointer(options.e)
+      drawingState.points.push([pointer.x, pointer.y])
+      
+      // 绘制临时线段
+      if (drawingState.points.length > 1) {
+        const line = new fabric.Line([
+          drawingState.points[drawingState.points.length-2][0],
+          drawingState.points[drawingState.points.length-2][1],
+          pointer.x, pointer.y
+        ], {
+          stroke: '#ff0000',
+          strokeWidth: 2
+        })
+        drawingState.tempLines.push(line)
+        drawingState.fabricCanvas.add(line)
+      }
+    })
+  })
+}
+
+// 完成绘制方法 (已废弃，使用下面的新版本)
+// const finishZoneDrawing = () => {
+//   if (drawingState.points.length < 3) {
+//     ElMessage.error('需要至少3个点构成多边形')
+//     return
+//   }
+
+//   // 获取视频实际尺寸
+//   const videoEl = document.getElementById('mainVideoElement')
+//   if (videoEl && videoEl.videoWidth) {
+//     drawingState.videoRect = {
+//       width: videoEl.videoWidth,
+//       height: videoEl.videoHeight
+//     }
+//     drawingState.canvasRatio = Math.min(
+//       drawingState.fabricCanvas.width / drawingState.videoRect.width,
+//       drawingState.fabricCanvas.height / drawingState.videoRect.height
+//     )
+//   }
+
+//   // 转换坐标为归一化格式
+//   zoneData.value.coordinates = drawingState.points
+//     .map(p => [
+//       (p[0] / drawingState.canvasRatio) / drawingState.videoRect.width,
+//       (p[1] / drawingState.canvasRatio) / drawingState.videoRect.height
+//     ])
+
+//   // 保存数据
+//   api.dangerZone.createZone({
+//     ...zoneData.value,
+//     camera: cameraId.value,
+//     coordinates: zoneData.value.coordinates
+//   }).then(() => {
+//     ElMessage.success('危险区域保存成功')
+//     loadDangerZones()
+//   }).catch(err => {
+//     ElMessage.error(`保存失败: ${err.response?.data?.message || err.message}`)
+//   })
+
+//   // 重置状态
+//   drawingState.isDrawing = false
+//   drawingState.points = []
+//   drawingState.tempLines = []
+//   drawingState.fabricCanvas.clear()
+// };
 const isStreaming = ref(false);
 const error = ref(null); // 【修复】声明缺失的error ref
 const videoSource = ref('rtmp'); // 直接锁定为 'rtmp'
-const rawInputStreamUrl = ref('rtmp://localhost:1935/live/test'); // 直接锁定地址
 const playbackUrl = ref('');
 const selectedDeviceId = ref('');
 const videoDevices = ref([]);
-const cameraId = ref(`camera_${Date.now()}`);
+const cameraId = ref('camera_test'); // 使用固定的摄像头ID进行测试
 const aiAnalysisEnabled = ref(false);
 const localTrackingEnabled = ref(false);
 const aiSettings = reactive({
@@ -412,8 +635,15 @@ const aiSettings = reactive({
   sound_detection: false,
   fire_detection: true,
   liveness_detection: true,
+  fall_detection: false,
+  fighting_detection: false,
+  smoking_detection: false,
 });
 const detectionResults = ref([]);
+// --- 新增: 声学事件列表 ---
+const acousticEvents = ref([]);
+// 新增: 保存最新声学属性
+const soundProps = ref({});
 const performanceStats = ref({});
 const realtimeAlerts = ref([]);
 const dangerZones = ref([]);
@@ -421,6 +651,123 @@ const currentZonePoints = ref([]);
 const isDrawingZone = ref(false);
 const wsConnected = ref(false);
 let ws = null;
+
+const dangerZoneDialog = ref(false);
+const dangerZoneForm = reactive({
+  name: '',
+  min_distance_threshold: 30,
+  time_in_area_threshold: 5,
+});
+
+const startZoneDrawing = () => {
+  if (!isStreaming.value) {
+    ElMessage.warning('请先启动监控再绘制区域');
+    return;
+  }
+  isDrawingZone.value = true;
+  currentZonePoints.value = [];
+  ElMessage.info('请在视频画面点击，依次标记多边形顶点');
+};
+
+const finishZoneDrawing = async () => {
+  if (currentZonePoints.value.length < 3) {
+    ElMessage.warning('请至少绘制3个点以形成有效的区域');
+    return;
+  }
+
+  try {
+    // 弹出对话框让用户输入区域名称
+    const { value: zoneName } = await ElMessageBox.prompt('请输入区域名称', '保存危险区域', {
+      confirmButtonText: '下一步',
+      cancelButtonText: '取消',
+      inputPlaceholder: '如 站台危险区 A',
+      inputValidator: (value) => {
+        if (!value) return '区域名称不能为空';
+        return true;
+      },
+    });
+
+    if (!zoneName) return;
+
+    // 询问安全距离 (像素，可选)
+    const { value: safeDistanceStr } = await ElMessageBox.prompt(
+      '请输入安全距离 (像素)。\n人员距离区域边缘小于此值时触发接近告警，留空则不检测',
+      '安全距离设置',
+      {
+        confirmButtonText: '下一步',
+        cancelButtonText: '跳过',
+        inputPlaceholder: '例如 30',
+        inputPattern: /^\d*$/,
+        inputErrorMessage: '请输入非负整数',
+      }
+    ).catch(() => ({ value: '' }));
+
+    const minDistance = safeDistanceStr ? parseInt(safeDistanceStr, 10) : 0;
+
+    // 询问停留时间阈值 (秒，可选)
+    const { value: dwellTimeStr } = await ElMessageBox.prompt(
+      '请输入停留时间阈值 (秒)。\n人员在区域内停留超过此时间触发告警，留空则不检测',
+      '停留时间设置',
+      {
+        confirmButtonText: '保存',
+        cancelButtonText: '跳过',
+        inputPlaceholder: '例如 5',
+        inputPattern: /^\d*$/,
+        inputErrorMessage: '请输入非负整数',
+      }
+    ).catch(() => ({ value: '' }));
+
+    const dwellTime = dwellTimeStr ? parseInt(dwellTimeStr, 10) : 0;
+
+    // 准备区域数据
+    const zoneData = {
+      camera_id: cameraId.value, // 序列化器会通过camera_id查找camera对象
+      name: zoneName,
+      coordinates: currentZonePoints.value.map(p => [p.x, p.y]),
+      min_distance_threshold: minDistance,
+      time_in_area_threshold: dwellTime,
+      is_active: true,
+    };
+
+    console.log('准备保存危险区域数据:', zoneData);
+    
+    // 检查认证状态
+    const token = localStorage.getItem('access_token');
+    console.log('当前认证token:', token ? '存在' : '不存在');
+    
+    // 调用后端API保存区域到数据库
+    const response = await api.dangerZone.createZone(zoneData);
+    console.log('危险区域保存响应:', response);
+    
+    // 清除绘制状态
+    isDrawingZone.value = false;
+    currentZonePoints.value = [];
+    clearZoneCanvas();
+    
+    // 刷新区域列表
+    await refreshDangerZones();
+    
+    ElMessage.success('危险区域保存成功');
+  } catch (error) {
+    console.error('保存危险区域失败:', error);
+    console.error('错误详情:', {
+      message: error.message,
+      response: error.response?.data,
+      status: error.response?.status
+    });
+    ElMessage.error(error.response?.data?.error || error.response?.data?.detail || '保存危险区域失败');
+  }
+};
+
+const cancelZoneDrawing = () => {
+  isDrawingZone.value = false;
+  currentZonePoints.value = [];
+  if (zoneCanvas.value) {
+    const ctx = zoneCanvas.value.getContext('2d');
+    ctx && ctx.clearRect(0, 0, zoneCanvas.value.width, zoneCanvas.value.height);
+  }
+  ElMessage.info('已取消绘制');
+};
 
 // WebRTC相关
 const apiBaseUrl = import.meta.env.VITE_APP_AI_SERVICE_URL || 'http://localhost:8002';  // 修改为正确的AI服务端口
@@ -559,8 +906,37 @@ const connectWebSocket = () => {
           detectionResults.value = filterResults(detections);
           console.log(`[WebSocket] 更新检测结果: ${detections.length}个对象`);
 
+          // --- 新增：将检测结果同步到实时告警列表 ---
+          detections.forEach((det, idx) => {
+            const alertObj = {
+              id: `det_${Date.now()}_${idx}`,
+              type: det.type || det.class_name || 'other',
+              title: getDetectionTitle(det.type || det.class_name),
+              description: det.identity ? (det.identity.name || '未知人员') : (det.class_name || '检测到目标'),
+              timestamp: Date.now(),
+            };
+            realtimeAlerts.value.unshift(alertObj);
+            // 限制长度
+            if (realtimeAlerts.value.length > 20) {
+              realtimeAlerts.value.pop();
+            }
+          });
+
         } else if (messageData.type === 'new_alert' || messageData.type === 'alert') {
           const alertData = messageData.data || messageData;
+          
+          // 为危险区域告警添加距离信息显示
+          if (alertData.alert_type && alertData.alert_type.startsWith('danger_zone')) {
+            const distance = alertData.distance;
+            if (distance !== undefined) {
+              if (distance === 0) {
+                alertData.message += ' (已在区域内)';
+              } else {
+                alertData.message += ` (距离: ${distance.toFixed(1)}像素)`;
+              }
+            }
+          }
+          
           handleAlert(alertData);
 
         } else if (messageData.type === 'throttled_alert') {
@@ -591,6 +967,22 @@ const connectWebSocket = () => {
         } else if (messageData.type === 'subscription_confirmed') {
           // 订阅确认
           console.log(`[WebSocket] 订阅确认: camera_id=${messageData.camera_id}, group=${messageData.group}`);
+        } else if (messageData.type === 'acoustic_events') {
+          // 实时声学事件
+          const { events = [], props = {} } = messageData.data || {};
+          // 更新声学整体属性
+          soundProps.value = props || {};
+          // 将声学属性合并到每个事件，方便模板直接渲染
+          const merged = events.map(ev => ({ ...ev, ...props }));
+          // 若当前仅有声学属性而无特定事件，也显示一条通用信息
+          if (merged.length === 0 && Object.keys(props).length) {
+            merged.push({ name: '环境声音', confidence: 1.0, ...props });
+          }
+          acousticEvents.value = merged;
+          // 保持最新的 20 条记录
+          if (acousticEvents.value.length > 20) {
+            acousticEvents.value.splice(0, acousticEvents.value.length - 20);
+          }
         } else {
           // 未知消息类型
           console.log(`[WebSocket] 收到未知类型消息:`, messageData);
@@ -668,8 +1060,8 @@ const startStream = async () => {
     return;
   }
 
-  const uniqueCameraId = `cam_${generateUUID()}`;
-  cameraId.value = uniqueCameraId;
+  // 使用固定的摄像头ID，而不是动态生成
+  const uniqueCameraId = cameraId.value; // 使用已设置的固定值 'camera_test'
   isStreaming.value = true;
   aiAnalysisEnabled.value = true;
   error.value = null; // 【修复】现在error ref已声明，此行可以正常工作
@@ -682,6 +1074,7 @@ const startStream = async () => {
       stream_url: processedStreamUrl,
       source_type: videoSource.value,
       ...aiSettings,
+      enable_sound_detection: aiSettings.sound_detection, // 显式传递，确保后端能识别
     };
     await api.ai.startStream(streamConfig);
 
@@ -808,6 +1201,9 @@ const settingToApiMapping = {
   behavior_analysis: 'behavior_analysis',
   sound_detection: 'sound_detection',
   fire_detection: 'fire_detection',
+  fall_detection: 'fall_detection',
+  fighting_detection: 'fighting_detection',
+  smoking_detection: 'smoking_detection',
 };
 
 const updateAISettings = async (settingName = '') => {
@@ -874,6 +1270,9 @@ const translateSettingName = (settingName) => {
     behavior_analysis: '行为分析',
     sound_detection: '声音检测',
     fire_detection: '火焰检测',
+    fall_detection: '跌倒检测',
+    fighting_detection: '打架检测',
+    smoking_detection: '抽烟检测',
   };
   return translations[settingName] || settingName;
 };
@@ -906,7 +1305,17 @@ const startAIAnalysis = async () => {
       camera_id: cameraId.value,
       stream_url: streamUrlForAI,
       source_type: videoSource.value,
-      settings: aiSettings,
+      // 旧: settings
+      enable_face_recognition: aiSettings.face_recognition,
+      enable_object_detection: aiSettings.object_detection,
+      enable_behavior_detection: aiSettings.behavior_analysis,
+      enable_fire_detection: aiSettings.fire_detection,
+      enable_sound_detection: aiSettings.sound_detection,
+      enable_liveness_detection: aiSettings.liveness_detection,
+      // 新增
+      enable_fall_detection: aiSettings.fall_detection,
+      enable_fighting_detection: aiSettings.fighting_detection,
+      enable_smoking_detection: aiSettings.smoking_detection,
     };
 
     // 【最终修复】直接使用 api.ai.startStream
@@ -1069,9 +1478,18 @@ const handlePerformanceStats = (stats) => {
   performanceStats.value = stats;
 };
 const handleCanvasClick = (event) => {
-  if (isDrawingZone.value) {
-    currentZonePoints.value.push({ x: event.x, y: event.y });
-  }
+  if (!isDrawingZone.value || !zoneCanvas.value) return;
+
+  // 计算 Canvas 像素与 CSS 像素的比例
+  const rect = zoneCanvas.value.getBoundingClientRect();
+  const scaleX = zoneCanvas.value.width / rect.width;
+  const scaleY = zoneCanvas.value.height / rect.height;
+
+  // 将 CSS 坐标映射到 Canvas 像素坐标
+  const x = (event.clientX - rect.left) * scaleX;
+  const y = (event.clientY - rect.top) * scaleY;
+
+  currentZonePoints.value.push({ x, y });
 };
 // 清空所有告警
 const clearAllAlerts = () => {
@@ -1087,9 +1505,35 @@ const removeAlert = (index) => {
 const getDetectionIcon = (type) => {
   const icons = {
     person: '👤', car: '🚗', fire: '🔥', face: '😀', smoke: '💨', animal: '🐕',
+    fall_down: '🆘', // 摔倒
+    waving_hand: '👋', // 挥手
+    fighting: '🥊', // 打架
+    fighting_suspicious: '❓', // 疑似打架
+    stranger: '낯', // 陌生人
+    spoof_attack: '👻', // 欺骗攻击
+    smoking_detected: '🚬', // 抽烟
+    vehicle_abnormal: '🚗⚠️',
   };
   return icons[type] || '📦';
 };
+
+// 获取告警标题
+const getDetectionTitle = (type) => {
+  const titles = {
+    person: '人员', car: '车辆', fire: '火焰', face: '人脸', smoke: '烟雾', animal: '动物',
+    fall_down: '人员摔倒',
+    waving_hand: '人员挥手',
+    fighting: '发生打架',
+    fighting_suspicious: '疑似打架',
+    stranger: '未知人员',
+    spoof_attack: '欺骗攻击',
+    active: '活动正常',
+    smoking_detected: '人员抽烟',
+    vehicle_abnormal: '车辆异常',
+  };
+  return titles[type] || '未知对象';
+};
+
 // 获取告警图标
 const getAlertIcon = (type) => {
   const icons = {
@@ -1098,12 +1542,17 @@ const getAlertIcon = (type) => {
     'fire_smoke': '🔥',
     'stranger_face_detected': '👁️',
     'spoofing_attack': '⚠️',
+    'waving_detected': '👋', // 挥手
+    'fighting_detected_av': '🥊', // 打架
+    'fighting_detected_visual_only': '❓', // 疑似打架
+    'stranger_detected': '낯', // 陌生人
     'abnormal_sound_scream': '🔊',
     'abnormal_sound_fight': '👊',
     'abnormal_sound_glass_break': '💔',
     'other': '❗',
     // 添加新的限流告警类型图标
-    'throttled': '⏱️'
+    'throttled': '⏱️',
+    'smoking_detected': '🚬', // 抽烟
   };
   return icons[type] || '❓';
 };
@@ -1443,6 +1892,213 @@ onMounted(() => {
     clearInterval(checkVideoInterval);
   });
 });
+
+// 新增：RTMP服务器选项和流名
+// import { ref, computed } from 'vue';
+const rtmpOptions = [
+  { label: '华为云服务器', value: 'rtmp://120.46.158.54:1935/live' },
+  { label: '本地服务器', value: 'rtmp://localhost:1935/live' }
+];
+const selectedRtmpBase = ref(rtmpOptions[0].value);
+const streamName = ref('test');
+const fullStreamUrl = computed(() => `${selectedRtmpBase.value}/${streamName.value}`);
+// 替换原有rawInputStreamUrl定义
+// const rawInputStreamUrl = ref('rtmp://localhost:1935/live/test');
+const rawInputStreamUrl = computed(() => fullStreamUrl.value);
+
+// 在 <script setup> 中追加 draw preview 逻辑
+const zoneCanvas = ref(null);
+const currentMousePos = ref(null);
+
+const drawZonePreview = () => {
+  if (!zoneCanvas.value) return;
+  const canvas = zoneCanvas.value;
+  const ctx = canvas.getContext('2d');
+  const videoEl = videoElement.value;
+  if (!videoEl) return;
+  // 调整 Canvas 像素尺寸匹配视频的实际像素尺寸
+  const pixelWidth = videoEl.videoWidth || videoEl.clientWidth;
+  const pixelHeight = videoEl.videoHeight || videoEl.clientHeight;
+  if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+    canvas.width = pixelWidth;
+    canvas.height = pixelHeight;
+  }
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  if (currentZonePoints.value.length === 0) return;
+
+  // 绘制半透明填充和边框
+  ctx.beginPath();
+  currentZonePoints.value.forEach((p, idx) => {
+    if (idx === 0) ctx.moveTo(p.x, p.y);
+    else ctx.lineTo(p.x, p.y);
+  });
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(255, 235, 59, 0.25)'; // 半透明黄
+  ctx.fill();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = '#ffeb3b';
+  ctx.stroke();
+
+  // 顶点编号
+  ctx.font = '14px Arial';
+  ctx.fillStyle = '#ff5722';
+  currentZonePoints.value.forEach((p, i) => {
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 5, 0, Math.PI*2);
+    ctx.fill();
+    ctx.fillText(i+1, p.x + 6, p.y - 6);
+  });
+
+  // 绘制鼠标位置虚线预览
+  if (isDrawingZone.value && currentMousePos.value && currentZonePoints.value.length > 0) {
+    const last = currentZonePoints.value[currentZonePoints.value.length - 1];
+    ctx.setLineDash([6,6]);
+    ctx.beginPath();
+    ctx.moveTo(last.x, last.y);
+    ctx.lineTo(currentMousePos.value.x, currentMousePos.value.y);
+    ctx.strokeStyle = '#ffeb3b';
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+};
+
+watch(currentZonePoints, () => {
+  drawZonePreview();
+});
+
+const handleCanvasMove = (event) => {
+  if (!isDrawingZone.value || !zoneCanvas.value) return;
+
+  const rect = zoneCanvas.value.getBoundingClientRect();
+  const scaleX = zoneCanvas.value.width / rect.width;
+  const scaleY = zoneCanvas.value.height / rect.height;
+
+  const x = (event.clientX - rect.left) * scaleX;
+  const y = (event.clientY - rect.top) * scaleY;
+
+  currentMousePos.value = { x, y };
+  drawZonePreview();
+};
+
+watch(isDrawingZone, (val) => {
+  if(!val && zoneCanvas.value){
+    const ctx = zoneCanvas.value.getContext('2d');
+    ctx && ctx.clearRect(0,0,zoneCanvas.value.width, zoneCanvas.value.height);
+    currentMousePos.value = null;
+  }
+});
+
+const refreshDangerZones = async () => {
+  try {
+    if (!cameraId.value) return;
+    
+    const response = await api.dangerZone.getZones(cameraId.value);
+    dangerZones.value = response;
+    
+    // 在画布上重新绘制所有区域
+    drawSavedZones();
+  } catch (error) {
+    console.error('获取危险区域失败:', error);
+    ElMessage.error('获取危险区域失败');
+  }
+};
+
+const clearZoneCanvas = () => {
+  if (!zoneCanvas.value) return;
+  const ctx = zoneCanvas.value.getContext('2d');
+  ctx.clearRect(0, 0, zoneCanvas.value.width, zoneCanvas.value.height);
+};
+
+const loadDangerZones = async () => {
+  try {
+    const response = await api.dangerZone.getZones(cameraId.value);
+    dangerZones.value = response;
+  } catch (error) {
+    console.error('加载危险区域失败:', error);
+    ElMessage.error('加载危险区域失败');
+  }
+};
+
+function drawSavedZones() {
+  if (!zoneCanvas.value) return;
+  
+  const ctx = zoneCanvas.value.getContext('2d');
+  ctx.clearRect(0, 0, zoneCanvas.value.width, zoneCanvas.value.height);
+  
+  // 为每个保存的区域绘制多边形
+  dangerZones.value.forEach(zone => {
+    if (!zone.coordinates || zone.coordinates.length < 3) return;
+    
+    ctx.beginPath();
+    ctx.moveTo(zone.coordinates[0][0], zone.coordinates[0][1]);
+    
+    for (let i = 1; i < zone.coordinates.length; i++) {
+      ctx.lineTo(zone.coordinates[i][0], zone.coordinates[i][1]);
+    }
+    
+    ctx.closePath();
+    ctx.strokeStyle = 'rgba(255, 0, 0, 0.8)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(255, 0, 0, 0.2)';
+    ctx.fill();
+    
+    // 添加区域名称标签
+    ctx.fillStyle = 'white';
+    ctx.font = '14px Arial';
+    ctx.fillText(zone.name, zone.coordinates[0][0], zone.coordinates[0][1] - 5);
+  });
+}
+
+// ---------------------- 危险区域保存 ----------------------
+/**
+ * 将当前绘制的多边形保存为危险区域。
+ * 1. 校验点数量 ≥ 3
+ * 2. 生成后端所需 payload 并调用 API
+ * 3. 成功后刷新区域列表并重置绘制状态
+ */
+const saveDangerZone = async () => {
+  try {
+    if (currentZonePoints.value.length < 3) {
+      ElMessage.error('需要至少 3 个点来定义危险区域');
+      return;
+    }
+
+    // 将点转换为 [x, y] 数组，并四舍五入到整数像素
+    const coordinates = currentZonePoints.value.map(p => [Math.round(p.x), Math.round(p.y)]);
+
+    // 如果未填写名称，自动生成一个
+    const zoneName = dangerZoneForm.name?.trim() || `危险区域_${Date.now()}`;
+
+    const payload = {
+      camera_id: cameraId.value,
+      name: zoneName,
+      coordinates,
+      min_distance_threshold: dangerZoneForm.min_distance_threshold,
+      time_in_area_threshold: dangerZoneForm.time_in_area_threshold,
+      is_active: true,
+    };
+
+    await api.dangerZone.createZone(payload);
+
+    ElMessage.success('危险区域保存成功');
+
+    // 重置状态
+    dangerZoneDialog.value = false;
+    isDrawingZone.value = false;
+    currentZonePoints.value = [];
+    clearZoneCanvas();
+
+    // 重新加载并绘制保存的区域
+    await loadDangerZones();
+    drawSavedZones();
+
+  } catch (error) {
+    console.error('保存危险区域失败:', error);
+    const msg = error.response?.data?.error || error.message || '保存失败';
+    ElMessage.error(msg);
+  }
+};
 
 </script>
 
@@ -1784,5 +2440,27 @@ onMounted(() => {
 .alert-summary {
   font-weight: bold;
   color: #e6a23c;
+}
+.zone-draw-overlay {
+  background: rgba(255,0,0,0.1);
+}
+
+.acoustic-panel {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 20;
+}
+
+.perf-panel {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  padding: 4px 8px;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  border-radius: 4px;
+  font-size: 12px;
+  z-index: 20;
 }
 </style>

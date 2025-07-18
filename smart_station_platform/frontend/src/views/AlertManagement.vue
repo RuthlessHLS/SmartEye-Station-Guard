@@ -207,7 +207,7 @@ const alertStatusMap = {
 watch(wsMessages, (newMessages) => {
   if (newMessages && newMessages.length > 0) {
     const latestMessage = newMessages[newMessages.length - 1];
-    if (latestMessage.type === 'alert' && latestMessage.data) {
+    if ((['alert', 'new_alert', 'alert_update'].includes(latestMessage.type)) && latestMessage.data) {
       const newAlert = {
         ...latestMessage.data,
         alert_time: new Date(latestMessage.data.timestamp).toLocaleString(), // 转换时间格式

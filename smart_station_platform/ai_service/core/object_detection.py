@@ -37,12 +37,16 @@ class ObjectDetector:
 
         # 加载YOLOv8模型
         try:
-            if os.path.exists(model_weights_path):
-                self.model = YOLO(model_weights_path)
+            # 若GPU可用，将模型加载到CUDA并使用半精度以提升推理速度
+            self.model = YOLO(model_weights_path)
+            if torch.cuda.is_available():
+                self.model.to('cuda')
+                try:
+                    self.model.model.half()
+                except Exception:
+                    pass  # 某些Ultralytics版本可能不暴露 model 属性
             else:
-                logger.warning(f"本地权重文件不存在 ({model_weights_path})，将使用预训练的YOLOv8n。")
-                self.model = YOLO('yolov8n.pt')
-            self.model.to(self.device)
+                self.model.to(self.device)
             logger.info("成功加载YOLOv8模型")
         except Exception as e:
             self.model = None
@@ -113,26 +117,28 @@ class ObjectDetector:
         detections = []
         try:
             # 【核心优化】直接在模型调用中传入筛选后的类别ID
-            results = self.model(
-                frame, 
-                classes=self.allowed_class_ids, 
-                conf=base_confidence_threshold, 
-                verbose=False
-            )
+            infer_kwargs = dict(classes=self.allowed_class_ids, conf=base_confidence_threshold, verbose=False)
+            if torch.cuda.is_available():
+                infer_kwargs.update({'device': 'cuda', 'half': True})
+            results = self.model(frame, **infer_kwargs)
 
             for r in results:
                 boxes = r.boxes
                 for box in boxes:
                     cls_id = int(box.cls[0].item())
                     # 使用完整的类别列表来查找名称
+                    # 对于人员类别但无法识别身份的情况，标记为unknown_person
                     class_name = self.full_class_names.get(cls_id, 'unknown')
                     confidence = box.conf[0].item()
                     x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
 
+                    # 同步提供 `coordinates` 和 `box` 两种字段，兼容老旧/新检测逻辑
+                    bbox_list = [int(c) for c in [x1, y1, x2, y2]]
                     detections.append({
                         "class_name": class_name,
                         "confidence": confidence,
-                        "coordinates": [int(c) for c in [x1, y1, x2, y2]]
+                        "coordinates": bbox_list,
+                        "box": bbox_list  # BehaviorDetector / SimpleTracker 依赖该键
                     })
             return detections
 

@@ -4,8 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="7ba9cf2b-4c7d-4ffb-9ea1-c21e03689d7e" name="更改" comment="">
-      <change beforePath="$PROJECT_DIR$/.idea/SmartEye-Station-Guard.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/SmartEye-Station-Guard.iml" afterDir="false" />
+    <list default="true" id="7ba9cf2b-4c7d-4ffb-9ea1-c21e03689d7e" name="更改" comment="111">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/nginx-rtmp-win32-1.2.1/logs/access.log" beforeDir="false" afterPath="$PROJECT_DIR$/nginx-rtmp-win32-1.2.1/logs/access.log" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/nginx-rtmp-win32-1.2.1/logs/error.log" beforeDir="false" afterPath="$PROJECT_DIR$/nginx-rtmp-win32-1.2.1/logs/error.log" afterDir="false" />
@@ -13,17 +12,38 @@
       <change beforePath="$PROJECT_DIR$/nginx-rtmp-win32-1.2.1/temp/hls/test-303.ts" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/nginx-rtmp-win32-1.2.1/temp/hls/test-304.ts" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/smart_station_platform/ai_service/app.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/ai_service/app.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/smart_station_platform/ai_service/assets/known_faces/话贼累/agg_reg_20250715_111928.jpg" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/smart_station_platform/ai_service/assets/known_faces/话贼累/agg_reg_20250715_111928.npy" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/smart_station_platform/ai_service/core/acoustic_detection.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/ai_service/core/acoustic_detection.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/smart_station_platform/ai_service/core/behavior_detection.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/ai_service/core/behavior_detection.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/smart_station_platform/ai_service/core/danger_zone_detection.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/ai_service/core/danger_zone_detection.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/smart_station_platform/ai_service/core/draw_utils.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/ai_service/core/draw_utils.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/smart_station_platform/ai_service/core/face_recognition.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/ai_service/core/face_recognition.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/smart_station_platform/ai_service/core/liveness_detector.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/ai_service/core/liveness_detector.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/smart_station_platform/ai_service/core/object_detection.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/ai_service/core/object_detection.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/smart_station_platform/ai_service/core/video_stream.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/ai_service/core/video_stream.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/smart_station_platform/ai_service/core/webrtc_pusher.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/ai_service/core/webrtc_pusher.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/smart_station_platform/ai_service/models/alert_models.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/ai_service/models/alert_models.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/smart_station_platform/ai_service/requirements.txt" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/ai_service/requirements.txt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/smart_station_platform/backend/alerts/consumers.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/backend/alerts/consumers.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/smart_station_platform/backend/alerts/routing.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/backend/alerts/routing.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/smart_station_platform/backend/alerts/views.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/backend/alerts/views.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/smart_station_platform/backend/camera_management/urls.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/backend/camera_management/urls.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/smart_station_platform/backend/camera_management/views.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/backend/camera_management/views.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/smart_station_platform/backend/data_analysis/admin.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/backend/data_analysis/admin.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/smart_station_platform/backend/data_analysis/ai_report_utils.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/backend/data_analysis/ai_report_utils.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/smart_station_platform/backend/data_analysis/serializers.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/backend/data_analysis/serializers.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/smart_station_platform/backend/data_analysis/management/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/backend/data_analysis/management/__init__.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/smart_station_platform/backend/data_analysis/management/commands/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/backend/data_analysis/management/commands/__init__.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/smart_station_platform/backend/data_analysis/management/commands/generate_daily_report.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/backend/data_analysis/management/commands/generate_daily_report.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/smart_station_platform/backend/data_analysis/models.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/backend/data_analysis/models.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/smart_station_platform/backend/data_analysis/urls.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/backend/data_analysis/urls.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/smart_station_platform/backend/data_analysis/views.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/backend/data_analysis/views.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/smart_station_platform/backend/smart_station/settings.py" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/backend/smart_station/settings.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/smart_station_platform/frontend/src/api/index.js" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/frontend/src/api/index.js" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/smart_station_platform/frontend/src/composables/useWebSocket.js" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/frontend/src/composables/useWebSocket.js" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/smart_station_platform/frontend/src/main.js" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/frontend/src/main.js" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/smart_station_platform/frontend/src/router/index.js" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/frontend/src/router/index.js" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/smart_station_platform/frontend/src/views/AIVideoMonitor.vue" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/frontend/src/views/AIVideoMonitor.vue" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/smart_station_platform/frontend/src/views/AlertManagement.vue" beforeDir="false" afterPath="$PROJECT_DIR$/smart_station_platform/frontend/src/views/AlertManagement.vue" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/smart_station_platform/frontend/srcs/views/AIVideoMonitor.vue" beforeDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -45,6 +65,9 @@
     &quot;accountId&quot;: &quot;c7a0ed1f-0b60-49f7-8e7f-aaeee85d121b&quot;
   }
 }</component>
+  <component name="HighlightingSettingsPerFile">
+    <setting file="file://$PROJECT_DIR$/smart_station_platform/frontend/src/views/DailyReport.vue" root0="FORCE_HIGHLIGHTING" />
+  </component>
   <component name="ProjectColorInfo">{
   &quot;customColor&quot;: &quot;&quot;,
   &quot;associatedIndex&quot;: 2
@@ -54,22 +77,31 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent">{
-  &quot;keyToString&quot;: {
-    &quot;Python.AI Service (FastAPI).executor&quot;: &quot;Run&quot;,
-    &quot;Python.Backend (Daphne).executor&quot;: &quot;Run&quot;,
-    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
-    &quot;git-widget-placeholder&quot;: &quot;dev&quot;,
-    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
-    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
-    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
-    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
-    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
-    &quot;npm.Frontend (Vue).executor&quot;: &quot;Run&quot;,
-    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "Python.AI Service (FastAPI).executor": "Run",
+    "Python.Backend (Daphne).executor": "Run",
+    "Python.test_h264.executor": "Run",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "git-widget-placeholder": "dev",
+    "last_opened_file_path": "G:/Web/SmartEye-Station-Guard/smart_station_platform/frontend/src/views",
+    "node.js.detected.package.eslint": "true",
+    "node.js.detected.package.tslint": "true",
+    "node.js.selected.package.eslint": "(autodetect)",
+    "node.js.selected.package.tslint": "(autodetect)",
+    "nodejs_package_manager_path": "npm",
+    "npm.Frontend (Vue).executor": "Run",
+    "prettierjs.PrettierConfiguration.Package": "G:\\Web\\SmartEye-Station-Guard\\smart_station_platform\\frontend\\node_modules\\prettier",
+    "ts.external.directory.path": "G:\\PyCharm 2025.1.1\\plugins\\javascript-plugin\\jsLanguageServicesImpl\\external",
+    "vue.rearranger.settings.migration": "true"
   }
-}</component>
+}]]></component>
+  <component name="RecentsManager">
+    <key name="CopyFile.RECENT_KEYS">
+      <recent name="G:\Web\SmartEye-Station-Guard\smart_station_platform\frontend\src\views" />
+    </key>
+  </component>
   <component name="RunManager" selected="Python.Backend (Daphne)" />
   <component name="SharedIndexes">
     <attachedChunks>
@@ -88,15 +120,30 @@
       <updated>1752761113348</updated>
       <workItem from="1752761115735" duration="567000" />
       <workItem from="1752763358681" duration="106000" />
-      <workItem from="1752763717496" duration="2124000" />
+      <workItem from="1752763717496" duration="8926000" />
+      <workItem from="1752799997276" duration="9115000" />
     </task>
+    <task id="LOCAL-00001" summary="111">
+      <option name="closed" value="true" />
+      <created>1752766160434</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1752766160434</updated>
+    </task>
+    <option name="localTasksCounter" value="2" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
     <option name="version" value="3" />
   </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="111" />
+    <option name="LAST_COMMIT_MESSAGE" value="111" />
+  </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
-    <SUITE FILE_PATH="coverage/SmartEye_Station_Guard$Backend__Daphne_.coverage" NAME="Backend (Daphne) 覆盖结果" MODIFIED="1752765360692" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="G:\Web\SmartEye-Station-Guard\smart_station_platform\backend" />
-    <SUITE FILE_PATH="coverage/SmartEye_Station_Guard$AI_Service__FastAPI_.coverage" NAME="AI Service (FastAPI) 覆盖结果" MODIFIED="1752763749134" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="G:\Web\SmartEye-Station-Guard\smart_station_platform\ai_service" />
+    <SUITE FILE_PATH="coverage/SmartEye_Station_Guard$Backend__Daphne_.coverage" NAME="Backend (Daphne) 覆盖结果" MODIFIED="1752826330909" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="G:\Web\SmartEye-Station-Guard\smart_station_platform\backend" />
+    <SUITE FILE_PATH="coverage/SmartEye_Station_Guard$AI_Service__FastAPI_.coverage" NAME="AI Service (FastAPI) 覆盖结果" MODIFIED="1752826302728" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="G:\Web\SmartEye-Station-Guard\smart_station_platform\ai_service" />
+    <SUITE FILE_PATH="coverage/SmartEye_Station_Guard$test_h264.coverage" NAME="test_h264 覆盖结果" MODIFIED="1752793764532" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/smart_station_platform/ai_service" />
   </component>
 </project>
