@@ -44,16 +44,34 @@ class InternalLoginAPIView(APIView):
 
     def post(self, request, *args, **kwargs):
         username = request.data.get('username')
+        face_verification_data = request.data.get('face_verification_data')
         
         if not username:
             return Response({"error": "Username is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 验证人脸识别数据
+        if not face_verification_data:
+            return Response({"error": "Face verification data is required."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # 验证人脸识别结果
+        verification_result = face_verification_data.get('verification_result')
+        recognized_username = face_verification_data.get('recognized_username')
+        confidence = face_verification_data.get('confidence', 0)
+        
+        # 检查识别结果是否匹配
+        if not verification_result or recognized_username != username:
+            return Response({"error": "Face verification failed: username mismatch."}, status=status.HTTP_401_UNAUTHORIZED)
+        
+        # 检查置信度是否达到阈值
+        if confidence < 0.7:  # 设置最低置信度阈值
+            return Response({"error": "Face verification failed: low confidence."}, status=status.HTTP_401_UNAUTHORIZED)
 
         try:
             user = User.objects.get(username=username, is_active=True)
         except User.DoesNotExist:
             return Response({"error": "User not found or is inactive."}, status=status.HTTP_404_NOT_FOUND)
 
-        # 如果用户存在，生成Token
+        # 如果用户存在且人脸验证通过，生成Token
         refresh = RefreshToken.for_user(user)
         
         return Response({

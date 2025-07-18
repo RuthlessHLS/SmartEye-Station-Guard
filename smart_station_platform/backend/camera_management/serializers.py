@@ -21,12 +21,7 @@ class DangerousAreaSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = DangerousArea
-        fields = [
-            'id', 'camera', 'camera_name', 'name', 'coordinates',
-            'min_distance_threshold', 'time_in_area_threshold',
-            'is_active', 'created_at', 'updated_at'
-        ]
-        read_only_fields = ['id', 'camera_name', 'created_at', 'updated_at']
+        fields = '__all__'
 
 
 class CameraDetailSerializer(CameraSerializer):
@@ -41,10 +36,14 @@ class CameraDetailSerializer(CameraSerializer):
 class DangerousAreaCreateSerializer(serializers.ModelSerializer):
     """危险区域创建序列化器"""
     
+    # 允许仅通过 camera_id 指定摄像头，camera 字段本身设为非必填以绕过字段级校验
+    camera = serializers.PrimaryKeyRelatedField(queryset=Camera.objects.all(), required=False, allow_null=True, write_only=True)
+    camera_id = serializers.CharField(write_only=True, required=False)
+    
     class Meta:
         model = DangerousArea
         fields = [
-            'camera', 'name', 'coordinates',
+            'camera', 'camera_id', 'name', 'coordinates',
             'min_distance_threshold', 'time_in_area_threshold', 'is_active'
         ]
     
@@ -64,3 +63,26 @@ class DangerousAreaCreateSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError("坐标值必须是数字")
         
         return value
+    
+    def validate(self, data):
+        """验证数据并处理摄像头ID"""
+        camera_id = data.get('camera_id')
+        camera = data.get('camera')
+        
+        # 如果提供了camera_id，优先使用它来查找摄像头
+        if camera_id:
+            try:
+                if camera_id.isdigit():
+                    # 如果是数字，按ID查找
+                    camera = Camera.objects.get(id=camera_id)
+                else:
+                    # 如果是字符串，按名称查找
+                    camera = Camera.objects.get(name=camera_id)
+                data['camera'] = camera
+            except Camera.DoesNotExist:
+                raise serializers.ValidationError(f"找不到摄像头: {camera_id}")
+        elif not camera:
+            # 如果既没有camera_id也没有camera对象，报错
+            raise serializers.ValidationError("必须提供camera_id或camera对象")
+        
+        return data

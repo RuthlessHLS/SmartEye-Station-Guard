@@ -5994,3 +5994,25 @@
 2025/07/18 16:12:36 [info] 28816#37088: *128 WSARecv() failed (10054: An existing connection was forcibly closed by the remote host), client: 127.0.0.1, server: 0.0.0.0:1935
 2025/07/18 16:12:36 [info] 28816#37088: *128 disconnect, client: 127.0.0.1, server: 0.0.0.0:1935
 2025/07/18 16:12:36 [info] 28816#37088: *128 deleteStream, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/18 16:13:30 [info] 28816#37088: *129 deleteStream, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/18 16:13:30 [info] 28816#37088: *129 WSASend() failed (10053: An established connection was aborted by the software in your host machine), client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/18 16:13:30 [info] 28816#37088: *129 WSARecv() failed (10053: An established connection was aborted by the software in your host machine), client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/18 16:13:30 [info] 28816#37088: *129 disconnect, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/18 16:13:30 [info] 28816#37088: *129 deleteStream, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/18 16:13:46 [info] 28816#37088: *130 client connected '127.0.0.1'
+2025/07/18 16:13:46 [info] 28816#37088: *130 connect: app='live' args='' flashver='LNX 9,0,124,2' swf_url='' tc_url='rtmp://localhost:1935/live' page_url='' acodecs=4071 vcodecs=252 object_encoding=0, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/18 16:13:46 [info] 28816#37088: *130 createStream, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/18 16:13:46 [info] 28816#37088: *130 play: name='test' args='' start=-2000 duration=0 reset=0 silent=0, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/18 16:13:57 [info] 28816#37088: *131 client connected '127.0.0.1'
+2025/07/18 16:13:57 [info] 28816#37088: *131 connect: app='live' args='' flashver='LNX 9,0,124,2' swf_url='' tc_url='rtmp://localhost:1935/live' page_url='' acodecs=4071 vcodecs=252 object_encoding=0, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/18 16:13:57 [info] 28816#37088: *131 createStream, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/18 16:13:57 [info] 28816#37088: *131 play: name='test' args='' start=-2000 duration=0 reset=0 silent=0, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/18 16:14:00 [info] 28816#37088: *130 deleteStream, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/18 16:14:00 [info] 28816#37088: *130 WSARecv() failed (10054: An existing connection was forcibly closed by the remote host), client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/18 16:14:00 [info] 28816#37088: *130 disconnect, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/18 16:14:00 [info] 28816#37088: *130 deleteStream, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/18 16:14:35 [info] 28816#37088: *131 deleteStream, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/18 16:14:35 [info] 28816#37088: *131 WSASend() failed (10053: An established connection was aborted by the software in your host machine), client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/18 16:14:35 [info] 28816#37088: *131 WSARecv() failed (10053: An established connection was aborted by the software in your host machine), client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/18 16:14:35 [info] 28816#37088: *131 disconnect, client: 127.0.0.1, server: 0.0.0.0:1935
+2025/07/18 16:14:35 [info] 28816#37088: *131 deleteStream, client: 127.0.0.1, server: 0.0.0.0:1935

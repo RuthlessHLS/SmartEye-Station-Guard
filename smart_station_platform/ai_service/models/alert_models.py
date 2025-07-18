@@ -38,7 +38,7 @@ class AIAnalysisResult(BaseModel):
     event_type: str = Field(..., description="事件类型", examples=[
         "fire_detected", "smoke_detected", "person_detected", 
         "fall_detected", "fighting_detected", 
-        "unknown_person_detected"
+        "unknown_person_detected", "stranger_intrusion"
     ])
     timestamp: str = Field(..., description="事件发生的时间戳 (ISO格式)")
     location: Optional[Dict[str, Any]] = Field({}, description="事件发生的位置信息")

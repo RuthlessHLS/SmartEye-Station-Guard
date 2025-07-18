@@ -70,7 +70,7 @@ class DeepSORTTracker:
             # FallbackTracker 的 update 方法在没有新的 detections 时也能处理 tracks 的消失计数
             self.tracker.update([]) 
             # 过滤掉完全消失的轨道，返回剩余的
-            return [t for t in self.tracker.get_active_tracks().values() if t['disappeared'] <= self.tracker.max_disappeared_frames]
+            return [t for t in self.tracker.get_active_tracks().values() if t.get('disappeared_count', 0) <= self.tracker.max_disappeared_frames]
 
 
         tracked_results = self.tracker.update(detections)
